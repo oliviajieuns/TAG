@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tads"
+version = "0.1.0"
+description = "Trajectory-Anchored Data Selection for Instruction Tuning"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "torch>=2.0",
+    "transformers>=4.40",
+    "datasets>=2.14",
+    "peft>=0.16",
+    "accelerate>=0.25",
+    "pyyaml>=6.0",
+    "numpy>=1.24,<2.0",
+    "tqdm>=4.66",
+    "sentencepiece",
+]
+
+[project.optional-dependencies]
+eval = [
+    "lm-eval>=0.4",
+    "pandas",
+]
+test = [
+    "pytest>=7",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tads*"]
+exclude = ["tests*", "scripts*"]

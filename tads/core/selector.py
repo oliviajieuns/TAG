@@ -1,0 +1,249 @@
+"""Episode collection and selection scoring (paper §3, Algorithm 1).
+
+For each candidate sample we compute:
+    h_i      = last-token hidden state under current θ_t
+    R_i      = composite reward (paper Eq. 6)
+    a_i      = PPO actor action ∈ [0, 1]
+    ãlign_i  = compute_alignment(h_i) ∈ [0, 1]   (TADS only)
+
+The selection score is
+    s_i^(t) = R_i · a_i · (1 + λ · ãlign_i^(t))
+and the top-K samples form the training subset for this epoch.
+Setting λ=0 (or use_anchor=False) recovers the Data Agent baseline.
+
+Reward components (paper Eq. 1, 3, 5, 6):
+    r_loss_i    = mean CE loss over response tokens          (== rdiff in the
+                                                              Data Agent paper)
+    r_entropy_i = mean predictive entropy                     (== rconf)
+    r_weight    = Var(r_loss) / (Var(r_loss) + Var(r_entropy) + eps)  (== r)
+    R_i         = r_weight * r_loss_i + (1 - r_weight) * r_entropy_i
+
+Adaptive weight scope (paper Eq. 5):
+    r_weight is computed at the DATASET LEVEL (over all N candidate
+    samples), not per-batch. Per-batch variance is degenerate when
+    batch_size=1 (forces var=0 -> r_weight=0). We therefore accumulate
+    r_loss / r_entropy across all batches and compute r_weight once
+    after the loop, then derive composite reward from it.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any, Dict, List, Optional
+
+import torch
+from torch.utils.data import DataLoader
+
+from .agent import PPOAgent
+from .reward import compute_rewards
+from .trajectory_anchor import TrajectoryAnchor
+from .utils import cuda_mem_str
+
+logger = logging.getLogger(__name__)
+
+
+def _flatten_cpu_float(x: torch.Tensor) -> torch.Tensor:
+    return x.detach().float().view(-1).cpu()
+
+
+@torch.no_grad()
+def collect_episode(
+    model,
+    agent: PPOAgent,
+    dataset,
+    selection_ratio: float,
+    *,
+    trajectory_anchor: Optional[TrajectoryAnchor] = None,
+    lam: float = 0.0,
+    use_anchor: bool = False,
+    batch_size: int = 1,
+    device: str = "cuda",
+    seed: int = 42,
+    epoch: int = 0,
+    exp_tag: Optional[str] = None,
+    progress_interval: int = 50,
+    empty_cache_interval: int = 100,
+) -> Dict[str, Any]:
+    """Run one episode over the candidate pool and return selection results.
+
+    ``exp_tag`` is a free-form string (e.g. ``"qwen2.5-7b/alpaca/tads"``) used
+    only for log readability. It does not affect any numerics.
+    """
+    torch.manual_seed(seed + epoch)
+    model.eval()
+    agent.ac.eval()
+
+    all_states: List[torch.Tensor] = []
+    all_actions: List[torch.Tensor] = []
+    all_log_probs: List[torch.Tensor] = []
+    all_r_loss: List[torch.Tensor] = []
+    all_r_entropy: List[torch.Tensor] = []
+
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False,
+        num_workers=0, pin_memory=True, drop_last=False,
+    )
+    total_batches = len(loader)
+    total_samples = len(dataset)
+    t0 = time.time()
+
+    apply_anchor = (
+        use_anchor
+        and trajectory_anchor is not None
+        and trajectory_anchor.is_fitted
+    )
+
+    tag = f" | tag={exp_tag}" if exp_tag else ""
+    logger.info(
+        "collect_episode start | epoch=%d | n=%d | bs=%d | batches=%d | "
+        "ratio=%.2f | use_anchor=%s | lam=%.3f | %s%s",
+        epoch, total_samples, batch_size, total_batches,
+        selection_ratio, apply_anchor, lam, cuda_mem_str(), tag,
+    )
+
+    for step, batch in enumerate(loader, start=1):
+        input_ids = batch["input_ids"].to(device, non_blocking=True)
+        attention_mask = batch["attention_mask"].to(device, non_blocking=True)
+        labels = batch["labels"].to(device, non_blocking=True)
+
+        out = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            output_hidden_states=True,
+        )
+
+        hidden = out.hidden_states[-1]
+        lengths = attention_mask.sum(dim=1).clamp_min(1) - 1
+        lengths = lengths.to(hidden.device)
+        bidx = torch.arange(hidden.size(0), device=hidden.device)
+        states = hidden[bidx, lengths].detach().float().cpu()
+        del hidden
+
+        # FIX: ignore per-batch r_weight (degenerate at batch_size=1).
+        # r_weight is computed once at dataset level after loop.
+        r_loss, r_entropy, _ = compute_rewards(out.logits, labels)
+
+        r_loss_cpu = _flatten_cpu_float(r_loss)
+        r_entropy_cpu = _flatten_cpu_float(r_entropy)
+        del out
+
+        states_for_agent = states.to(agent.device, non_blocking=True)
+        action, log_prob, _ = agent.ac.get_action(states_for_agent)
+
+        all_states.append(states)
+        all_actions.append(_flatten_cpu_float(action))
+        all_log_probs.append(_flatten_cpu_float(log_prob))
+        all_r_loss.append(r_loss_cpu)
+        all_r_entropy.append(r_entropy_cpu)
+
+        del input_ids, attention_mask, labels, states_for_agent
+        del action, log_prob, r_loss, r_entropy, r_loss_cpu, r_entropy_cpu
+
+        if (
+            torch.cuda.is_available()
+            and empty_cache_interval > 0
+            and step % empty_cache_interval == 0
+        ):
+            torch.cuda.empty_cache()
+
+        if step == 1 or step % progress_interval == 0 or step == total_batches:
+            elapsed = time.time() - t0
+            seen = min(step * batch_size, total_samples)
+            pct = 100.0 * seen / max(1, total_samples)
+            sec_per_batch = elapsed / max(1, step)
+            logger.info(
+                "collect_episode | epoch=%d | batch=%d/%d | %d/%d (%.1f%%) "
+                "| elapsed=%.1fmin | %.2fs/batch | %s",
+                epoch, step, total_batches, seen, total_samples, pct,
+                elapsed / 60, sec_per_batch, cuda_mem_str(),
+            )
+
+    if not all_states:
+        raise RuntimeError("collect_episode produced no states.")
+
+    all_states = torch.cat(all_states, dim=0)
+    all_actions = torch.cat(all_actions, dim=0)
+    all_log_probs = torch.cat(all_log_probs, dim=0)
+    all_r_loss = torch.cat(all_r_loss, dim=0)
+    all_r_entropy = torch.cat(all_r_entropy, dim=0)
+
+    # ---- Dataset-level adaptive weight r_weight (paper Eq. 5) ----
+    eps = 1e-8
+    if all_r_loss.numel() > 1:
+        var_loss = all_r_loss.var()
+        var_entropy = all_r_entropy.var()
+        r_weight = var_loss / (var_loss + var_entropy + eps)
+    else:
+        r_weight = torch.tensor(0.5)
+    r_weight_value = float(r_weight.item())
+
+    # ---- Composite reward per sample (paper Eq. 6) ----
+    all_rewards = r_weight * all_r_loss + (1.0 - r_weight) * all_r_entropy
+
+    # ---- Selection score s_i = R_i · a_i · (1 + λ · ãlign_i) ----
+    R = all_rewards.view(-1)
+    a = all_actions.view(-1)
+
+    if apply_anchor:
+        alignment = trajectory_anchor.compute_alignment(all_states).view(-1)
+        boost = 1.0 + lam * alignment
+        score = R * a * boost
+        align_mean = float(alignment.mean().item())
+        align_std = float(alignment.std().item())
+        boost_mean = float(boost.mean().item())
+        boost_max = float(boost.max().item())
+        logger.info(
+            "TADS score | epoch=%d | lam=%.3f | "
+            "align_mean=%.4f | align_std=%.4f | "
+            "boost_mean=%.4f | boost_max=%.4f",
+            epoch, lam, align_mean, align_std, boost_mean, boost_max,
+        )
+    else:
+        score = R * a
+        align_mean = None
+        align_std = None
+        logger.info("DataAgent score (no anchor) | epoch=%d", epoch)
+
+    k = max(1, int(total_samples * selection_ratio))
+    selected_indices: List[int] = score.topk(k).indices.cpu().tolist()
+
+    var_loss_val = float(all_r_loss.var().item()) if all_r_loss.numel() > 1 else 0.0
+    var_entropy_val = float(all_r_entropy.var().item()) if all_r_entropy.numel() > 1 else 0.0
+
+    elapsed = time.time() - t0
+    logger.info(
+        "Episode done | epoch=%d | selected=%d/%d | "
+        "R_loss=%.4f (var=%.6f) | R_entropy=%.4f (var=%.6f) | "
+        "r_weight=%.4f | reward_mean=%.4f | elapsed=%.1fmin | %s",
+        epoch, k, total_samples,
+        all_r_loss.mean().item(), var_loss_val,
+        all_r_entropy.mean().item(), var_entropy_val,
+        r_weight_value,
+        all_rewards.mean().item(),
+        elapsed / 60, cuda_mem_str(),
+    )
+
+    r_loss_mean = float(all_r_loss.mean().item())
+    r_entropy_mean = float(all_r_entropy.mean().item())
+
+    return {
+        "selected_indices": selected_indices,
+        "states": all_states,
+        "actions": all_actions,
+        "log_probs": all_log_probs,
+        "rewards": all_rewards,
+        "r_loss_mean": r_loss_mean,
+        "r_entropy_mean": r_entropy_mean,
+        "r_weight": r_weight_value,
+        # Compatibility aliases for older Data-Agent analysis scripts.
+        "rdiff_mean": r_loss_mean,
+        "rconf_mean": r_entropy_mean,
+        "r": r_weight_value,
+        "var_loss": var_loss_val,
+        "var_entropy": var_entropy_val,
+        "lam": lam if apply_anchor else 0.0,
+        "use_anchor": apply_anchor,
+        "align_mean": align_mean,
+        "align_std": align_std,
+    }

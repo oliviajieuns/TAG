@@ -1,0 +1,16 @@
+torch>=2.0
+transformers>=4.40
+datasets>=2.14
+peft>=0.16
+accelerate>=0.25
+pyyaml>=6.0
+numpy>=1.24,<2.0
+tqdm>=4.66
+sentencepiece
+
+# Optional eval extras
+lm-eval>=0.4
+pandas
+
+# Optional test
+pytest>=7

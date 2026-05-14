@@ -1,0 +1,159 @@
+"""Tokenizer and model loading for training and evaluation.
+
+Unifies four scenarios behind one entry point:
+    single-GPU / DDP   ×   full FT / LoRA
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+import torch
+import torch.distributed as dist
+from peft import PeftModel, get_peft_model
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from ..core.utils import is_main_process
+from .lora import build_lora_config
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------- tokenizer
+def load_tokenizer(model_path: str):
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        local_files_only=True,
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer
+
+
+# --------------------------------------------------------------------- model
+def load_model(
+    model_path: str,
+    *,
+    training_mode: str = "full",
+    lora_cfg: Optional[Dict[str, Any]] = None,
+    use_ddp: bool = False,
+    local_rank: int = 0,
+    dtype: torch.dtype = torch.bfloat16,
+    gradient_checkpointing: bool = True,
+):
+    """Load a causal-LM model for training.
+
+    Single-GPU path uses ``device_map='auto'``; DDP path puts the model on a
+    single ``cuda:local_rank`` and wraps it with ``DistributedDataParallel``.
+    """
+    use_ddp = use_ddp and dist.is_initialized()
+
+    kwargs: Dict[str, Any] = dict(
+        torch_dtype=dtype,
+        trust_remote_code=True,
+        local_files_only=True,
+    )
+    if not use_ddp:
+        kwargs["device_map"] = "auto"
+
+    base = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+
+    if gradient_checkpointing:
+        base.gradient_checkpointing_enable()
+        # Required for LoRA + gradient_checkpointing
+        base.enable_input_require_grads()
+
+    if training_mode == "lora":
+        config = build_lora_config(lora_cfg)
+        model = get_peft_model(base, config)
+        if is_main_process():
+            model.print_trainable_parameters()
+    elif training_mode == "full":
+        model = base
+        for param in model.parameters():
+            param.requires_grad = True
+        if is_main_process():
+            n_total = sum(p.numel() for p in model.parameters())
+            n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            logger.info(
+                "Full FT | total=%.1fM | trainable=%.1fM (%.1f%%)",
+                n_total / 1e6, n_train / 1e6, 100.0 * n_train / max(1, n_total),
+            )
+    else:
+        raise ValueError(
+            f"Unknown training_mode={training_mode!r}; expected 'full' or 'lora'",
+        )
+
+    if use_ddp:
+        model = model.to(f"cuda:{local_rank}")
+        model = torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=False,
+        )
+    return model
+
+
+# --------------------------------------------------------------------- eval load
+def load_for_eval(
+    base_model: str,
+    ckpt_dir: str,
+    *,
+    training_mode: Optional[str] = None,
+    device: Optional[str] = None,
+    dtype: torch.dtype = torch.bfloat16,
+) -> Tuple[Any, Any, torch.device]:
+    """Load a checkpoint for evaluation.
+
+    If ``training_mode`` is None, auto-detect:
+    LoRA when ``<ckpt_dir>/adapter_config.json`` exists, else full.
+    """
+    if training_mode is None:
+        training_mode = (
+            "lora" if (Path(ckpt_dir) / "adapter_config.json").exists() else "full"
+        )
+
+    logger.info(
+        "load_for_eval | base=%s | ckpt=%s | mode=%s",
+        base_model, ckpt_dir, training_mode,
+    )
+    tokenizer = load_tokenizer(base_model)
+
+    if training_mode == "lora":
+        base = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            torch_dtype=dtype,
+            trust_remote_code=True,
+            local_files_only=True,
+        )
+        model = PeftModel.from_pretrained(base, ckpt_dir)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            ckpt_dir,
+            torch_dtype=dtype,
+            trust_remote_code=True,
+            local_files_only=True,
+        )
+
+    if device is None:
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
+    model = model.to(dev)
+    model.eval()
+    return model, tokenizer, dev
+
+
+# --------------------------------------------------------------------- helpers
+def get_hidden_size(model) -> int:
+    """Return ``config.hidden_size`` regardless of DDP / PEFT wrapping."""
+    m = model
+    while hasattr(m, "module"):
+        m = m.module
+    if hasattr(m, "base_model"):
+        m = m.base_model
+        if hasattr(m, "model"):
+            m = m.model
+    return int(m.config.hidden_size)

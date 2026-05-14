@@ -1,0 +1,16 @@
+defaults:
+  - configs/base.yaml
+  - configs/methods/data_agent.yaml
+  - configs/models/qwen2.5-0.5b.yaml
+  - configs/modes/lora.yaml
+
+output_subdir: light/data_agent_05b
+selection_ratio: 0.1
+train_epochs: 3
+batch_size: 4
+grad_accum: 2
+episode_batch_size: 2
+
+lora:
+  r: 8
+  alpha: 16

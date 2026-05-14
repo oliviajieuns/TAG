@@ -1,0 +1,15 @@
+defaults:
+  - configs/base.yaml
+  - configs/methods/tads.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: 7b_fullft/tads_50
+selection_ratio: 0.5
+train_epochs: 3
+episode_batch_size: 1
+
+anchor:
+  layer_idx: -1
+  max_samples_for_pca: 1024
+  pca_batch_size: 16

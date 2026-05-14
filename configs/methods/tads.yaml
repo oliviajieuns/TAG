@@ -1,0 +1,4 @@
+method: tads
+tads:
+  lam: 1.0
+  use_anchor: true

@@ -1,0 +1,10 @@
+# NAIT baseline — uses scripts/nait/train_nait.py or `python -m tads.nait.train`.
+# Provides only the NAIT-specific knobs; model/data/optim come from base.yaml + experiment YAML.
+method: nait
+selection_ratio: 0.5
+nait:
+  layers: [-1]
+  batch_size: 2
+  n_seeds: 100   # seed JSON sub-sample size
+  # seed_path: /user-volume/data_agent/seeds/mix.json    # override via CLI
+  # tag: NAIT-Mix                                         # override via CLI

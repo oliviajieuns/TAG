@@ -1,0 +1,4 @@
+method: data_agent
+tads:
+  lam: 0.0
+  use_anchor: false

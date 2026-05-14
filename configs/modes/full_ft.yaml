@@ -1,0 +1,5 @@
+training_mode: full
+batch_size: 16
+grad_accum: 8
+learning_rate: 2.0e-5
+warmup_ratio: 0.03

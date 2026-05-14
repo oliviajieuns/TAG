@@ -1,0 +1,14 @@
+defaults:
+  - configs/base.yaml
+  - configs/methods/full.yaml
+  - configs/models/qwen2.5-0.5b.yaml
+  - configs/modes/lora.yaml
+
+output_subdir: light/full_05b
+train_epochs: 3
+batch_size: 4
+grad_accum: 2
+
+lora:
+  r: 8
+  alpha: 16

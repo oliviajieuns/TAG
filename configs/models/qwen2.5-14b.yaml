@@ -1,0 +1,4 @@
+model_key: qwen2.5-14b
+model_path: ${oc.env:MODEL_PATH_QWEN25_14B,/group-volume/jieuns/models/Qwen2.5-14B}
+prompt_style: qwen_chatml
+max_seq_len: 2048

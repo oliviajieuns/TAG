@@ -1,0 +1,4 @@
+model_key: mistral-7b
+model_path: ${oc.env:MODEL_PATH_MISTRAL_7B,/group-volume/nait-models/Mistral-7B-v0.1}
+prompt_style: mistral_instruct
+max_seq_len: 2048

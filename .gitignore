@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.envrc
+.idea/
+.vscode/
+.DS_Store
+
+# Training artifacts (kept out of repo)
+checkpoints/
+results/
+logs/
+cache/
+*.log
+*.pt
+*.bin
+*.safetensors
+metrics.json
+selected_indices*.json
+trajectory_anchor.pt
+
+# Local env config
+configs/env.yaml
+
+# Commit-meta notes (draft for the init commit message)
+COMMIT_NOTES.md

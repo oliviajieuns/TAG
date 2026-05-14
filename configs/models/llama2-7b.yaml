@@ -1,0 +1,4 @@
+model_key: llama2-7b
+model_path: ${oc.env:MODEL_PATH_LLAMA2_7B,/group-volume/nait-models/Llama-2-7b-hf}
+prompt_style: llama_user_assistant
+max_seq_len: 2048
