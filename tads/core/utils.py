@@ -183,24 +183,60 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
-def _resolve_path(ref: str, anchor: Path) -> Path:
-    """Find an existing path for ``ref`` relative to a few candidate roots."""
+# Project root = parent of the `tads/` package directory.
+# utils.py lives at <root>/tads/core/utils.py, so go up three levels.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _collect_path_candidates(ref: str, anchor: Optional[Path] = None) -> List[Path]:
+    """Build the ordered list of locations to try for a relative path `ref`.
+
+    Order:
+      1. Absolute (if `ref` is already absolute).
+      2. Current working directory.
+      3. The tads/ package root (so users can `python -m tads.train` from
+         ANY directory — including their home — without ``cd``-ing first).
+      4. Walking up from the anchor file's directory toward `/` (so a
+         ``defaults: configs/base.yaml`` inside a deeply nested experiment
+         YAML can still locate the top-level configs/ folder).
+    """
     p = Path(ref)
-    candidates: List[Path] = []
+    out: List[Path] = []
     if p.is_absolute():
-        candidates.append(p)
-    candidates.extend([
-        Path.cwd() / ref,
-        anchor.parent / ref,
-        anchor.parent.parent / ref,
-        anchor.parent.parent.parent / ref,
-    ])
-    for c in candidates:
+        out.append(p)
+        return out
+
+    out.append(Path.cwd() / ref)
+    out.append(_PROJECT_ROOT / ref)
+    if anchor is not None:
+        cur = anchor.parent if anchor.is_file() else anchor
+        # Cap the walk-up depth so we never traverse the entire filesystem.
+        for _ in range(10):
+            out.append(cur / ref)
+            if cur.parent == cur:
+                break
+            cur = cur.parent
+    return out
+
+
+def _find_existing(ref: str, anchor: Optional[Path] = None) -> Optional[Path]:
+    for c in _collect_path_candidates(ref, anchor):
         if c.exists():
             return c
+    return None
+
+
+def _resolve_path(ref: str, anchor: Path) -> Path:
+    """Find an existing path for ``ref`` (raises FileNotFoundError otherwise)."""
+    found = _find_existing(ref, anchor=anchor)
+    if found is not None:
+        return found
+    tried = _collect_path_candidates(ref, anchor=anchor)
     raise FileNotFoundError(
-        f"Config defaults reference {ref!r} could not be resolved. "
-        f"Tried: {[str(c) for c in candidates]}"
+        f"Config defaults reference {ref!r} could not be resolved.\n"
+        f"  cwd          = {Path.cwd()}\n"
+        f"  project_root = {_PROJECT_ROOT}\n"
+        f"  tried        = {[str(c) for c in tried]}"
     )
 
 
@@ -212,9 +248,18 @@ def load_config(config_path: str) -> Dict[str, Any]:
         - a list of strings (multiple parents, merged in order; later wins).
     Local keys (alongside ``defaults:``) override the merged parents.
     """
-    cfg_path = Path(config_path)
-    if not cfg_path.is_absolute():
-        cfg_path = Path.cwd() / cfg_path
+    # Resolve the entry-point YAML by trying cwd, project root, and (if it
+    # looks like it might be relative to another loaded yaml) walking up.
+    resolved = _find_existing(config_path)
+    if resolved is None:
+        tried = _collect_path_candidates(config_path)
+        raise FileNotFoundError(
+            f"Config file not found: {config_path}\n"
+            f"  cwd          = {Path.cwd()}\n"
+            f"  project_root = {_PROJECT_ROOT}\n"
+            f"  tried        = {[str(c) for c in tried]}"
+        )
+    cfg_path = resolved
     with open(cfg_path) as f:
         cfg: Dict[str, Any] = yaml.safe_load(f) or {}
 
