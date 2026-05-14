@@ -11,11 +11,14 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.distributed as dist
-from peft import PeftModel, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..core.utils import is_main_process
-from .lora import build_lora_config
+
+# PEFT and the build_lora_config helper are intentionally lazy-imported below
+# (inside the LoRA branches of load_model / load_for_eval). PEFT version
+# mismatches with the installed transformers/torch should never block full-FT
+# runs that don't use LoRA at all.
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,8 @@ def load_model(
         base.enable_input_require_grads()
 
     if training_mode == "lora":
+        from peft import get_peft_model  # lazy: only imported for LoRA
+        from .lora import build_lora_config
         config = build_lora_config(lora_cfg)
         model = get_peft_model(base, config)
         if is_main_process():
@@ -141,6 +146,7 @@ def load_for_eval(
     tokenizer = load_tokenizer(base_model)
 
     if training_mode == "lora":
+        from peft import PeftModel  # lazy: only imported for LoRA
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             torch_dtype=dtype,
