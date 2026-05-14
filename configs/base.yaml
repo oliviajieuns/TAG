@@ -13,6 +13,7 @@ mmlu_data_dir: ${oc.env:MMLU_DATA_DIR,/group-volume/IT-datasets/mmlu/all}
 gsm8k_data_dir: ${oc.env:GSM8K_DATA_DIR,/group-volume/IT-datasets/gsm8k}
 humaneval_data_dir: ${oc.env:HUMANEVAL_DATA_DIR,/group-volume/IT-datasets/human-eval}
 tydiqa_data_dir: ${oc.env:TYDIQA_DATA_DIR,/group-volume/IT-datasets/tydiqa}
+bbh_data_dir: ${oc.env:BBH_DATA_DIR,/group-volume/IT-datasets/bbh}
 
 # --- Dataset (Alpaca-GPT4 by default; matches NAIT ICLR 2026, Peng et al. 2023) ---
 # Precedence:

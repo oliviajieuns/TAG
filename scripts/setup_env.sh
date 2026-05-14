@@ -35,6 +35,7 @@ export MMLU_DATA_DIR="${MMLU_DATA_DIR:-/group-volume/IT-datasets/mmlu/all}"
 export GSM8K_DATA_DIR="${GSM8K_DATA_DIR:-/group-volume/IT-datasets/gsm8k}"
 export HUMANEVAL_DATA_DIR="${HUMANEVAL_DATA_DIR:-/group-volume/IT-datasets/human-eval}"
 export TYDIQA_DATA_DIR="${TYDIQA_DATA_DIR:-/group-volume/IT-datasets/tydiqa}"
+export BBH_DATA_DIR="${BBH_DATA_DIR:-/group-volume/IT-datasets/bbh}"
 
 # --- Runtime hygiene ---
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
@@ -85,6 +86,7 @@ _tads_warn MMLU_DATA_DIR          "$MMLU_DATA_DIR"          "MMLU 'all' parquet 
 _tads_warn GSM8K_DATA_DIR         "$GSM8K_DATA_DIR"         "GSM8K root (contains main/test*.parquet)"
 _tads_warn HUMANEVAL_DATA_DIR     "$HUMANEVAL_DATA_DIR"     "HumanEval directory or HumanEval.jsonl.gz"
 _tads_warn TYDIQA_DATA_DIR        "$TYDIQA_DATA_DIR"        "TyDiQA directory (contains tydiqa-goldp-v1.1-dev.json)"
+_tads_warn BBH_DATA_DIR           "$BBH_DATA_DIR"           "BBH directory (contains <task>.json + optional cot-prompts/)"
 
 # -----------------------------------------------------------------------------
 # Final summary

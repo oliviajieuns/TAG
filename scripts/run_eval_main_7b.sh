@@ -29,7 +29,7 @@ fi
 
 MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
 METHODS=${METHODS:-"full_100 random_10 data_agent_10 tads_10"}
-BENCHMARKS=${BENCHMARKS:-"mmlu,gsm8k,humaneval,tydiqa"}
+BENCHMARKS=${BENCHMARKS:-"mmlu,gsm8k,humaneval,tydiqa,bbh"}
 LIMIT=${LIMIT:-}
 GPUS=${GPUS:-"0"}
 PARALLEL=0

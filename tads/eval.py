@@ -50,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gsm8k_data_dir", default=None)
     p.add_argument("--humaneval_data_dir", default=None)
     p.add_argument("--tydiqa_data_dir", default=None)
+    p.add_argument("--bbh_data_dir", default=None,
+                   help="BBH root containing per-task .json + cot-prompts/.")
     # lm_harness extras.
     p.add_argument("--harness_task", default="mmlu", help="lm_harness `task` kwarg.")
     p.add_argument("--lm_eval_path", default=None, help="PYTHONPATH addition for lm-eval-harness fork.")
@@ -103,6 +105,7 @@ def main() -> None:
         "mmlu_data_dir": args.mmlu_data_dir,
         "gsm8k_data_dir": args.gsm8k_data_dir,
         "humaneval_data_dir": args.humaneval_data_dir,
+        "bbh_data_dir": args.bbh_data_dir,
         "tydiqa_data_dir": args.tydiqa_data_dir,
     }
 

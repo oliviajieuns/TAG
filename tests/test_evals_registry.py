@@ -9,7 +9,7 @@ from tads.evals.mmlu import MMLUEvaluator
 
 def test_registry_lists_known_benchmarks():
     names = list_evaluators()
-    for expected in ("mmlu", "gsm8k", "humaneval", "tydiqa", "lm_harness"):
+    for expected in ("mmlu", "gsm8k", "humaneval", "tydiqa", "bbh", "lm_harness"):
         assert expected in names
 
 
