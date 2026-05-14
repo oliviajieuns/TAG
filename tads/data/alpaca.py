@@ -68,12 +68,22 @@ def build_alpaca_dataset(
     """
     os.makedirs(cache_dir, exist_ok=True)
 
+    # Normalise empty-string overrides (e.g. from `${oc.env:VAR,}`) to None.
+    data_files = data_files or None
+    dataset_name = dataset_name or None
+
     if data_files:
-        logger.info("Loading Alpaca from local parquet: %s", data_files)
+        logger.info("Loading Alpaca from local file(s): %s", data_files)
         raw = load_dataset("parquet", data_files=data_files, split="train")
-    else:
+    elif dataset_name:
         logger.info("Loading Alpaca from HF hub: %s", dataset_name)
         raw = load_dataset(dataset_name, cache_dir=cache_dir)["train"]
+    else:
+        raise ValueError(
+            "Neither `data_files` nor `dataset_name` is set. "
+            "Set ALPACA_DATA_FILES env var (local parquet) "
+            "or ALPACA_DATASET_NAME (HF hub) — or set them in the YAML config."
+        )
 
     verify_response_marker(tokenizer)
 

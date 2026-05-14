@@ -8,10 +8,14 @@ output_root: ${oc.env:OUTPUT_ROOT,./checkpoints}
 # Optional explicit log dir (default: <output_dir>/logs)
 # log_dir: ./logs
 
-# --- Dataset (Alpaca) ---
-# Use HF hub name OR local data_files (one of the two)
-dataset_name: tatsu-lab/alpaca
-# data_files: /group-volume/IT-datasets/alpaca_gpt4/data/train-00000-of-00001-6ef3991c06080e14.parquet
+# --- Dataset (Alpaca-GPT4 by default; matches NAIT ICLR 2026, Peng et al. 2023) ---
+# Precedence:
+#   1. If ALPACA_DATA_FILES env var is set → load that local parquet/json.
+#   2. Else → fall back to `dataset_name` from HF hub.
+# Example (local file):
+#   export ALPACA_DATA_FILES=/group-volume/IT-datasets/alpaca_gpt4/data/train-00000-of-00001-6ef3991c06080e14.parquet
+data_files: ${oc.env:ALPACA_DATA_FILES,}
+dataset_name: ${oc.env:ALPACA_DATASET_NAME,liangxin/Alpaca_GPT4}
 prompt_style: alpaca_default
 max_seq_len: 512
 
