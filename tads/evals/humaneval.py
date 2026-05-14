@@ -32,7 +32,7 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         prompt_style: str = "alpaca_default",
         data_dir: Optional[str] = None,
         max_new_tokens: int = 256,
-        n_samples: int = 10,
+        n_samples: int = 20,
         temperature: float = 0.8,
         top_p: float = 0.95,
         **kwargs,
@@ -54,9 +54,10 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             problems = problems[:limit]
         logger.info("HumanEval: %d problems | limit=%s", len(problems), limit)
 
-        # Paper §D: pass@10 with temperature=0.8, top_p=0.95.
-        # We draw n_samples completions per problem. When n_samples == 1 we
-        # silently fall back to greedy (do_sample=False) for cheap dry-runs.
+        # Paper §D: pass@10 with temperature=0.8, top_p=0.95, n=20 completions
+        # per problem (n=20 gives a low-variance pass@10 estimate; n=10 is the
+        # minimum needed but noisy). When n_samples == 1 we silently fall back
+        # to greedy (do_sample=False) for cheap dry-runs.
         use_sampling = n_samples > 1
         completions: Dict[str, list] = {}
         for i, problem in enumerate(problems):
@@ -112,5 +113,8 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         }
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)
-        logger.info("HumanEval Pass@1: %.4f", summary["pass@1"])
+        logger.info(
+            "HumanEval | pass@10: %.4f | pass@1: %.4f | n_samples=%d | problems=%d",
+            summary["pass@10"], summary["pass@1"], n_samples, len(problems),
+        )
         return summary
