@@ -1,0 +1,11 @@
+# Llama-2-7B + Alpaca-GPT4 random 10% — NAIT paper Table 2 System 06 reproduction
+# Expected: MMLU ≈ 47.14, AVG ≈ 35.69 (paper Table 2 row "01 + Random Baseline")
+defaults:
+  - configs/base.yaml
+  - configs/methods/random.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/llama2/random_10
+selection_ratio: 0.1
+train_epochs: 3

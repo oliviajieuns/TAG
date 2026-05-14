@@ -1,0 +1,10 @@
+# DeepSeek-7B + Alpaca-GPT4 random 10% — paper-faithful selection ratio
+defaults:
+  - configs/base.yaml
+  - configs/methods/random.yaml
+  - configs/models/deepseek-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/deepseek/random_10
+selection_ratio: 0.1
+train_epochs: 3

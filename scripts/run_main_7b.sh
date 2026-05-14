@@ -22,7 +22,9 @@ if [ -z "${OUTPUT_ROOT:-}" ]; then
 fi
 
 MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
-METHODS=${METHODS:-"tads_50 data_agent_50 random_50 full_100"}
+# Default methods: TADS comparison set (50% selection) + paper-faithful
+# Random 10% baseline (NAIT ICLR 2026 Table 2 reproduction).
+METHODS=${METHODS:-"tads_50 data_agent_50 random_50 random_10 full_100"}
 NPROC=${NPROC:-4}                # GPUs per DDP job
 MASTER_PORT=${MASTER_PORT:-29500}
 PARALLEL=0
