@@ -1,4 +1,4 @@
-﻿"""Episode collection and selection scoring (paper 짠3, Algorithm 1).
+"""Episode collection and selection scoring (paper 짠3, Algorithm 1).
 
 For each candidate sample we compute:
     h_i      = last-token hidden state under current 罐_t
