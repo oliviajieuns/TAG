@@ -30,6 +30,7 @@ from tads.core.utils import (
     is_main_process,
     load_config,
     local_rank,
+    quiet_repeated_warnings,
     set_seed,
     setup_logger,
     world_size,
@@ -84,6 +85,11 @@ def _setup_ddp() -> bool:
 def main() -> None:
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    # Silence HF tokenizer's per-call "Token indices sequence length..."
+    # advisory; it fires on every batch when any sample is longer than
+    # max_seq_len, even though we truncate intentionally.
+    os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+    quiet_repeated_warnings()
 
     args = parse_args()
     cfg = load_config(args.config)

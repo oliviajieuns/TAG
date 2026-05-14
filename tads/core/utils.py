@@ -9,14 +9,65 @@ import logging
 import os
 import random
 import re
+import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.distributed as dist
 import yaml
+
+
+# ---------------------------------------------------------------- warning dedup
+class _DedupLogFilter(logging.Filter):
+    """logging.Filter that lets each unique (logger, level, message) through once.
+
+    Some libraries (HF transformers, datasets, peft) emit the same warning
+    once per call inside the data-loader inner loop. This filter collapses
+    those to a single line per unique message per process.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._seen: set[Tuple[str, int, str]] = set()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Only deduplicate warnings/info — never suppress errors.
+        if record.levelno >= logging.ERROR:
+            return True
+        key = (record.name, record.levelno, record.getMessage())
+        if key in self._seen:
+            return False
+        self._seen.add(key)
+        return True
+
+
+def quiet_repeated_warnings(
+    logger_names: Tuple[str, ...] = (
+        "transformers",
+        "transformers.tokenization_utils_base",
+        "datasets",
+        "peft",
+        "accelerate",
+        "py.warnings",
+    ),
+) -> None:
+    """Show each unique warning at most once per process.
+
+    - Attaches a dedup filter to common noisy loggers.
+    - Routes `warnings.warn(...)` through the `py.warnings` logger so the
+      same filter applies, and sets the stdlib `warnings` filter to
+      "default" (one entry per (category, module, lineno)).
+    """
+    f = _DedupLogFilter()
+    for name in logger_names:
+        logging.getLogger(name).addFilter(f)
+
+    # Bridge stdlib warnings → logging, so the dedup filter catches them.
+    logging.captureWarnings(True)
+    warnings.simplefilter("default")
 
 
 # ---------------------------------------------------------------------- seed

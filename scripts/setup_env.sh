@@ -39,6 +39,10 @@ export TYDIQA_DATA_DIR="${TYDIQA_DATA_DIR:-/group-volume/IT-datasets/tydiqa}"
 # --- Runtime hygiene ---
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# Silence HF tokenizer's per-call "Token indices sequence length is longer
+# than the specified maximum sequence length for this model" advisory.
+# Our code intentionally truncates to max_seq_len; the warning is noise.
+export TRANSFORMERS_NO_ADVISORY_WARNINGS="${TRANSFORMERS_NO_ADVISORY_WARNINGS:-1}"
 # Optional HF mirror (uncomment if you need hub access):
 # export HF_ENDPOINT=https://hf-mirror.com
 

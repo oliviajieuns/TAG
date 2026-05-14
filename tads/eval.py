@@ -17,11 +17,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tads.core.utils import load_config, setup_logger
+from tads.core.utils import load_config, quiet_repeated_warnings, setup_logger
 from tads.evals import get_evaluator, list_evaluators
 from tads.modeling.loader import load_for_eval
 
@@ -64,6 +65,10 @@ def _data_dir_for(
 
 
 def main() -> None:
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+    quiet_repeated_warnings()
+
     args = parse_args()
     cfg = load_config(args.config)
 
