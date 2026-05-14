@@ -65,7 +65,16 @@ agent:
   value_clip: true
 
 # --- Trajectory Anchor (used by tads) ---
+#
+# NAIT Eq 5 aggregates per-layer alignments across the full decoder stack.
+# `layer_indices` controls which decoder layers contribute:
+#   "all"            → every decoder layer (paper-faithful, recommended)
+#   "middle_to_last" → layers L//2 .. L-1 (≈half memory; our own ablation)
+#   [0, 5, 10, ...]  → explicit list of decoder-layer indices
+#   null / unset     → falls back to legacy single-layer mode via layer_idx
+# `layer_idx` is kept only for backward compatibility with single-layer runs.
 anchor:
+  layer_indices: all
   layer_idx: -1
   max_samples_for_pca: 2000
   pca_batch_size: 4

@@ -206,6 +206,7 @@ def main() -> None:
         anchor_cfg = cfg.get("anchor", {}) or {}
         anchor = TrajectoryAnchor(
             layer_idx=int(anchor_cfg.get("layer_idx", -1)),
+            layer_indices=anchor_cfg.get("layer_indices"),
             max_samples_for_pca=int(anchor_cfg.get("max_samples_for_pca", 2000)),
             pca_batch_size=int(anchor_cfg.get("pca_batch_size", 4)),
             device=str(device),

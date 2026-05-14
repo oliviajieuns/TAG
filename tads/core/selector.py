@@ -113,12 +113,41 @@ def collect_episode(
             output_hidden_states=True,
         )
 
-        hidden = out.hidden_states[-1]
+        # Build per-layer (first-last) deltas across every decoder layer.
+        # hidden_states[0] is the embedding; decoder layers occupy [1:].
+        # Resulting `states` shape:
+        #   single-layer mode (anchor.layer_indices unset)  → (B, H)
+        #   multi-layer mode  (anchor.layer_indices = ...)  → (B, L, H)
+        # The agent always consumes a flat (B, H) — we use the LAST decoder
+        # layer's last-token hidden state, which preserves the pre-refactor
+        # input distribution for the PPO actor.
+        decoder_hidden = out.hidden_states[1:]
         lengths = attention_mask.sum(dim=1).clamp_min(1) - 1
-        lengths = lengths.to(hidden.device)
-        bidx = torch.arange(hidden.size(0), device=hidden.device)
-        states = hidden[bidx, lengths].detach().float().cpu()
-        del hidden
+        lengths = lengths.to(decoder_hidden[0].device)
+        bidx = torch.arange(decoder_hidden[0].size(0), device=decoder_hidden[0].device)
+
+        if use_anchor and trajectory_anchor is not None and trajectory_anchor.is_multi_layer:
+            anchor_layer_indices = trajectory_anchor.layer_indices
+            if not anchor_layer_indices:
+                # First call — anchor's layer_indices is resolved on its own
+                # first update() pass; here we mirror that lazy resolution.
+                from .trajectory_anchor import _resolve_layer_indices
+                anchor_layer_indices = _resolve_layer_indices(
+                    trajectory_anchor.layer_indices_spec, len(decoder_hidden),
+                )
+            deltas = []
+            for li in anchor_layer_indices:
+                h_l = decoder_hidden[li]
+                first_h = h_l[:, 0, :]
+                last_h = h_l[bidx, lengths]
+                deltas.append((last_h - first_h).detach())
+            states = torch.stack(deltas, dim=1).float().cpu()  # (B, num_layers, H)
+        else:
+            hidden = decoder_hidden[-1]
+            states = hidden[bidx, lengths].detach().float().cpu()  # (B, H)
+        # PPO agent input: last-layer last-token (single H) regardless of mode.
+        agent_input = decoder_hidden[-1][bidx, lengths].detach().float().cpu()
+        del decoder_hidden
 
         # FIX: ignore per-batch r_weight (degenerate at batch_size=1).
         # r_weight is computed once at dataset level after loop.
@@ -128,7 +157,7 @@ def collect_episode(
         r_entropy_cpu = _flatten_cpu_float(r_entropy)
         del out
 
-        states_for_agent = states.to(agent.device, non_blocking=True)
+        states_for_agent = agent_input.to(agent.device, non_blocking=True)
         action, log_prob, _ = agent.ac.get_action(states_for_agent)
 
         all_states.append(states)

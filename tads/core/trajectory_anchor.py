@@ -1,17 +1,24 @@
-"""Trajectory Anchor — capability direction extracted from the model's own
-training trajectory (paper §3.1).
+"""Trajectory Anchor — multi-layer capability direction (NAIT Eq 2 + Eq 5).
 
 For each layer l and sample x, the contextualization vector is
-    Δh_l(x; θ_t) := h_l^last(x; θ_t) - h_l^first(x; θ_t),
-where h^first and h^last denote the hidden states at the first and last
-token positions. The trajectory anchor at epoch t is the top-1 eigenvector
-of the empirical covariance Σ_l^(t) of {Δh_l(x; θ_t)} over a probe subset.
-The anchor is sign-calibrated so that ⟨v_l^(t), E[Δh_l]⟩ > 0.
+    Δh_l(x; θ_t) := h_l^last(x; θ_t) - h_l^first(x; θ_t).
+For each layer we PCA the set {Δh_l(x; θ_t)} over a probe subset and take
+the top-1 eigenvector as that layer's capability direction v_l (sign
+calibrated so ⟨v_l, E[Δh_l]⟩ > 0).
+
+At scoring time NAIT (Eq 5) aggregates across layers:
+    s_y = Σ_{l ∈ layer_indices} ⟨Δh_l(y), v_l⟩
+
+Layer selection (``layer_indices`` arg):
+    "all"             → every decoder layer (NAIT paper, recommended)
+    "middle_to_last"  → layers L//2 .. L-1 (memory-friendlier ablation)
+    list[int]         → explicit indices
+    None              → falls back to legacy single-layer mode using ``layer_idx``
 """
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -19,32 +26,75 @@ from torch.utils.data import DataLoader, Subset
 logger = logging.getLogger(__name__)
 
 
-class TrajectoryAnchor:
-    """Single-layer PCA-based capability anchor (Phase A).
+LayerSpec = Union[str, List[int], None]
 
-    Phase B extension: pass a list of layer indices and aggregate
-    alignments. This class is intentionally minimal for clarity.
+
+def _resolve_layer_indices(spec: LayerSpec, num_decoder_layers: int) -> List[int]:
+    """Translate a layer-spec into a concrete list of decoder-layer indices.
+
+    ``num_decoder_layers`` is the number of transformer blocks (L). Returned
+    indices are 0-based among the L decoder layers (NOT among hidden_states
+    which has L+1 entries because position 0 is the embedding).
+    """
+    if spec is None:
+        raise ValueError("layer_indices spec is None — caller should fall back to legacy mode")
+    if isinstance(spec, str):
+        if spec == "all":
+            return list(range(num_decoder_layers))
+        if spec == "middle_to_last":
+            return list(range(num_decoder_layers // 2, num_decoder_layers))
+        raise ValueError(f"Unknown layer_indices string: {spec!r}")
+    if isinstance(spec, (list, tuple)):
+        out = [int(x) for x in spec]
+        for i in out:
+            if not (0 <= i < num_decoder_layers):
+                raise ValueError(
+                    f"layer index {i} out of range [0, {num_decoder_layers}); "
+                    f"model has {num_decoder_layers} decoder layers."
+                )
+        return out
+    raise TypeError(f"layer_indices must be str | list | None, got {type(spec).__name__}")
+
+
+class TrajectoryAnchor:
+    """Multi-layer capability anchor.
+
+    ``layer_indices`` can be passed at construction time (resolved against
+    the model's layer count at the first :meth:`update` call), or left as
+    None to use the legacy single-layer behaviour driven by ``layer_idx``.
     """
 
     def __init__(
         self,
         layer_idx: int = -1,
+        layer_indices: LayerSpec = None,
         max_samples_for_pca: int = 2000,
         pca_batch_size: int = 4,
         device: str = "cuda",
     ):
         self.layer_idx = layer_idx
+        self.layer_indices_spec: LayerSpec = layer_indices
         self.max_samples_for_pca = max_samples_for_pca
         self.pca_batch_size = pca_batch_size
         self.device = device
 
-        # Current state.
-        self.v: Optional[torch.Tensor] = None  # (hidden_dim,)
+        # Resolved indices — filled in lazily on first update() so we can
+        # use the model's actual layer count. Empty means "not yet resolved
+        # OR legacy single-layer mode".
+        self.layer_indices: List[int] = []
+        # Direction per layer (decoder-layer index → unit vector ∈ R^H).
+        self.v_by_layer: Dict[int, torch.Tensor] = {}
+        self.lambda1_by_layer: Dict[int, float] = {}
+        self.lambda2_by_layer: Dict[int, float] = {}
+        self.gap_by_layer: Dict[int, float] = {}
+
+        # Legacy single-layer state (kept for backward compat).
+        self.v: Optional[torch.Tensor] = None  # alias of v_by_layer for single-layer mode
         self.lambda_1: float = 0.0
         self.lambda_2: float = 0.0
-        self.gap: float = 0.0  # λ_1 - λ_2
+        self.gap: float = 0.0
 
-        # History (Theorem 1 verification).
+        # History (Theorem 1 verification). Track mean over layers in multi mode.
         self.v_history: List[torch.Tensor] = []
         self.lambda1_history: List[float] = []
         self.lambda2_history: List[float] = []
@@ -53,8 +103,45 @@ class TrajectoryAnchor:
 
     @property
     def is_fitted(self) -> bool:
-        return self.v is not None
+        return bool(self.v_by_layer)
 
+    @property
+    def is_multi_layer(self) -> bool:
+        return self.layer_indices_spec is not None
+
+    # ------------------------------------------------------------------ PCA
+    @staticmethod
+    def _pca_top1(delta: torch.Tensor) -> Dict[str, Any]:
+        """Run top-1 PCA on a centred (N, H) delta matrix.
+
+        Returns dict with ``v`` (unit eigenvector), ``lambda_1``, ``lambda_2``,
+        and the un-centred mean ``mu`` used for sign calibration upstream.
+        """
+        N, H = delta.shape
+        mu = delta.mean(dim=0, keepdim=True)
+        centred = delta - mu
+        if N < H:
+            gram = centred @ centred.T / N
+            eigvals, eigvecs = torch.linalg.eigh(gram)
+            lambda_1 = float(eigvals[-1].item())
+            lambda_2 = float(eigvals[-2].item()) if N >= 2 else 0.0
+            top_u = eigvecs[:, -1]
+            v = centred.T @ top_u
+            v = v / (v.norm() + 1e-8)
+        else:
+            cov = centred.T @ centred / N
+            eigvals, eigvecs = torch.linalg.eigh(cov)
+            lambda_1 = float(eigvals[-1].item())
+            lambda_2 = float(eigvals[-2].item())
+            v = eigvecs[:, -1]
+        return {
+            "v": v,
+            "lambda_1": lambda_1,
+            "lambda_2": lambda_2,
+            "mu": mu.squeeze(0),
+        }
+
+    # ------------------------------------------------------------------ update
     @torch.no_grad()
     def update(
         self,
@@ -63,11 +150,9 @@ class TrajectoryAnchor:
         seed: int = 42,
         epoch: int = 0,
     ) -> Dict[str, float]:
-        """Re-extract the anchor at the start of epoch `t`.
+        """Re-extract the anchor at the start of epoch ``t``.
 
-        Samples a random probe subset (deterministic given seed+epoch),
-        computes contextualization deltas Δh = h_last - h_first, runs
-        PCA on the centered covariance, and updates v.
+        Collects Δh per layer over a probe subset and PCAs each independently.
         """
         g = torch.Generator()
         g.manual_seed(seed + epoch * 100)
@@ -84,18 +169,14 @@ class TrajectoryAnchor:
         )
 
         model.eval()
-        delta_list: List[torch.Tensor] = []
-        actual_layer = self.layer_idx  # set after first iter
+        # Accumulator: layer_idx -> List[Tensor (B, H)].
+        per_layer_deltas: Dict[int, List[torch.Tensor]] = {}
+        resolved_indices: Optional[List[int]] = None
 
         for batch in loader:
             input_ids = batch["input_ids"].to(self.device, non_blocking=True)
             attention_mask = batch["attention_mask"].to(self.device, non_blocking=True)
 
-            # Call the model as a whole — `output_hidden_states=True` is
-            # honoured by HF CausalLM, PEFT-wrapped models, and DDP wrappers
-            # alike. (The earlier `model.model(...)` form is unsafe under
-            # PEFT, where `.model` may resolve to LoraModel rather than the
-            # underlying transformer.)
             outputs = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -103,56 +184,89 @@ class TrajectoryAnchor:
             )
             hidden_states = outputs.hidden_states  # tuple, length L+1
 
-            actual_layer = (
-                self.layer_idx
-                if self.layer_idx >= 0
-                else len(hidden_states) + self.layer_idx
-            )
-            h = hidden_states[actual_layer]  # (B, T, H)
+            # Decoder layers occupy hidden_states[1:]. Their count is L.
+            num_decoder_layers = len(hidden_states) - 1
 
-            lengths = (attention_mask.sum(dim=1).clamp_min(1) - 1).to(h.device)
-            bidx = torch.arange(h.size(0), device=h.device)
+            # Resolve layer_indices once we know L.
+            if resolved_indices is None:
+                if self.is_multi_layer:
+                    resolved_indices = _resolve_layer_indices(
+                        self.layer_indices_spec, num_decoder_layers,
+                    )
+                else:
+                    # Legacy single-layer mode: translate layer_idx (negative
+                    # supported, indexing into the full hidden_states tuple
+                    # for backward-compat) to a decoder-layer index.
+                    li = self.layer_idx
+                    if li < 0:
+                        li = len(hidden_states) + li
+                    # Convert hidden_states-index → decoder-layer-index by
+                    # subtracting 1 (embedding offset). When the legacy
+                    # spec asks for the embedding itself (li == 0), clamp.
+                    decoder_li = max(0, li - 1)
+                    resolved_indices = [decoder_li]
+                self.layer_indices = resolved_indices
 
-            first_h = h[:, 0, :]
-            last_h = h[bidx, lengths]
+            lengths = (attention_mask.sum(dim=1).clamp_min(1) - 1).to(input_ids.device)
+            bidx = torch.arange(input_ids.size(0), device=input_ids.device)
 
-            delta = (last_h - first_h).detach().float().cpu()  # (B, H)
-            delta_list.append(delta)
-            del h, hidden_states, outputs
+            for li in resolved_indices:
+                # hidden_states[li + 1] is the li-th decoder layer
+                h = hidden_states[li + 1]                       # (B, T, H)
+                first_h = h[:, 0, :]
+                last_h = h[bidx, lengths]
+                delta = (last_h - first_h).detach().float().cpu()
+                per_layer_deltas.setdefault(li, []).append(delta)
 
-        delta = torch.cat(delta_list, dim=0)  # (N, H)
-        N, H = delta.shape
+            del hidden_states, outputs
 
-        mu = delta.mean(dim=0, keepdim=True)
-        centred = delta - mu
+        # Per-layer PCA + sign calibration.
+        new_v_by_layer: Dict[int, torch.Tensor] = {}
+        new_l1: Dict[int, float] = {}
+        new_l2: Dict[int, float] = {}
+        n_used = 0
+        for li in resolved_indices or []:
+            delta_l = torch.cat(per_layer_deltas[li], dim=0)  # (N, H)
+            n_used = delta_l.shape[0]
+            pca = self._pca_top1(delta_l)
+            v_l = pca["v"]
+            # Sign calibration: ⟨v_l, μ_l⟩ > 0.
+            if torch.dot(v_l, pca["mu"]) < 0:
+                v_l = -v_l
+            new_v_by_layer[li] = v_l
+            new_l1[li] = pca["lambda_1"]
+            new_l2[li] = pca["lambda_2"]
 
-        if N < H:
-            gram = centred @ centred.T / N
-            eigvals, eigvecs = torch.linalg.eigh(gram)
-            self.lambda_1 = float(eigvals[-1].item())
-            self.lambda_2 = float(eigvals[-2].item()) if N >= 2 else 0.0
-            top_u = eigvecs[:, -1]
-            v = centred.T @ top_u
-            v = v / (v.norm() + 1e-8)
-        else:
-            cov = centred.T @ centred / N
-            eigvals, eigvecs = torch.linalg.eigh(cov)
-            self.lambda_1 = float(eigvals[-1].item())
-            self.lambda_2 = float(eigvals[-2].item())
-            v = eigvecs[:, -1]
-
-        mu_vec = mu.squeeze(0)
-        if torch.dot(v, mu_vec) < 0:
-            v = -v
-
-        if self.is_fitted:
-            stability = float(torch.norm(v - self.v).item())
+        # Stability: mean L2 distance between old and new v per layer.
+        if self.is_fitted and set(new_v_by_layer.keys()) == set(self.v_by_layer.keys()):
+            diffs = [
+                float(torch.norm(new_v_by_layer[k] - self.v_by_layer[k]).item())
+                for k in new_v_by_layer
+            ]
+            stability = sum(diffs) / len(diffs) if diffs else float("nan")
         else:
             stability = float("nan")
 
-        self.v = v
+        # Commit new state.
+        self.v_by_layer = new_v_by_layer
+        self.lambda1_by_layer = new_l1
+        self.lambda2_by_layer = new_l2
+        self.gap_by_layer = {k: new_l1[k] - new_l2[k] for k in new_l1}
+
+        # Aggregate scalars for history / logging.
+        self.lambda_1 = sum(new_l1.values()) / len(new_l1) if new_l1 else 0.0
+        self.lambda_2 = sum(new_l2.values()) / len(new_l2) if new_l2 else 0.0
         self.gap = self.lambda_1 - self.lambda_2
-        self.v_history.append(v.clone())
+
+        # Single-layer alias (`self.v`) — set only when legacy mode.
+        if not self.is_multi_layer and resolved_indices:
+            self.v = self.v_by_layer[resolved_indices[0]]
+        else:
+            self.v = None
+
+        # Concatenate v_l → flat vector, used for history bookkeeping only.
+        flat_v = torch.cat([new_v_by_layer[k] for k in sorted(new_v_by_layer)])
+        self.v_history.append(flat_v.clone())
         self.lambda1_history.append(self.lambda_1)
         self.lambda2_history.append(self.lambda_2)
         self.gap_history.append(self.gap)
@@ -163,25 +277,59 @@ class TrajectoryAnchor:
             "lambda_2": self.lambda_2,
             "gap": self.gap,
             "stability": stability,
-            "n_samples_used": int(N),
+            "n_samples_used": int(n_used),
+            "num_layers": len(self.layer_indices),
         }
         stab_str = f"{stability:.4f}" if stability == stability else "N/A"
         logger.info(
-            "TrajectoryAnchor.update | epoch=%d | layer=%d | "
-            "lambda1=%.4f | lambda2=%.4f | gap=%.4f | stability=%s | n=%d",
-            epoch, actual_layer,
-            self.lambda_1, self.lambda_2, self.gap, stab_str, N,
+            "TrajectoryAnchor.update | epoch=%d | layers=%d (%s) | "
+            "λ1̄=%.4f | λ2̄=%.4f | gap̄=%.4f | stability=%s | n=%d",
+            epoch, len(self.layer_indices),
+            f"[{self.layer_indices[0]}..{self.layer_indices[-1]}]"
+            if len(self.layer_indices) > 4 else str(self.layer_indices),
+            self.lambda_1, self.lambda_2, self.gap, stab_str, n_used,
         )
         return stats
 
+    # ------------------------------------------------------------------ alignment
     @torch.no_grad()
     def compute_alignment(self, states: torch.Tensor) -> torch.Tensor:
-        """Project states onto v and min-max normalise into [0, 1]."""
+        """Compute per-sample alignment score, NAIT Eq 5.
+
+        Accepts either:
+          - ``[N, H]`` — legacy single-layer mode; dot with the single v.
+          - ``[N, num_layers, H]`` — multi-layer mode; sum ⟨states_l, v_l⟩ over l.
+
+        The result is min-max normalised into [0, 1].
+        """
         if not self.is_fitted:
             raise RuntimeError("Anchor not yet fitted. Call update() first.")
         states = states.float().cpu()
-        v = self.v.float().cpu()
-        alignment = states @ v
+        if states.ndim == 2:
+            # Single-layer mode: expect exactly one layer in v_by_layer.
+            if len(self.layer_indices) != 1:
+                raise RuntimeError(
+                    f"compute_alignment got 2-D states but anchor was fitted "
+                    f"on {len(self.layer_indices)} layers; expected 3-D input."
+                )
+            v = self.v_by_layer[self.layer_indices[0]].float().cpu()
+            alignment = states @ v
+        elif states.ndim == 3:
+            n, num_layers, _ = states.shape
+            if num_layers != len(self.layer_indices):
+                raise RuntimeError(
+                    f"compute_alignment: states has {num_layers} layers but "
+                    f"anchor fitted on {len(self.layer_indices)} layers.",
+                )
+            # Σ_l ⟨states[:, i, :], v_l⟩  (NAIT Eq 5)
+            alignment = torch.zeros(n, dtype=torch.float32)
+            for i, li in enumerate(self.layer_indices):
+                v_l = self.v_by_layer[li].float().cpu()
+                alignment += states[:, i, :] @ v_l
+        else:
+            raise ValueError(
+                f"states must be 2-D or 3-D; got shape {tuple(states.shape)}",
+            )
         a_min, a_max = alignment.min(), alignment.max()
         if (a_max - a_min) > 1e-8:
             alignment = (alignment - a_min) / (a_max - a_min)
@@ -189,6 +337,7 @@ class TrajectoryAnchor:
             alignment = torch.full_like(alignment, 0.5)
         return alignment
 
+    # ------------------------------------------------------------------ bookkeeping
     def get_history_summary(self) -> Dict[str, list]:
         return {
             "num_epochs_tracked": len(self.v_history),
@@ -200,22 +349,50 @@ class TrajectoryAnchor:
 
     def state_dict(self) -> Dict:
         return {
-            "v": self.v.cpu() if self.v is not None else None,
+            "v_by_layer": {k: v.cpu() for k, v in self.v_by_layer.items()},
+            "layer_indices": self.layer_indices,
+            "lambda1_by_layer": self.lambda1_by_layer,
+            "lambda2_by_layer": self.lambda2_by_layer,
+            "gap_by_layer": self.gap_by_layer,
             "v_history": [v.cpu() for v in self.v_history],
             "lambda1_history": self.lambda1_history,
             "lambda2_history": self.lambda2_history,
             "gap_history": self.gap_history,
             "stability_history": self.stability_history,
             "layer_idx": self.layer_idx,
+            "layer_indices_spec": self.layer_indices_spec,
             "max_samples_for_pca": self.max_samples_for_pca,
         }
 
     def load_state_dict(self, state: Dict) -> None:
-        self.v = state.get("v")
+        # Multi-layer state.
+        self.v_by_layer = {
+            int(k): v for k, v in (state.get("v_by_layer") or {}).items()
+        }
+        self.layer_indices = list(state.get("layer_indices") or [])
+        self.lambda1_by_layer = state.get("lambda1_by_layer", {})
+        self.lambda2_by_layer = state.get("lambda2_by_layer", {})
+        self.gap_by_layer = state.get("gap_by_layer", {})
+        # History.
         self.v_history = state.get("v_history", [])
         self.lambda1_history = state.get("lambda1_history", [])
         self.lambda2_history = state.get("lambda2_history", [])
         self.gap_history = state.get("gap_history", [])
         self.stability_history = state.get("stability_history", [])
+        # Config.
         self.layer_idx = state.get("layer_idx", -1)
+        self.layer_indices_spec = state.get("layer_indices_spec", None)
         self.max_samples_for_pca = state.get("max_samples_for_pca", 2000)
+        # Legacy single-layer alias.
+        if not self.is_multi_layer and self.layer_indices:
+            self.v = self.v_by_layer.get(self.layer_indices[0])
+        else:
+            self.v = None
+        # Legacy single-layer state.
+        if "v" in state and state["v"] is not None and not self.v_by_layer:
+            # Pre-multi-layer checkpoint — translate.
+            v = state["v"]
+            self.v = v
+            decoder_li = max(0, self.layer_idx if self.layer_idx >= 0 else 0)
+            self.v_by_layer = {decoder_li: v}
+            self.layer_indices = [decoder_li]
