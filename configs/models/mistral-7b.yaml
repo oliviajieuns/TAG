@@ -4,3 +4,8 @@ prompt_style: mistral_instruct
 max_seq_len: 2048
 # Zephyr / Mistral SFT recipe — mitigates first-step loss spikes.
 learning_rate: 1.0e-5
+# Zephyr SFT recipe uses 10% warmup for Mistral. Diverges from NAIT's 0.03
+# unified setting (Table 8) — exchanges paper-faithfulness for training
+# stability on Mistral-v0.1, whose first-step gradient is known to spike
+# under high lr * short warmup combinations.
+warmup_ratio: 0.10

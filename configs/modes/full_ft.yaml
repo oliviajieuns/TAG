@@ -4,9 +4,8 @@ training_mode: full
 # full-FT 7B + DDP. Override grad_accum to 16 if running on a single GPU.
 batch_size: 8
 grad_accum: 4
-# learning_rate is intentionally NOT set here — it is decided by the model
-# YAML (configs/models/<model>-7b.yaml) so that each model can use its own
-# official SFT recipe. base.yaml provides a 2.0e-5 fallback.
-warmup_ratio: 0.03
+# learning_rate and warmup_ratio are intentionally NOT set here — each
+# model YAML (configs/models/<model>-7b.yaml) decides them per its own
+# official SFT recipe. base.yaml provides 2.0e-5 / 0.03 fallbacks.
 # Full FT 7B needs 8-bit AdamW to fit on a single 80GB GPU under DDP.
 use_8bit_optimizer: true
