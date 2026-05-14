@@ -1,4 +1,6 @@
 method: data_agent
+# Episode collection forward-only; safe to use a much larger batch on A100 80GB.
+episode_batch_size: 16
 tads:
   lam: 0.0
   use_anchor: false

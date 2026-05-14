@@ -2,19 +2,25 @@
 # Method/model/mode YAMLs override these via the `defaults:` chain.
 
 # --- Paths (override via env vars or experiment YAML) ---
-model_path: ${oc.env:MODEL_PATH,/group-volume/nait-models/qwen2.5-7b}
-data_cache: ${oc.env:DATA_CACHE,./cache}
-output_root: ${oc.env:OUTPUT_ROOT,./checkpoints}
+model_path: ${oc.env:MODEL_PATH,/group-volume/nait-models/Llama-2-7b-hf}
+data_cache: ${oc.env:DATA_CACHE,/group-volume/minsoo3.kim/tads-checkpoints/cache}
+output_root: ${oc.env:OUTPUT_ROOT,/group-volume/minsoo3.kim/tads-checkpoints}
 # Optional explicit log dir (default: <output_dir>/logs)
 # log_dir: ./logs
+
+# --- Benchmark data dirs (used by `python -m tads.eval`) ---
+mmlu_data_dir: ${oc.env:MMLU_DATA_DIR,/group-volume/IT-datasets/mmlu/all}
+gsm8k_data_dir: ${oc.env:GSM8K_DATA_DIR,/group-volume/IT-datasets/gsm8k}
+humaneval_data_dir: ${oc.env:HUMANEVAL_DATA_DIR,/group-volume/IT-datasets/human-eval}
+tydiqa_data_dir: ${oc.env:TYDIQA_DATA_DIR,/group-volume/IT-datasets/tydiqa}
 
 # --- Dataset (Alpaca-GPT4 by default; matches NAIT ICLR 2026, Peng et al. 2023) ---
 # Precedence:
 #   1. If ALPACA_DATA_FILES env var is set → load that local parquet/json.
 #   2. Else → fall back to `dataset_name` from HF hub.
 # Example (local file):
-#   export ALPACA_DATA_FILES=/group-volume/IT-datasets/alpaca_gpt4/data/train-00000-of-00001-6ef3991c06080e14.parquet
-data_files: ${oc.env:ALPACA_DATA_FILES,}
+#   export ALPACA_DATA_FILES=/group-volume/IT-datasets/alpaca_gpt4/train.parquet
+data_files: ${oc.env:ALPACA_DATA_FILES,/group-volume/IT-datasets/alpaca_gpt4/train.parquet}
 dataset_name: ${oc.env:ALPACA_DATASET_NAME,liangxin/Alpaca_GPT4}
 prompt_style: alpaca_default
 max_seq_len: 512
@@ -30,6 +36,12 @@ weight_decay: 0.1
 gradient_clip: 1.0
 gradient_checkpointing: true
 training_mode: full   # full | lora
+# 8-bit AdamW (bitsandbytes). Set true for full FT 7B on A100 80GB to avoid OOM.
+use_8bit_optimizer: false
+# Attention backend: null (let HF pick), "sdpa", "flash_attention_2", "eager".
+# flash_attention_2 needs `pip install flash-attn` and gives ~30% speedup; the
+# loader falls back to sdpa if the import fails.
+attn_implementation: null
 
 # --- Selection ---
 selection_ratio: 0.5

@@ -7,4 +7,3 @@ defaults:
 output_subdir: main_7b/llama2/data_agent_50
 selection_ratio: 0.5
 train_epochs: 3
-episode_batch_size: 1

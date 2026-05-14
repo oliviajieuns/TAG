@@ -1,5 +1,9 @@
 training_mode: full
+# DDP × 4 GPUs: per-GPU 16 × accum 2 × world_size 4 = effective batch 128
+# (paper Table 8). Override grad_accum to 8 if running on a single GPU.
 batch_size: 16
-grad_accum: 8
+grad_accum: 2
 learning_rate: 2.0e-5
 warmup_ratio: 0.03
+# Full FT 7B needs 8-bit AdamW to fit on a single 80GB GPU under DDP.
+use_8bit_optimizer: true

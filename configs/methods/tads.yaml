@@ -1,4 +1,7 @@
 method: tads
+# Episode collection forward-only; safe to use a much larger batch on A100 80GB.
+# (Drops collect_episode wall time ~14x vs the default 1.)
+episode_batch_size: 16
 tads:
   lam: 1.0
   use_anchor: true
