@@ -1,15 +1,15 @@
-"""Episode collection and selection scoring (paper §3, Algorithm 1).
+"""Episode collection and selection scoring (paper 짠3, Algorithm 1).
 
 For each candidate sample we compute:
-    h_i      = last-token hidden state under current θ_t
+    h_i      = last-token hidden state under current 罐_t
     R_i      = composite reward (paper Eq. 6)
-    a_i      = PPO actor action ∈ [0, 1]
-    ãlign_i  = compute_alignment(h_i) ∈ [0, 1]   (TADS only)
+    a_i      = PPO actor action ??[0, 1]
+    찾lign_i  = compute_alignment(h_i) ??[0, 1]   (TADS only)
 
 The selection score is
-    s_i^(t) = R_i · a_i · (1 + λ · ãlign_i^(t))
+    s_i^(t) = R_i 쨌 a_i 쨌 (1 + 貫 쨌 찾lign_i^(t))
 and the top-K samples form the training subset for this epoch.
-Setting λ=0 (or use_anchor=False) recovers the Data Agent baseline.
+Setting 貫=0 (or use_anchor=False) recovers the Data Agent baseline.
 
 Reward components (paper Eq. 1, 3, 5, 6):
     r_loss_i    = mean CE loss over response tokens          (== rdiff in the
@@ -116,9 +116,9 @@ def collect_episode(
         # Build per-layer (first-last) deltas across every decoder layer.
         # hidden_states[0] is the embedding; decoder layers occupy [1:].
         # Resulting `states` shape:
-        #   single-layer mode (anchor.layer_indices unset)  → (B, H)
-        #   multi-layer mode  (anchor.layer_indices = ...)  → (B, L, H)
-        # The agent always consumes a flat (B, H) — we use the LAST decoder
+        #   single-layer mode (anchor.layer_indices unset)  ??(B, H)
+        #   multi-layer mode  (anchor.layer_indices = ...)  ??(B, L, H)
+        # The agent always consumes a flat (B, H) ??we use the LAST decoder
         # layer's last-token hidden state, which preserves the pre-refactor
         # input distribution for the PPO actor.
         decoder_hidden = out.hidden_states[1:]
@@ -129,7 +129,7 @@ def collect_episode(
         if use_anchor and trajectory_anchor is not None and trajectory_anchor.is_multi_layer:
             anchor_layer_indices = trajectory_anchor.layer_indices
             if not anchor_layer_indices:
-                # First call — anchor's layer_indices is resolved on its own
+                # First call ??anchor's layer_indices is resolved on its own
                 # first update() pass; here we mirror that lazy resolution.
                 from .trajectory_anchor import _resolve_layer_indices
                 anchor_layer_indices = _resolve_layer_indices(
@@ -210,7 +210,7 @@ def collect_episode(
     # ---- Composite reward per sample (paper Eq. 6) ----
     all_rewards = r_weight * all_r_loss + (1.0 - r_weight) * all_r_entropy
 
-    # ---- Selection score s_i = R_i · a_i · (1 + λ · ãlign_i) ----
+    # ---- Selection score s_i = R_i 쨌 a_i 쨌 (1 + 貫 쨌 찾lign_i) ----
     R = all_rewards.view(-1)
     a = all_actions.view(-1)
 
@@ -235,7 +235,9 @@ def collect_episode(
         logger.info("DataAgent score (no anchor) | epoch=%d", epoch)
 
     k = max(1, int(total_samples * selection_ratio))
+    print(f"[diag-selector] total_samples={total_samples} ratio={selection_ratio} k={k} score.shape={tuple(score.shape)} dtype={score.dtype} has_nan={bool(torch.isnan(score).any())} has_inf={bool(torch.isinf(score).any())}", flush=True)
     selected_indices: List[int] = score.topk(k).indices.cpu().tolist()
+    print(f"[diag-selector] selected_indices type={type(selected_indices).__name__} len={len(selected_indices)} first5={selected_indices[:5]}", flush=True)
 
     var_loss_val = float(all_r_loss.var().item()) if all_r_loss.numel() > 1 else 0.0
     var_entropy_val = float(all_r_entropy.var().item()) if all_r_entropy.numel() > 1 else 0.0
