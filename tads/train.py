@@ -133,12 +133,48 @@ def main() -> None:
         logger.info("Config:\n%s", json.dumps(cfg, indent=2, default=str))
         logger.info("=" * 60)
 
+    # ---------- resume: find latest epoch checkpoint, if any ----------
+    def _find_latest_epoch_ckpt(out_dir: Path):
+        """Return (epoch_num, path) of latest epoch_N/ under out_dir, or (0, None)."""
+        if not out_dir.exists():
+            return 0, None
+        epochs = []
+        for p in out_dir.glob("epoch_*"):
+            if not p.is_dir():
+                continue
+            try:
+                n = int(p.name.replace("epoch_", ""))
+            except ValueError:
+                continue
+            # Require the model file to exist; partial checkpoints are ignored.
+            if (p / "config.json").exists() or (p / "adapter_config.json").exists():
+                epochs.append((n, p))
+        if not epochs:
+            return 0, None
+        epochs.sort()
+        return epochs[-1]
+
+    resume_epoch, resume_ckpt = _find_latest_epoch_ckpt(output_dir)
+    if resume_ckpt is not None and is_main_process():
+        logger.info(
+            "RESUMING from %s (epoch %d completed; continuing at epoch %d)",
+            resume_ckpt, resume_epoch, resume_epoch + 1,
+        )
+    if use_ddp:
+        dist.barrier()
+
     # ---------- tokenizer / model ----------
+    # Load tokenizer from base path (does not change between epochs).
     tokenizer = load_tokenizer(cfg["model_path"])
+
+    # If resuming, load model weights from the checkpoint dir; else from base.
+    model_load_path = str(resume_ckpt) if resume_ckpt is not None else cfg["model_path"]
+    if is_main_process():
+        logger.info("Loading model from: %s", model_load_path)
 
     training_mode = str(cfg.get("training_mode", "full"))
     model = load_model(
-        cfg["model_path"],
+        model_load_path,
         training_mode=training_mode,
         lora_cfg=cfg.get("lora"),
         use_ddp=use_ddp,
@@ -254,9 +290,71 @@ def main() -> None:
         num_training_steps=total_steps,
     )
 
-    # ---------- training loop ----------
+    # ---------- resume: restore optimizer/scheduler/agent/anchor/metrics ----------
     metrics_log = []
-    for epoch in range(1, train_epochs + 1):
+    if resume_ckpt is not None:
+        opt_path = resume_ckpt / "optimizer.pt"
+        if opt_path.exists():
+            try:
+                optimizer.load_state_dict(torch.load(opt_path, map_location=device))
+                if is_main_process():
+                    logger.info("Restored optimizer state from %s", opt_path)
+            except Exception as e:
+                if is_main_process():
+                    logger.warning("Could not restore optimizer (%s); using fresh state", e)
+        sch_path = resume_ckpt / "scheduler.pt"
+        if sch_path.exists():
+            try:
+                scheduler.load_state_dict(torch.load(sch_path))
+                if is_main_process():
+                    logger.info("Restored scheduler state from %s", sch_path)
+            except Exception as e:
+                if is_main_process():
+                    logger.warning("Could not restore scheduler (%s); using fresh state", e)
+        if agent is not None:
+            agent_path = resume_ckpt / "agent.pt"
+            if agent_path.exists() and hasattr(agent, "load"):
+                try:
+                    agent.load(str(agent_path))
+                    if is_main_process():
+                        logger.info("Restored PPO agent state from %s", agent_path)
+                except Exception as e:
+                    if is_main_process():
+                        logger.warning("Could not restore agent (%s)", e)
+        if anchor is not None:
+            anchor_path = resume_ckpt / "trajectory_anchor.pt"
+            if anchor_path.exists():
+                try:
+                    anchor.load_state_dict(torch.load(anchor_path))
+                    if is_main_process():
+                        logger.info("Restored trajectory anchor from %s", anchor_path)
+                except Exception as e:
+                    if is_main_process():
+                        logger.warning("Could not restore anchor (%s)", e)
+        metrics_json = output_dir / "metrics.json"
+        if metrics_json.exists():
+            try:
+                with open(metrics_json) as f:
+                    metrics_log = json.load(f)
+                if is_main_process():
+                    logger.info("Restored %d epoch metric rows", len(metrics_log))
+            except Exception as e:
+                if is_main_process():
+                    logger.warning("Could not restore metrics.json (%s)", e)
+
+    start_epoch = resume_epoch + 1
+    if start_epoch > train_epochs:
+        if is_main_process():
+            logger.info(
+                "All %d epochs already completed (resume_epoch=%d). Nothing to do.",
+                train_epochs, resume_epoch,
+            )
+        if use_ddp:
+            dist.destroy_process_group()
+        return
+
+    # ---------- training loop ----------
+    for epoch in range(start_epoch, train_epochs + 1):
         if is_main_process():
             logger.info("=" * 60)
             logger.info("Epoch %d / %d | method=%s", epoch, train_epochs, method)
@@ -310,6 +408,10 @@ def main() -> None:
             m = model.module if hasattr(model, "module") else model
             m.save_pretrained(str(ckpt_path))
             tokenizer.save_pretrained(str(ckpt_path))
+            # Save optimizer + scheduler so a time-limited resume keeps momentum
+            # and LR schedule continuity.
+            torch.save(optimizer.state_dict(), str(ckpt_path / "optimizer.pt"))
+            torch.save(scheduler.state_dict(), str(ckpt_path / "scheduler.pt"))
             if agent is not None:
                 agent.save(str(ckpt_path / "agent.pt"))
             if anchor is not None:
@@ -319,6 +421,17 @@ def main() -> None:
             with open(output_dir / "metrics.json", "w") as f:
                 json.dump(metrics_log, f, indent=2)
             logger.info("Checkpoint saved: %s", ckpt_path)
+            # Optional: keep only last K checkpoints to avoid disk bloat.
+            _keep = int(cfg.get("keep_last_n_checkpoints", 0))
+            if _keep > 0:
+                existing = sorted(
+                    [p for p in output_dir.glob("epoch_*") if p.is_dir()],
+                    key=lambda p: int(p.name.replace("epoch_", "")),
+                )
+                for old in existing[:-_keep]:
+                    import shutil as _shutil
+                    _shutil.rmtree(old, ignore_errors=True)
+                    logger.info("Removed old checkpoint: %s", old)
 
         if use_ddp:
             dist.barrier()
