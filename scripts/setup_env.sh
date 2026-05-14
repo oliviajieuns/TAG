@@ -17,8 +17,8 @@
 # --- LLM checkpoints ---
 export MODEL_PATH_LLAMA2_7B="${MODEL_PATH_LLAMA2_7B:-/group-volume/nait-models/Llama-2-7b-hf}"
 export MODEL_PATH_QWEN25_7B="${MODEL_PATH_QWEN25_7B:-/group-volume/nait-models/qwen2.5-7b}"
-export MODEL_PATH_MISTRAL_7B="${MODEL_PATH_MISTRAL_7B:-/group-volume/nait-models/Mistral-7B-v0.1}"
-export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-models/deepseek-llm-7b-base}"
+export MODEL_PATH_MISTRAL_7B="${MODEL_PATH_MISTRAL_7B:-/group-volume/nait-models/mistral-7b-v0.1}"
+export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-models/DeepSeek-LLM-7B-Base}"
 
 # --- IT training data (Alpaca-GPT4 local file) ---
 # File extension picks the loader automatically: .parquet / .json / .jsonl / .csv.
