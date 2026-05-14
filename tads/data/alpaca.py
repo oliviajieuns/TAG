@@ -7,6 +7,7 @@ formatting matches the model family used at evaluation time.
 """
 from __future__ import annotations
 
+import glob
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -16,6 +17,39 @@ from datasets import load_dataset
 from .sft_prompts import tokenize_alpaca
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_data_files(spec: str) -> Optional[str]:
+    """Expand globs / verify the literal path. Returns the resolved spec or None.
+
+    - If ``spec`` contains a glob metachar, expand and return the (comma-joined)
+      list of matches; None if zero matches.
+    - If ``spec`` is a concrete path that exists, return it unchanged.
+    - If ``spec`` is a concrete path that does NOT exist, try sibling globs
+      (``*.json``, ``*.jsonl``, ``*.parquet``) in the same directory as a
+      fallback — this rescues the common case where the file has a hashed
+      suffix (HF dataset shards).
+    """
+    if not spec:
+        return None
+    if any(ch in spec for ch in "*?["):
+        matches = sorted(glob.glob(spec))
+        if matches:
+            return ",".join(matches)
+        return None
+    if os.path.exists(spec):
+        return spec
+    parent = os.path.dirname(spec) or "."
+    if os.path.isdir(parent):
+        for pat in ("*.json", "*.jsonl", "*.parquet"):
+            matches = sorted(glob.glob(os.path.join(parent, pat)))
+            if matches:
+                logger.warning(
+                    "ALPACA_DATA_FILES=%r not found; using sibling fallback %s (%d files)",
+                    spec, os.path.join(parent, pat), len(matches),
+                )
+                return ",".join(matches)
+    return None
 
 
 def verify_response_marker(tokenizer) -> List[int]:
@@ -73,10 +107,22 @@ def build_alpaca_dataset(
     dataset_name = dataset_name or None
 
     if data_files:
-        # Auto-detect HF `load_dataset` builder by file extension. Accepts a
-        # single path or a glob (e.g. ".../data/*.json"); for globs we pick
-        # the format from the first matching extension.
-        sample = str(data_files).split(",")[0].split()[0].lower()
+        resolved = _resolve_data_files(str(data_files))
+        if not resolved:
+            env_val = os.environ.get("ALPACA_DATA_FILES", "<unset>")
+            raise FileNotFoundError(
+                f"Alpaca local file(s) not found.\n"
+                f"  requested data_files = {data_files!r}\n"
+                f"  ALPACA_DATA_FILES env = {env_val!r}\n"
+                f"Fix one of:\n"
+                f"  1. export ALPACA_DATA_FILES=/abs/path/to/file_or_glob.json "
+                f"   (then re-run; nothing else to do)\n"
+                f"  2. edit scripts/setup_env.sh and source it again\n"
+                f"  3. unset ALPACA_DATA_FILES to fall back to HF hub "
+                f"({dataset_name or 'liangxin/Alpaca_GPT4'})"
+            )
+        # Auto-detect HF `load_dataset` builder by the first matched file's extension.
+        sample = resolved.split(",")[0].lower()
         if sample.endswith((".json", ".jsonl")):
             fmt = "json"
         elif sample.endswith(".csv"):
@@ -85,10 +131,18 @@ def build_alpaca_dataset(
             fmt = "text"
         else:
             fmt = "parquet"
+        # Pretty-print: collapse to count if many files (glob shards).
+        n_files = resolved.count(",") + 1
+        display = resolved if n_files <= 3 else f"{sample} … (+{n_files - 1} more)"
         logger.info(
-            "Loading Alpaca from local file(s): %s | format=%s", data_files, fmt,
+            "Loading Alpaca from local file(s): %s | format=%s | n_files=%d",
+            display, fmt, n_files,
         )
-        raw = load_dataset(fmt, data_files=data_files, split="train")
+        raw = load_dataset(
+            fmt,
+            data_files=resolved.split(",") if "," in resolved else resolved,
+            split="train",
+        )
     elif dataset_name:
         logger.info("Loading Alpaca from HF hub: %s", dataset_name)
         raw = load_dataset(dataset_name, cache_dir=cache_dir)["train"]

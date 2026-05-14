@@ -17,13 +17,14 @@ bbh_data_dir: ${oc.env:BBH_DATA_DIR,/group-volume/IT-datasets/bbh}
 
 # --- Dataset (Alpaca-GPT4 by default; matches NAIT ICLR 2026, Peng et al. 2023) ---
 # Precedence:
-#   1. If ALPACA_DATA_FILES env var is set → load that local file.
-#      Format is auto-detected from extension: .parquet / .json / .jsonl / .csv
-#      (a glob like ".../data/*.json" is also accepted).
+#   1. If ALPACA_DATA_FILES env var is set → load that local file (or glob).
+#      Format is auto-detected from extension: .parquet / .json / .jsonl / .csv.
 #   2. Else → fall back to `dataset_name` from HF hub.
-# Example (local file):
-#   export ALPACA_DATA_FILES=/group-volume/IT-datasets/alpaca_gpt4/data/train.json
-data_files: ${oc.env:ALPACA_DATA_FILES,/group-volume/IT-datasets/alpaca_gpt4/data/train.json}
+# The default below is a glob over the canonical cluster layout, so any of
+#   data/train.json | data/train-00000-of-...json | data/*.parquet
+# will resolve without further configuration. Override by exporting
+# ALPACA_DATA_FILES before launching training.
+data_files: ${oc.env:ALPACA_DATA_FILES,/group-volume/IT-datasets/alpaca_gpt4/data/*.json}
 dataset_name: ${oc.env:ALPACA_DATASET_NAME,liangxin/Alpaca_GPT4}
 prompt_style: alpaca_default
 max_seq_len: 512

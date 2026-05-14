@@ -22,8 +22,11 @@ export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-mode
 
 # --- IT training data (Alpaca-GPT4 local file) ---
 # File extension picks the loader automatically: .parquet / .json / .jsonl / .csv.
-# A glob is also accepted, e.g. "/group-volume/IT-datasets/alpaca_gpt4/data/*.json".
-export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/data/train.json}"
+# A glob is also accepted (and is the safest default since the official HF
+# Alpaca-GPT4 distribution shards into hashed filenames like
+# `train-00000-of-00001-XXXX.json`). Override with a concrete file path
+# before sourcing if you want exact-match behaviour.
+export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/data/*.json}"
 
 # --- Output roots ---
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/minsoo3.kim/tads-checkpoints}"
