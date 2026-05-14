@@ -1,6 +1,7 @@
 model_key: llama2-7b
 model_path: ${oc.env:MODEL_PATH_LLAMA2_7B,/group-volume/nait-models/Llama-2-7b-hf}
 prompt_style: llama_user_assistant
-max_seq_len: 2048
+# NAIT Table 8: max_length=512 (Alpaca-GPT4 samples fit comfortably).
+max_seq_len: 512
 # NAIT Table 8 / Stanford Alpaca SFT recipe.
 learning_rate: 2.0e-5

@@ -1,6 +1,7 @@
 model_key: qwen2.5-7b
 model_path: ${oc.env:MODEL_PATH_QWEN25_7B,/group-volume/nait-models/qwen2.5-7b}
 prompt_style: qwen_chatml
-max_seq_len: 2048
+# NAIT Table 8: max_length=512 (Alpaca-GPT4 samples fit comfortably).
+max_seq_len: 512
 # Qwen2.5 Technical Report SFT recipe — half of Llama for stability.
 learning_rate: 1.0e-5
