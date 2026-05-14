@@ -14,9 +14,24 @@ import argparse
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# transformers 5.0 eager-imports `from torchvision.io import VideoReader`
+# via its video model registry, which fails on torchvision builds without
+# ffmpeg support — even though our LLM-only training never touches video.
+# Stub the missing attribute BEFORE any transformers import so the import
+# resolves to a harmless placeholder. Eval entrypoint is intentionally
+# left untouched (user request: training-only mitigation).
+try:
+    import torchvision.io as _tv_io
+    if not hasattr(_tv_io, "VideoReader"):
+        _tv_io.VideoReader = type("VideoReader", (), {})
+except Exception:
+    # torchvision absent entirely is fine — our code never uses it.
+    pass
 
 import torch
 import torch.distributed as dist
