@@ -35,7 +35,7 @@ import torch.distributed as dist
 # Allow `python tests/test_broadcast_selection.py` from repo root without install.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from tads.dist_utils import (  # noqa: E402
+from tads.core.dist_utils import (  # noqa: E402
     all_gather_concat,
     broadcast_selection,
     get_global_rank,

@@ -63,6 +63,13 @@ export TRANSFORMERS_NO_ADVISORY_WARNINGS="${TRANSFORMERS_NO_ADVISORY_WARNINGS:-1
 # these to "0" BEFORE running training/eval. The Python entry points set
 # the same defaults via os.environ.setdefault, so an unset shell still
 # behaves offline.
+#
+# Lifecycle note: once exported, these stick for the rest of the shell
+# session. If you `source scripts/setup_env.sh` and later want a single
+# online command without re-sourcing, prefix the command:
+#     HF_DATASETS_OFFLINE=0 HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 \
+#         python -m tads.eval ...
+# This is local to that subprocess and doesn't disturb the parent shell.
 export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
