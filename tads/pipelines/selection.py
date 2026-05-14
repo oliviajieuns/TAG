@@ -1,4 +1,4 @@
-"""Per-epoch sample selection dispatch.
+﻿"""Per-epoch sample selection dispatch.
 
 Wraps the four selection methods behind a single function. For ``data_agent``
 and ``tads`` the selection is performed on rank-0 only under DDP, and the
@@ -31,23 +31,49 @@ def _random_indices(n_total: int, ratio: float, seed: int, epoch: int) -> List[i
     return perm[:k]
 
 
-def _broadcast_selection(selected: List[int]) -> List[int]:
-    """Broadcast ``selected`` (a python list of ints) from rank 0 to all."""
+def _broadcast_selection(selected) -> List[int]:
+    """Broadcast selected indices from GLOBAL rank 0 to all ranks (defensive)."""
     if not dist.is_initialized():
-        return selected
-    device = f"cuda:{local_rank()}" if torch.cuda.is_available() else "cpu"
-    # Encode length first, then the payload.
-    if is_main_process():
-        length = torch.tensor([len(selected)], dtype=torch.long, device=device)
+        if hasattr(selected, "tolist"):
+            return selected.tolist()
+        return list(selected)
+    device = (
+        torch.device(f"cuda:{local_rank()}")
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
+    SRC = 0
+    rank = dist.get_rank()
+    # Normalize source-rank input to a plain python list of ints
+    if rank == SRC:
+        if hasattr(selected, "tolist"):
+            selected = selected.tolist()
+        elif not isinstance(selected, list):
+            selected = list(selected)
+        length_val = len(selected)
+        print(f"[bcast] rank=0 len(selected)={length_val} first5={selected[:5]}", flush=True)
     else:
-        length = torch.tensor([0], dtype=torch.long, device=device)
-    dist.broadcast(length, src=0)
+        length_val = 0
+    length = torch.tensor([length_val], dtype=torch.long, device=device).contiguous()
+    dist.broadcast(length, src=SRC)
     n = int(length.item())
-    if is_main_process():
-        payload = torch.tensor(selected, dtype=torch.long, device=device)
+    print(f"[bcast] rank={rank} after-bcast n={n} device={device}", flush=True)
+    # Sanity guard — if n is garbage, fail loudly with diagnostics
+    if n < 0 or n > 10_000_000:
+        raise RuntimeError(
+            f"[rank {rank}] _broadcast_selection received garbage length n={n}. "
+            f"This means dist.broadcast(length) did not transmit correctly. "
+            f"Check: (1) all ranks share the same default process group "
+            f"(no accelerate/trl-managed group conflict); "
+            f"(2) source rank reached this point and length tensor was int64 "
+            f"contiguous on device={device}; "
+            f"(3) no concurrent collective on another stream."
+        )
+    if rank == SRC:
+        payload = torch.tensor(selected, dtype=torch.long, device=device).contiguous()
     else:
         payload = torch.zeros(n, dtype=torch.long, device=device)
-    dist.broadcast(payload, src=0)
+    dist.broadcast(payload, src=SRC)
     return payload.cpu().tolist()
 
 
