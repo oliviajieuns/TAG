@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BenchmarkEvaluator, register
@@ -24,7 +25,15 @@ _LANG_PAT = re.compile(r"^([a-z]+)--")
 
 
 def _normalize(s: str) -> str:
-    s = s.strip().lower()
+    """Lowercase + whitespace collapse + Unicode NFC normalization.
+
+    NFC matters for the non-Latin TyDiQA languages (Bengali, Arabic, Korean,
+    Telugu, …) where the same visual answer can be encoded in either
+    pre-composed (NFC) or decomposed (NFD) form. Without normalising, gold
+    and prediction can be byte-different but visually identical, producing
+    false-negative EM matches.
+    """
+    s = unicodedata.normalize("NFC", s.strip().lower())
     return re.sub(r"\s+", " ", s)
 
 

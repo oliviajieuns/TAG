@@ -10,7 +10,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 
-from ..core.utils import cuda_mem_str, is_main_process
+from ..core.utils import cuda_mem_str, is_main_process, world_size
 
 logger = logging.getLogger(__name__)
 
@@ -89,17 +89,34 @@ def sft_one_epoch(
     n_steps = 0
     optimizer.zero_grad()
 
+    # DDP grad-accum: skip the all-reduce on intermediate micro-batches with
+    # model.no_sync(), and only sync on the boundary step that actually calls
+    # optimizer.step(). With grad_accum=4 this cuts inter-GPU communication
+    # by ~4x. The context manager is a no-op for non-DDP modules.
+    no_sync_cm = getattr(model, "no_sync", None)
+
     for step, batch in enumerate(loader):
-        out = model(
-            input_ids=batch["input_ids"].to(device),
-            attention_mask=batch["attention_mask"].to(device),
-            labels=batch["labels"].to(device),
-        )
-        (out.loss / grad_accum).backward()
+        is_boundary = ((step + 1) % grad_accum == 0) or ((step + 1) == len(loader))
+
+        def _forward_backward():
+            o = model(
+                input_ids=batch["input_ids"].to(device),
+                attention_mask=batch["attention_mask"].to(device),
+                labels=batch["labels"].to(device),
+            )
+            (o.loss / grad_accum).backward()
+            return o
+
+        if (not is_boundary) and no_sync_cm is not None:
+            with no_sync_cm():
+                out = _forward_backward()
+        else:
+            out = _forward_backward()
+
         total_loss += out.loss.item()
         n_steps += 1
 
-        if (step + 1) % grad_accum == 0:
+        if is_boundary:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             scheduler.step()
@@ -112,4 +129,11 @@ def sft_one_epoch(
                 out.loss.item(), scheduler.get_last_lr()[0], cuda_mem_str(),
             )
 
-    return total_loss / max(1, n_steps)
+    # Aggregate the mean per-step loss across DDP ranks so the returned
+    # number is a true global mean rather than a single rank's view.
+    mean_loss = total_loss / max(1, n_steps)
+    if dist.is_initialized() and world_size() > 1:
+        t = torch.tensor([mean_loss], device=device)
+        dist.all_reduce(t, op=dist.ReduceOp.SUM)
+        mean_loss = (t.item() / world_size())
+    return mean_loss

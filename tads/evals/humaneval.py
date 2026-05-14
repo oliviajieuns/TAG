@@ -8,6 +8,8 @@ import os
 import tempfile
 from typing import Any, Dict, Optional
 
+import torch
+
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import humaneval_generation_prefix
 
@@ -35,6 +37,7 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         n_samples: int = 20,
         temperature: float = 0.8,
         top_p: float = 0.95,
+        seed: int = 42,
         **kwargs,
     ) -> Dict[str, Any]:
         if data_dir is None:
@@ -59,6 +62,12 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         # minimum needed but noisy). When n_samples == 1 we silently fall back
         # to greedy (do_sample=False) for cheap dry-runs.
         use_sampling = n_samples > 1
+        # Seed once before the generation loop so the sampling sequence is
+        # deterministic — without this every rerun yields a different pass@10.
+        if use_sampling:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
         completions: Dict[str, list] = {}
         for i, problem in enumerate(problems):
             prefix = humaneval_generation_prefix(
