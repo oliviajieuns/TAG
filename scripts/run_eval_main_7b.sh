@@ -6,8 +6,17 @@
 # `python -m tads.eval` on it. Results land under
 # ${EVAL_RESULTS_ROOT}/<model>/<method>/.
 #
-# Filters:
-#   MODELS="llama2 qwen25" METHODS="tads_50" \
+# GPU selection
+# -------------
+#   bash scripts/run_eval_main_7b.sh --gpus 0
+#   bash scripts/run_eval_main_7b.sh --gpus 4,5,6,7 --parallel
+#   GPUS="0,1" bash scripts/run_eval_main_7b.sh --parallel
+# Sequential mode uses the first GPU in the list. Parallel mode cycles
+# concurrent jobs through every GPU in the list (one job per GPU at a time).
+#
+# Filters
+# -------
+#   MODELS="llama2 qwen25" METHODS="tads_10" \
 #       BENCHMARKS="mmlu,gsm8k" bash scripts/run_eval_main_7b.sh
 set -euo pipefail
 
@@ -21,15 +30,27 @@ fi
 MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
 METHODS=${METHODS:-"full_100 random_10 data_agent_10 tads_10"}
 BENCHMARKS=${BENCHMARKS:-"mmlu,gsm8k,humaneval,tydiqa"}
-LIMIT=${LIMIT:-}          # set e.g. LIMIT=200 for smoke runs
-CUDA=${CUDA_VISIBLE_DEVICES:-0}
+LIMIT=${LIMIT:-}
+GPUS=${GPUS:-"0"}
 PARALLEL=0
-for arg in "$@"; do
-  case "$arg" in
-    --parallel) PARALLEL=1 ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --parallel)  PARALLEL=1; shift ;;
+    --gpus)      GPUS="$2"; shift 2 ;;
+    --gpus=*)    GPUS="${1#*=}"; shift ;;
+    --limit)     LIMIT="$2"; shift 2 ;;
+    --limit=*)   LIMIT="${1#*=}"; shift ;;
+    -h|--help)   sed -n '2,22p' "$0"; exit 0 ;;
+    *)           echo "[warn] unknown arg: $1" >&2; shift ;;
   esac
 done
+
+IFS=',' read -r -a _gpus_arr <<< "$GPUS"
+
+echo "[run_eval] GPUS=$GPUS  PARALLEL=$PARALLEL  BENCHMARKS=$BENCHMARKS"
+echo "[run_eval] MODELS=$MODELS"
+echo "[run_eval] METHODS=$METHODS"
 
 mkdir -p logs
 
@@ -53,7 +74,7 @@ eval_one() {
   fi
   mkdir -p "$out_dir"
 
-  echo "=== eval ${model}/${method}  ckpt=${ckpt} -> ${out_dir} ==="
+  echo "=== eval ${model}/${method}  ckpt=${ckpt} -> ${out_dir} (GPU ${gpu}) ==="
   local extra_args=()
   if [ -n "$LIMIT" ]; then extra_args+=(--limit "$LIMIT"); fi
 
@@ -71,21 +92,25 @@ eval_one() {
 }
 
 if [ "$PARALLEL" = "1" ]; then
-  gpu=0
+  idx=0
+  n_gpus=${#_gpus_arr[@]}
   pids=()
   for model in $MODELS; do
     for method in $METHODS; do
+      gpu="${_gpus_arr[$((idx % n_gpus))]}"
       eval_one "$model" "$method" "$gpu"
       pids+=($!)
-      gpu=$((gpu + 1))
+      idx=$((idx + 1))
     done
   done
-  echo "Launched ${#pids[@]} eval jobs. Tail logs/eval_main_7b_*.log for progress."
+  echo "Launched ${#pids[@]} eval jobs (cycled across GPUs ${GPUS}). Tail logs/eval_main_7b_*.log for progress."
   wait "${pids[@]}"
 else
+  # Sequential: pin every job to the first GPU in the list.
+  first_gpu="${_gpus_arr[0]}"
   for model in $MODELS; do
     for method in $METHODS; do
-      eval_one "$model" "$method" "$CUDA"
+      eval_one "$model" "$method" "$first_gpu"
     done
   done
 fi
