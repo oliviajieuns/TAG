@@ -69,36 +69,86 @@ def parse_args() -> argparse.Namespace:
 
 
 def _apply_overrides(cfg: Dict[str, Any], overrides) -> None:
-    """Apply ``key=value`` overrides (top-level keys only). Values are
-    parsed as float/int/bool when possible, else kept as string."""
+    """Apply ``key=value`` overrides; supports dotted nested keys.
+
+    Examples:
+        selection_ratio=0.3
+        anchor.layer_idx=-1
+        agent.lr=5.0e-5
+        tads.lam=2.0
+
+    Values are parsed as bool/int/float when possible, else kept as string.
+    """
+    def _coerce(v: str):
+        if v.lower() in {"true", "false"}:
+            return v.lower() == "true"
+        try:
+            return int(v)
+        except ValueError:
+            pass
+        try:
+            return float(v)
+        except ValueError:
+            return v
+
     for kv in overrides:
         if "=" not in kv:
             continue
         k, v = kv.split("=", 1)
-        # naive type coercion
-        if v.lower() in {"true", "false"}:
-            cfg[k] = v.lower() == "true"
-        else:
-            try:
-                cfg[k] = int(v)
-            except ValueError:
-                try:
-                    cfg[k] = float(v)
-                except ValueError:
-                    cfg[k] = v
+        coerced = _coerce(v)
+        if "." not in k:
+            cfg[k] = coerced
+            continue
+        # Nested: walk down (creating intermediate dicts on the fly), then
+        # set the leaf. Refuse to overwrite a non-dict intermediate to avoid
+        # silently shadowing a scalar with a dict.
+        parts = k.split(".")
+        node = cfg
+        for part in parts[:-1]:
+            existing = node.get(part)
+            if existing is None:
+                node[part] = {}
+            elif not isinstance(existing, dict):
+                raise ValueError(
+                    f"--override {k}={v}: cannot descend into non-dict key "
+                    f"{part!r} (current value: {existing!r})",
+                )
+            node = node[part]
+        node[parts[-1]] = coerced
 
 
 def _setup_ddp() -> bool:
-    """Initialise torch.distributed if launched under torchrun."""
+    """Initialise torch.distributed if launched under torchrun.
+
+    NCCL timeout is bumped from PyTorch's 10-min default to 120 min: rank 0
+    runs collect_episode (full forward over the ~52K candidate pool) solo
+    while the other ranks idle at the next barrier. For Llama-2-7B at
+    episode_batch_size=16 that pass takes 30–90 min; with the default
+    timeout the idle ranks would trip a Watchdog collective-timeout error
+    mid-selection and crash the job.
+    """
     if "RANK" in os.environ and not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        from datetime import timedelta
+        dist.init_process_group(
+            backend="nccl",
+            timeout=timedelta(minutes=120),
+        )
         torch.cuda.set_device(local_rank())
         return True
     return dist.is_initialized()
 
 
 def main() -> None:
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    # OFFLINE BY DEFAULT — every model / tokenizer / dataset must be on local
+    # disk. The HF datasets / hub / transformers libraries otherwise reach
+    # over the network even when the data file is local (metadata refresh,
+    # version pings, dataset-card lookup), and on cluster nodes without
+    # outbound HTTPS that triggers a flaky "tries to download → cache lock
+    # corruption" failure mode. Users who explicitly want the hub fallback
+    # can override any of these to "0" before launching.
+    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     # Silence HF tokenizer's per-call "Token indices sequence length..."
     # advisory; it fires on every batch when any sample is longer than

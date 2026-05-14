@@ -15,18 +15,24 @@
 # -----------------------------------------------------------------------------
 
 # --- LLM checkpoints ---
+# The model loader does case-insensitive sibling lookup if these paths don't
+# match the on-disk casing exactly (Linux is case-sensitive; HF / cluster
+# naming conventions vary). So both `qwen2.5-7b` and `Qwen2.5-7B` resolve.
 export MODEL_PATH_LLAMA2_7B="${MODEL_PATH_LLAMA2_7B:-/group-volume/nait-models/Llama-2-7b-hf}"
 export MODEL_PATH_QWEN25_7B="${MODEL_PATH_QWEN25_7B:-/group-volume/nait-models/qwen2.5-7b}"
+export MODEL_PATH_QWEN25_05B="${MODEL_PATH_QWEN25_05B:-/group-volume/nait-models/qwen2.5-0.5b}"
+export MODEL_PATH_QWEN25_14B="${MODEL_PATH_QWEN25_14B:-/group-volume/jieuns/models/Qwen2.5-14B}"
 export MODEL_PATH_MISTRAL_7B="${MODEL_PATH_MISTRAL_7B:-/group-volume/nait-models/mistral-7b-v0.1}"
 export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-models/DeepSeek-LLM-7B-Base}"
 
 # --- IT training data (Alpaca-GPT4 local file) ---
 # File extension picks the loader automatically: .parquet / .json / .jsonl / .csv.
-# A glob is also accepted (and is the safest default since the official HF
-# Alpaca-GPT4 distribution shards into hashed filenames like
-# `train-00000-of-00001-XXXX.json`). Override with a concrete file path
-# before sourcing if you want exact-match behaviour.
-export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/data/train-00000-of-00001-6ef3991c06080e14.json}"
+# Default is a glob over the canonical cluster layout (the HF Alpaca-GPT4
+# distribution shards into hashed filenames like
+# `train-00000-of-00001-XXXX.json`, so a single-file path is brittle across
+# re-downloads). Override with a concrete file path before sourcing if you
+# want exact-match behaviour.
+export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/data/*.json}"
 
 # --- Output roots ---
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/minsoo3.kim/tads-checkpoints}"
@@ -47,7 +53,27 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 # than the specified maximum sequence length for this model" advisory.
 # Our code intentionally truncates to max_seq_len; the warning is noise.
 export TRANSFORMERS_NO_ADVISORY_WARNINGS="${TRANSFORMERS_NO_ADVISORY_WARNINGS:-1}"
-# Optional HF mirror (uncomment if you need hub access):
+
+# --- Offline by default ---
+# Every model, tokenizer, and dataset must already be on local disk. The HF
+# libs reach over the network even for local files (metadata refresh,
+# dataset-card lookup, version pings); on cluster nodes without outbound
+# HTTPS that turns into "tries to download → cache-lock corruption" errors
+# minutes after start. To re-enable hub access for a one-off run, override
+# these to "0" BEFORE running training/eval. The Python entry points set
+# the same defaults via os.environ.setdefault, so an unset shell still
+# behaves offline.
+#
+# Lifecycle note: once exported, these stick for the rest of the shell
+# session. If you `source scripts/setup_env.sh` and later want a single
+# online command without re-sourcing, prefix the command:
+#     HF_DATASETS_OFFLINE=0 HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 \
+#         python -m tads.eval ...
+# This is local to that subprocess and doesn't disturb the parent shell.
+export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+# Optional HF mirror (only matters if you've opted back into online mode):
 # export HF_ENDPOINT=https://hf-mirror.com
 
 # -----------------------------------------------------------------------------

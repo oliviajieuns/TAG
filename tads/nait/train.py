@@ -41,6 +41,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # OFFLINE BY DEFAULT — see tads.train.main for rationale.
+    import os as _os
+    _os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+    _os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    _os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    _os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+
     args = parse_args()
     cfg = load_config(args.config)
 

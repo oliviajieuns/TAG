@@ -130,7 +130,23 @@ class MMLUEvaluator(BenchmarkEvaluator):
             )
         dfs = [pd.read_parquet(os.path.join(data_dir, f)) for f in test_files]
         test_df = pd.concat(dfs, ignore_index=True)
-        dev_df = pd.read_parquet(os.path.join(data_dir, "dev-00000-of-00001.parquet"))
+        # The dev split is conventionally a single shard
+        # (``dev-00000-of-00001.parquet``) but cluster mirrors and re-shardings
+        # can change that suffix. Glob defensively so the eval doesn't crash
+        # on a different shard count.
+        dev_files = sorted(
+            f for f in os.listdir(data_dir)
+            if f.startswith("dev-") and f.endswith(".parquet")
+        )
+        if not dev_files:
+            raise FileNotFoundError(
+                f"No `dev-*.parquet` files found in {data_dir}. "
+                "Expected the MMLU `all` directory.",
+            )
+        dev_df = pd.concat(
+            [pd.read_parquet(os.path.join(data_dir, f)) for f in dev_files],
+            ignore_index=True,
+        )
 
         subjects = test_df["subject"].unique()
         logger.info("MMLU: %d subjects | limit=%s", len(subjects), limit)

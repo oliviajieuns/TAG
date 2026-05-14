@@ -67,6 +67,10 @@ def _data_dir_for(
 
 
 def main() -> None:
+    # OFFLINE BY DEFAULT — see tads.train.main for rationale.
+    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
     quiet_repeated_warnings()

@@ -33,6 +33,13 @@ def compute_rewards(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Per-sample (r_loss, r_entropy) plus the adaptive weight r_weight.
 
+    Memory: processes the batch one sample at a time so peak GPU memory holds
+    only a single ``(T, V)`` fp32 softmax + log-prob pair (≈ ``2·T·V·4`` bytes)
+    instead of three full ``(B, T, V)`` fp32 tensors at once. For Qwen2.5
+    (V=151k) at episode_batch_size=16 this drops the entropy peak from ~15 GB
+    to ~1 GB; for Llama2 (V=32k) from ~3 GB to ~256 MB. The slowdown is
+    negligible because the inner ops are still vectorised over (T, V).
+
     Note on ``r_weight`` scope: when this function is called with a single
     mini-batch, the variance is computed *within* that batch and is degenerate
     at batch_size=1. For the dataset-level weight used by ``collect_episode``,
@@ -42,21 +49,30 @@ def compute_rewards(
     B, T, V = logits.shape
     device = logits.device
 
-    shift_logits = logits[:, :-1, :].contiguous()
-    shift_labels = labels[:, 1:].contiguous()
-    resp_mask = (shift_labels != -100).float()
-    n_resp = resp_mask.sum(dim=-1).clamp(min=1)
+    shift_logits = logits[:, :-1, :]                          # (B, T-1, V), bf16/fp16
+    shift_labels = labels[:, 1:]                              # (B, T-1)
+    resp_mask = (shift_labels != -100).float()                # (B, T-1)
+    n_resp = resp_mask.sum(dim=-1).clamp(min=1)               # (B,)
 
-    flat_logits = shift_logits.reshape(-1, V)
-    flat_labels = shift_labels.clamp(min=0).reshape(-1)
-    flat_loss = F.cross_entropy(flat_logits, flat_labels, reduction="none")
-    flat_loss = flat_loss * resp_mask.reshape(-1)
-    r_loss = flat_loss.reshape(B, -1).sum(dim=-1) / n_resp
+    r_loss = torch.empty(B, device=device, dtype=torch.float32)
+    r_entropy = torch.empty(B, device=device, dtype=torch.float32)
 
-    probs = F.softmax(shift_logits, dim=-1)
-    log_probs = probs.clamp(min=eps).log()
-    token_entropy = -(probs * log_probs).sum(dim=-1)
-    r_entropy = (token_entropy * resp_mask).sum(dim=-1) / n_resp
+    for i in range(B):
+        sl = shift_logits[i]                                  # (T-1, V)
+        ll = shift_labels[i].clamp(min=0)                     # (T-1,)
+        rm = resp_mask[i]                                     # (T-1,)
+        nr = n_resp[i]
+
+        # CE over response tokens only.
+        ce_i = F.cross_entropy(sl, ll, reduction="none")      # (T-1,) fp32
+        r_loss[i] = (ce_i * rm).sum() / nr
+
+        # Entropy via log_softmax: H = -Σ p log p = -Σ exp(lp) * lp.
+        # log_softmax allocates a single (T-1, V) fp32 tensor; ent_tok is (T-1,).
+        lp = F.log_softmax(sl.float(), dim=-1)                # (T-1, V) fp32
+        ent_tok = -(lp.exp() * lp).sum(dim=-1)                # (T-1,) fp32
+        r_entropy[i] = (ent_tok * rm).sum() / nr
+        del sl, ce_i, lp, ent_tok
 
     if r_loss.numel() > 1:
         var_loss = r_loss.var()
