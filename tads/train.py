@@ -139,7 +139,16 @@ def _setup_ddp() -> bool:
 
 
 def main() -> None:
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    # OFFLINE BY DEFAULT — every model / tokenizer / dataset must be on local
+    # disk. The HF datasets / hub / transformers libraries otherwise reach
+    # over the network even when the data file is local (metadata refresh,
+    # version pings, dataset-card lookup), and on cluster nodes without
+    # outbound HTTPS that triggers a flaky "tries to download → cache lock
+    # corruption" failure mode. Users who explicitly want the hub fallback
+    # can override any of these to "0" before launching.
+    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     # Silence HF tokenizer's per-call "Token indices sequence length..."
     # advisory; it fires on every batch when any sample is longer than

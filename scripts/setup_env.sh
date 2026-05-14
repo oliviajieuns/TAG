@@ -53,7 +53,20 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 # than the specified maximum sequence length for this model" advisory.
 # Our code intentionally truncates to max_seq_len; the warning is noise.
 export TRANSFORMERS_NO_ADVISORY_WARNINGS="${TRANSFORMERS_NO_ADVISORY_WARNINGS:-1}"
-# Optional HF mirror (uncomment if you need hub access):
+
+# --- Offline by default ---
+# Every model, tokenizer, and dataset must already be on local disk. The HF
+# libs reach over the network even for local files (metadata refresh,
+# dataset-card lookup, version pings); on cluster nodes without outbound
+# HTTPS that turns into "tries to download → cache-lock corruption" errors
+# minutes after start. To re-enable hub access for a one-off run, override
+# these to "0" BEFORE running training/eval. The Python entry points set
+# the same defaults via os.environ.setdefault, so an unset shell still
+# behaves offline.
+export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+# Optional HF mirror (only matters if you've opted back into online mode):
 # export HF_ENDPOINT=https://hf-mirror.com
 
 # -----------------------------------------------------------------------------

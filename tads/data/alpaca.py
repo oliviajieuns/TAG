@@ -145,6 +145,24 @@ def build_alpaca_dataset(
             cache_dir=cache_dir,
         )
     elif dataset_name:
+        # Refuse to silently hit the HF hub when the trainer is in its default
+        # offline mode (see tads.train.main). Cluster nodes typically have no
+        # outbound HTTPS, and the resulting download attempt corrupts the HF
+        # cache lockfiles, surfacing as an opaque cache error several minutes
+        # later. Force the user to either (a) set ALPACA_DATA_FILES, or (b)
+        # explicitly opt into the network by exporting HF_DATASETS_OFFLINE=0.
+        offline = (
+            os.environ.get("HF_DATASETS_OFFLINE", "0") == "1"
+            or os.environ.get("HF_HUB_OFFLINE", "0") == "1"
+        )
+        if offline:
+            raise FileNotFoundError(
+                "ALPACA_DATA_FILES is unset / unresolved AND HF_DATASETS_OFFLINE=1.\n"
+                "Refusing to download " + repr(dataset_name) + " from the HF hub.\n"
+                "Fix one of:\n"
+                "  1. export ALPACA_DATA_FILES=/abs/path/to/file_or_glob.json (preferred)\n"
+                "  2. export HF_DATASETS_OFFLINE=0 HF_HUB_OFFLINE=0 (re-enables hub access)"
+            )
         logger.info("Loading Alpaca from HF hub: %s", dataset_name)
         raw = load_dataset(dataset_name, cache_dir=cache_dir)["train"]
     else:
