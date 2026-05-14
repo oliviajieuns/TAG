@@ -141,13 +141,26 @@ def main() -> None:
         logger.info("hidden_size=%d | device=%s", hidden_size, device)
 
     # ---------- dataset ----------
+    # Isolate the HF datasets cache per (model, prompt_style) so multiple
+    # concurrent training jobs (e.g. qwen + mistral + deepseek launched in
+    # parallel) don't race on the same fingerprint / lock files. The base
+    # path comes from cfg["data_cache"]; we append the model_key and
+    # prompt_style so tokenisation caches stay distinct even if two configs
+    # share the same data_cache root.
+    model_key = str(cfg.get("model_key", "default"))
+    style_key = str(cfg.get("prompt_style", "alpaca_default"))
+    effective_cache = os.path.join(
+        str(cfg["data_cache"]), model_key, style_key,
+    )
+    if is_main_process():
+        logger.info("HF datasets cache: %s", effective_cache)
     dataset = build_alpaca_dataset(
         tokenizer=tokenizer,
-        cache_dir=cfg["data_cache"],
+        cache_dir=effective_cache,
         max_seq_len=int(cfg["max_seq_len"]),
         dataset_name=cfg.get("dataset_name"),
         data_files=cfg.get("data_files"),
-        prompt_style=str(cfg.get("prompt_style", "alpaca_default")),
+        prompt_style=style_key,
     )
     n_total_full = len(dataset)
 

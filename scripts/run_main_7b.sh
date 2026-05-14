@@ -35,7 +35,12 @@ MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
 METHODS=${METHODS:-"full_100 random_10 data_agent_10 tads_10"}
 GPUS=${GPUS:-"0,1,2,3"}
 NPROC=${NPROC:-}                 # if empty, derived from GPUS
-MASTER_PORT=${MASTER_PORT:-29500}
+# Default master_port: derived from the launching shell's PID so concurrent
+# bash invocations (e.g. one tmux pane per model) get distinct ports without
+# coordination. Collision probability across simultaneous launches is ~1/1000.
+# Override with --master_port=29500 (or env MASTER_PORT=29500) for a fixed
+# port — typically only useful for multi-node debugging.
+MASTER_PORT=${MASTER_PORT:-$(( 29500 + $$ % 1000 ))}
 PARALLEL=0
 
 # ----- CLI args -----
