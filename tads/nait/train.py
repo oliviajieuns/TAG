@@ -56,6 +56,7 @@ def main() -> None:
     set_seed(seed)
 
     output_dir = Path(cfg["output_root"]) / cfg["output_subdir"] / f"nait_{args.tag.lower().replace('-', '_')}"
+    cfg["output_dir"] = str(output_dir)  # see tads.train comment re: parallel-job isolation
     output_dir.mkdir(parents=True, exist_ok=True)
     log_dir = Path(cfg.get("log_dir", output_dir / "logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -156,7 +157,7 @@ def main() -> None:
     metrics_log = []
     for epoch in range(1, train_epochs + 1):
         logger.info("=== NAIT epoch %d/%d ===", epoch, train_epochs)
-        loader = make_dataloader(subset, batch_size=batch_size, shuffle=True, seed=seed)
+        loader = make_dataloader(subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch)
         avg_loss = sft_one_epoch(
             model=model, loader=loader,
             optimizer=optimizer, scheduler=scheduler,

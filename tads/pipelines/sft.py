@@ -32,10 +32,21 @@ def make_dataloader(
     seed: int,
     num_workers: int = 2,
     sampler: Optional[object] = None,
+    epoch: int = 0,
 ) -> DataLoader:
-    """Deterministic dataloader, DDP-aware when sampler is None and dist is up."""
+    """Deterministic dataloader, DDP-aware when sampler is None and dist is up.
+
+    ``epoch`` is folded into the generator seed so single-GPU runs (where
+    DistributedSampler is bypassed and its ``set_epoch`` mechanism doesn't
+    apply) still produce a different shuffle order each epoch. Without
+    this, callers that re-construct the loader once per epoch — like the
+    main trainer — would see the exact same shuffled batch sequence on
+    epoch 1, 2, 3, etc., silently undoing shuffle entirely. DDP runs are
+    unaffected because the DistributedSampler branch sets its own seed
+    and the trainer calls ``sampler.set_epoch(epoch)`` separately.
+    """
     g = torch.Generator()
-    g.manual_seed(seed)
+    g.manual_seed(seed + epoch * 100)
 
     if sampler is None and dist.is_initialized():
         sampler = DistributedSampler(
@@ -48,8 +59,8 @@ def make_dataloader(
         shuffle = False
 
     def _seed_worker(worker_id: int) -> None:
-        random.seed(seed + worker_id)
-        np.random.seed(seed + worker_id)
+        random.seed(seed + epoch * 100 + worker_id)
+        np.random.seed(seed + epoch * 100 + worker_id)
 
     return DataLoader(
         dataset,

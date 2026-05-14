@@ -117,7 +117,17 @@ def load_model(
             raise
 
     if gradient_checkpointing:
-        base.gradient_checkpointing_enable()
+        # use_reentrant=False is required for the modern checkpointing path
+        # to interact correctly with PEFT (LoRA) and with DDP. The legacy
+        # reentrant=True path silently drops gradients for inputs that don't
+        # require_grad and breaks under PEFT's parameter-injection scheme.
+        # Older transformers may not accept the kwarg — fall back gracefully.
+        try:
+            base.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False},
+            )
+        except TypeError:
+            base.gradient_checkpointing_enable()
         # Required for LoRA + gradient_checkpointing
         base.enable_input_require_grads()
 
@@ -146,11 +156,18 @@ def load_model(
 
     if use_ddp:
         model = model.to(f"cuda:{local_rank}")
+        # LoRA training routes the forward through ``base_model.model``;
+        # if a configured ``target_modules`` entry doesn't appear in every
+        # forward path (or the user picks a subset like ``["q_proj"]`` only),
+        # some LoRA adapters produce no gradient and DDP errors with
+        # "Expected to mark X parameters as ready". Full FT always touches
+        # every param, so the cheaper find_unused_parameters=False is safe.
+        find_unused = (training_mode == "lora")
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[local_rank],
             output_device=local_rank,
-            find_unused_parameters=False,
+            find_unused_parameters=find_unused,
         )
     return model
 

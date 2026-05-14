@@ -121,6 +121,11 @@ class PPOAgent:
         old_log_probs: torch.Tensor,
         rewards: torch.Tensor,
     ) -> Tuple[float, float]:
+        # collect_episode put the actor-critic in eval(). The current trunk
+        # has no dropout / BN so eval-vs-train is a no-op today, but PPO
+        # gradient updates conceptually want train mode and any future
+        # dropout/BN added to ActorCritic would silently train under eval.
+        self.ac.train()
         states = states.to(self.device).float()
         actions = actions.to(self.device).float()
         old_log_probs = old_log_probs.to(self.device).float()
@@ -189,6 +194,11 @@ class PPOAgent:
         }, path)
 
     def load(self, path: str) -> None:
-        ckpt = torch.load(path, map_location=self.device)
+        # map_location="cpu" + weights_only=False: PPO actor-critic is tiny
+        # (~1 M params) so the GPU peak isn't a concern here, but we keep
+        # the same convention as the main trainer so future PyTorch versions
+        # don't trip on the weights_only=True default.
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
         self.ac.load_state_dict(ckpt["ac_state_dict"])
+        self.ac.to(self.device)
         self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])

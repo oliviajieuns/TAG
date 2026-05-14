@@ -96,12 +96,18 @@ def tokenize_alpaca(
     string. Encoding prompt and response separately and concatenating is
     the Stanford Alpaca canonical approach and works for every tokenizer.
     """
-    pad_id = (
-        tokenizer.pad_token_id
-        if tokenizer.pad_token_id is not None
-        else 0
-    )
     eos_id = tokenizer.eos_token_id
+    # Robust pad-id resolution: tokenizer.pad_token_id may be None even though
+    # the loader set ``tokenizer.pad_token = tokenizer.eos_token`` upstream,
+    # because Dataset.map(num_proc>1) pickles the tokenizer to worker procs
+    # and on some HF versions the pad_token attribute is reset back to None
+    # post-pickle. Falling back to id 0 then poisons every padded position
+    # with whatever token id 0 maps to (Llama2 ``<unk>``, Qwen ``!``) — silent
+    # but real training-quality damage. Prefer eos_id whenever pad_token_id
+    # comes back None, only using 0 as a last resort if eos is also missing.
+    pad_id = tokenizer.pad_token_id
+    if pad_id is None:
+        pad_id = eos_id if eos_id is not None else 0
 
     instruction = example["instruction"]
     inp = example.get("input", "") or ""
