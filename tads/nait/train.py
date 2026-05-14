@@ -18,8 +18,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import Subset
-from transformers import get_cosine_schedule_with_warmup
-
+from tads.core.schedulers import get_cosine_schedule_with_warmup
 from tads.core.utils import load_config, set_seed, setup_logger
 from tads.data.alpaca import build_alpaca_dataset
 from tads.modeling.loader import load_model, load_tokenizer

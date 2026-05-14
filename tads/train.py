@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 import torch
 import torch.distributed as dist
 from torch.utils.data import Subset
-from transformers import get_cosine_schedule_with_warmup
+from tads.core.schedulers import get_cosine_schedule_with_warmup
 
 from tads.core.agent import PPOAgent
 from tads.core.trajectory_anchor import TrajectoryAnchor
