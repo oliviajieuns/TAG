@@ -56,6 +56,17 @@ from tads.pipelines.selection import save_selection, select_indices
 from tads.pipelines.sft import make_dataloader, sft_one_epoch
 
 
+def _atomic_json_dump(obj, path: Path) -> None:
+    """Atomically write JSON via tmp+fsync+rename so a crash mid-write can't
+    leave a half-written file that the next run silently misparses."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True, help="Path to YAML config.")
@@ -128,6 +139,14 @@ def main() -> None:
     set_seed(seed)
 
     output_dir = Path(cfg["output_root"]) / cfg["output_subdir"]
+    # Expose the per-experiment output_dir to downstream modules — notably
+    # pipelines.selection._broadcast_selection, which writes a temporary
+    # selection-share file. Without this, multiple parallel jobs (qwen +
+    # llama2 + mistral + deepseek launched concurrently via run_main_7b.sh)
+    # would all fall back to ``cfg["output_root"]`` and clobber each
+    # other's _selection_epoch{N}.json — silently mixing their selected
+    # indices across experiments.
+    cfg["output_dir"] = str(output_dir)
     log_dir = Path(cfg.get("log_dir", output_dir / "logs"))
     if is_main_process():
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -316,6 +335,33 @@ def main() -> None:
     # ---------- resume: restore optimizer/scheduler/agent/anchor/metrics ----------
     metrics_log = []
     if resume_ckpt is not None:
+        # bitsandbytes 8-bit optimizer state is bnb-version-coupled; mismatched
+        # restore silently leaves momentum at 0. Surface a precise warning so
+        # the user can pin the version instead of debugging "why is loss
+        # plateauing right after resume".
+        env_meta_path = resume_ckpt / "env_meta.json"
+        if env_meta_path.exists() and is_main_process():
+            try:
+                with open(env_meta_path) as _f:
+                    saved_meta = json.load(_f)
+                if saved_meta.get("use_8bit_optimizer"):
+                    saved_bnb = saved_meta.get("bitsandbytes")
+                    try:
+                        import bitsandbytes as _bnb_now  # noqa: WPS433
+                        live_bnb = _bnb_now.__version__
+                    except Exception:
+                        live_bnb = None
+                    if saved_bnb is not None and live_bnb != saved_bnb:
+                        logger.warning(
+                            "bitsandbytes version mismatch on resume: "
+                            "saved=%s, live=%s. AdamW8bit state may fail to "
+                            "deserialise (the catch below will fall back to "
+                            "fresh momentum). Pin %s to keep continuity.",
+                            saved_bnb, live_bnb, saved_bnb,
+                        )
+            except Exception as e:
+                logger.warning("Could not read env_meta.json (%s)", e)
+
         opt_path = resume_ckpt / "optimizer.pt"
         if opt_path.exists():
             try:
@@ -451,14 +497,31 @@ def main() -> None:
             # and LR schedule continuity.
             torch.save(optimizer.state_dict(), str(ckpt_path / "optimizer.pt"))
             torch.save(scheduler.state_dict(), str(ckpt_path / "scheduler.pt"))
+            # Record the env meta that downstream load_state_dict cares about
+            # — bitsandbytes 8-bit optimizer state has a version-coupled
+            # quantisation layout, and resuming under a different bnb minor
+            # would silently fail to restore momentum (try/except just logs a
+            # warning). Saving the version lets _maybe_warn_bnb_mismatch
+            # surface a precise reason on the resume side.
+            env_meta: Dict[str, Any] = {
+                "torch": torch.__version__,
+                "use_8bit_optimizer": bool(cfg.get("use_8bit_optimizer", False)),
+            }
+            try:
+                import bitsandbytes as _bnb  # noqa: WPS433 (lazy)
+                env_meta["bitsandbytes"] = _bnb.__version__
+            except Exception:
+                env_meta["bitsandbytes"] = None
+            _atomic_json_dump(env_meta, ckpt_path / "env_meta.json")
             if agent is not None:
                 agent.save(str(ckpt_path / "agent.pt"))
             if anchor is not None:
                 torch.save(anchor.state_dict(), str(ckpt_path / "trajectory_anchor.pt"))
-                with open(ckpt_path / "anchor_history.json", "w") as f:
-                    json.dump(anchor.get_history_summary(), f, indent=2)
-            with open(output_dir / "metrics.json", "w") as f:
-                json.dump(metrics_log, f, indent=2)
+                _atomic_json_dump(
+                    anchor.get_history_summary(),
+                    ckpt_path / "anchor_history.json",
+                )
+            _atomic_json_dump(metrics_log, output_dir / "metrics.json")
             # Sentinel: written ATOMICALLY at the very end so a crash mid-save
             # leaves an incomplete checkpoint without the marker, and
             # _find_latest_epoch_ckpt skips it on the next run. Without this,

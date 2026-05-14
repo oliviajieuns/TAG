@@ -121,6 +121,11 @@ class PPOAgent:
         old_log_probs: torch.Tensor,
         rewards: torch.Tensor,
     ) -> Tuple[float, float]:
+        # collect_episode put the actor-critic in eval(). The current trunk
+        # has no dropout / BN so eval-vs-train is a no-op today, but PPO
+        # gradient updates conceptually want train mode and any future
+        # dropout/BN added to ActorCritic would silently train under eval.
+        self.ac.train()
         states = states.to(self.device).float()
         actions = actions.to(self.device).float()
         old_log_probs = old_log_probs.to(self.device).float()

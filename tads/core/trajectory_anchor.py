@@ -153,9 +153,16 @@ class TrajectoryAnchor:
         """Re-extract the anchor at the start of epoch ``t``.
 
         Collects Δh per layer over a probe subset and PCAs each independently.
+
+        Probe seed is offset (+1) from the (seed + epoch*100) used by
+        ``_random_indices``. Without the offset both RNGs would draw the
+        same permutation, so for ratio≤probe_size/N the random-method
+        selection and the anchor probe would overlap perfectly — biasing
+        the alignment direction toward the very samples that will then
+        be SFT'd, an unintended coupling.
         """
         g = torch.Generator()
-        g.manual_seed(seed + epoch * 100)
+        g.manual_seed(seed + epoch * 100 + 1)
         n_total = len(dataset)
         n_use = min(self.max_samples_for_pca, n_total)
         perm = torch.randperm(n_total, generator=g).tolist()

@@ -48,6 +48,7 @@ def main() -> None:
     set_seed(seed)
 
     output_dir = Path(cfg["output_root"]) / cfg["output_subdir"] / f"nait_{args.tag.lower().replace('-', '_')}"
+    cfg["output_dir"] = str(output_dir)  # see tads.train comment re: parallel-job isolation
     output_dir.mkdir(parents=True, exist_ok=True)
     log_dir = Path(cfg.get("log_dir", output_dir / "logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
