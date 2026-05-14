@@ -46,10 +46,19 @@ def _broadcast_selection(selected) -> List[int]:
     rank = dist.get_rank()
     # Normalize source-rank input to a plain python list of ints
     if rank == SRC:
+        # === DIAG ===
+        _t = type(selected).__name__
+        _sh = getattr(selected, "shape", None)
+        _dev = getattr(selected, "device", None)
+        _repr = repr(selected)[:200] if not hasattr(selected, "shape") else f"shape={_sh} device={_dev}"
+        print(f"[bcast] rank=0 BEFORE-NORMALIZE: type={_t} {_repr}", flush=True)
+        # === END DIAG ===
         if hasattr(selected, "tolist"):
             selected = selected.tolist()
         elif not isinstance(selected, list):
             selected = list(selected)
+        # === DIAG 2: after normalization ===
+        print(f"[bcast] rank=0 AFTER-NORMALIZE: type={type(selected).__name__} len={len(selected) if hasattr(selected, \"__len__\") else \"NO-LEN\"} first5={selected[:5] if isinstance(selected, list) else \"NOT-LIST\"}", flush=True)
         length_val = len(selected)
         print(f"[bcast] rank=0 len(selected)={length_val} first5={selected[:5]}", flush=True)
     else:
