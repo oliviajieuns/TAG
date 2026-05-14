@@ -49,6 +49,25 @@ export BBH_DATA_DIR="${BBH_DATA_DIR:-/group-volume/IT-datasets/bbh}"
 # --- Runtime hygiene ---
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
+# --- Core dump policy ---
+# A single 7B-DDP rank that segfaults can drop a ~240 GB core file into
+# the current working directory (the dump contains the process's full
+# virtual address space — model weights + bnb 8-bit optimiser state +
+# gradient buffers + CUDA-mapped VRAM regions). On a 4-GPU launch that
+# is ~960 GB total, easily destroying the 50 GB user-volume. Disable
+# coredumps by default; users who want them for debugging should opt in
+# by exporting TADS_ENABLE_COREDUMPS=1 BEFORE sourcing this file and
+# also `cd $OUTPUT_ROOT/coredumps` (or any group-volume dir) before
+# launching, so the dump lands on the shared volume rather than user-volume.
+if [ "${TADS_ENABLE_COREDUMPS:-0}" = "1" ]; then
+    mkdir -p "${OUTPUT_ROOT}/coredumps" 2>/dev/null || true
+    ulimit -c unlimited 2>/dev/null || true
+    echo "[setup_env] coredumps ENABLED — make sure cwd is on group-volume" \
+         "(e.g. cd ${OUTPUT_ROOT}/coredumps) before launching training."
+else
+    ulimit -c 0 2>/dev/null || true
+fi
 # Silence HF tokenizer's per-call "Token indices sequence length is longer
 # than the specified maximum sequence length for this model" advisory.
 # Our code intentionally truncates to max_seq_len; the warning is noise.
