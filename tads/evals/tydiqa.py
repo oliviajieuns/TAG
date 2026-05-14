@@ -1,4 +1,9 @@
-"""TyDiQA evaluator (Exact-Match on English Gold-Passage dev split)."""
+"""TyDiQA evaluator (Exact-Match on English Gold-Passage dev split).
+
+Note on few-shot count: this evaluator is currently 0-shot. The NAIT paper
+(Appendix D) uses 5-shot gold-passage. To match paper Table 2 numbers,
+prepend 5 demonstration QA pairs to each `tydiqa_generation_prefix` call.
+"""
 from __future__ import annotations
 
 import json

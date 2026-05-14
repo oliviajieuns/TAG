@@ -32,6 +32,9 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         prompt_style: str = "alpaca_default",
         data_dir: Optional[str] = None,
         max_new_tokens: int = 256,
+        n_samples: int = 10,
+        temperature: float = 0.8,
+        top_p: float = 0.95,
         **kwargs,
     ) -> Dict[str, Any]:
         if data_dir is None:
@@ -51,6 +54,10 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             problems = problems[:limit]
         logger.info("HumanEval: %d problems | limit=%s", len(problems), limit)
 
+        # Paper §D: pass@10 with temperature=0.8, top_p=0.95.
+        # We draw n_samples completions per problem. When n_samples == 1 we
+        # silently fall back to greedy (do_sample=False) for cheap dry-runs.
+        use_sampling = n_samples > 1
         completions: Dict[str, list] = {}
         for i, problem in enumerate(problems):
             prefix = humaneval_generation_prefix(
@@ -59,17 +66,24 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             inputs = tokenizer(
                 prefix, return_tensors="pt", truncation=True, max_length=2048,
             ).to(device)
-            out = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                temperature=0.0,
-            )
-            completion = tokenizer.decode(out[0], skip_special_tokens=True)
-            completion = completion[len(prefix):].strip()
-            completions.setdefault(problem["task_id"], []).append(completion)
+            gen_kwargs = dict(max_new_tokens=max_new_tokens)
+            if use_sampling:
+                gen_kwargs.update(
+                    do_sample=True, temperature=temperature, top_p=top_p,
+                    num_return_sequences=n_samples,
+                )
+            else:
+                gen_kwargs.update(do_sample=False, temperature=0.0)
+            out = model.generate(**inputs, **gen_kwargs)
+            for j in range(out.shape[0]):
+                completion = tokenizer.decode(out[j], skip_special_tokens=True)
+                completion = completion[len(prefix):].strip()
+                completions.setdefault(problem["task_id"], []).append(completion)
             if (i + 1) % 20 == 0:
-                logger.info("  Progress: %d/%d", i + 1, len(problems))
+                logger.info(
+                    "  Progress: %d/%d (n_samples=%d)",
+                    i + 1, len(problems), n_samples,
+                )
 
         # Hand off to the official harness.
         with tempfile.NamedTemporaryFile(

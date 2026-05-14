@@ -1,10 +1,21 @@
-# NAIT baseline — uses scripts/nait/train_nait.py or `python -m tads.nait.train`.
-# Provides only the NAIT-specific knobs; model/data/optim come from base.yaml + experiment YAML.
+# NAIT baseline — uses `python -m tads.nait.train`.
+# Defaults below mirror the ICLR 2026 NAIT paper (Chen et al.):
+#   - selection_ratio: 0.1                 (paper Table 2 uses 10%)
+#   - layers: all 32 layers of Llama-2-7B  (paper Algorithm 1 sums over L)
+#   - n_seeds: keep full in-domain set (paper Table 7 uses 1.5k–49k)
+# For apples-to-apples comparison with our TADS 50% setup, override
+# selection_ratio: 0.5 in the experiment YAML.
 method: nait
-selection_ratio: 0.5
+selection_ratio: 0.1
 nait:
-  layers: [-1]
+  # All transformer layers of the base model. Paper Eq.5 sums across L.
+  # For Llama-2-7B (32 decoder layers): layers 0..31 inclusive.
+  layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+           16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
   batch_size: 2
-  n_seeds: 100   # seed JSON sub-sample size
-  # seed_path: /user-volume/data_agent/seeds/mix.json    # override via CLI
-  # tag: NAIT-Mix                                         # override via CLI
+  # No subsampling cap; if seed JSON is larger than this, the first
+  # `n_seeds` items (after deterministic shuffle) are used. Set to a
+  # large value or omit `--n_seeds` CLI flag to use all items.
+  n_seeds: 100000
+  # seed_path: seeds/mix.json     # override via CLI
+  # tag: NAIT-Mix                  # override via CLI
