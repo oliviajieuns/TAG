@@ -1,0 +1,9 @@
+defaults:
+  - configs/base.yaml
+  - configs/methods/random.yaml
+  - configs/models/deepseek-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/deepseek/random_50
+selection_ratio: 0.5
+train_epochs: 3

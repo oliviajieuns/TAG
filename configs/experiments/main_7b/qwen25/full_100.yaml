@@ -1,0 +1,8 @@
+defaults:
+  - configs/base.yaml
+  - configs/methods/full.yaml
+  - configs/models/qwen2.5-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/qwen25/full_100
+train_epochs: 3

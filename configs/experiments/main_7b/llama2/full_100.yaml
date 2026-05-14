@@ -1,0 +1,8 @@
+defaults:
+  - configs/base.yaml
+  - configs/methods/full.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/llama2/full_100
+train_epochs: 3
