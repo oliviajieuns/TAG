@@ -20,8 +20,10 @@ export MODEL_PATH_QWEN25_7B="${MODEL_PATH_QWEN25_7B:-/group-volume/nait-models/q
 export MODEL_PATH_MISTRAL_7B="${MODEL_PATH_MISTRAL_7B:-/group-volume/nait-models/Mistral-7B-v0.1}"
 export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-models/deepseek-llm-7b-base}"
 
-# --- IT training data (Alpaca-GPT4 local parquet) ---
-export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/train.parquet}"
+# --- IT training data (Alpaca-GPT4 local file) ---
+# File extension picks the loader automatically: .parquet / .json / .jsonl / .csv.
+# A glob is also accepted, e.g. "/group-volume/IT-datasets/alpaca_gpt4/data/*.json".
+export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/data/train.json}"
 
 # --- Output roots ---
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/minsoo3.kim/tads-checkpoints}"

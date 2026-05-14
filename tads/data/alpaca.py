@@ -73,15 +73,29 @@ def build_alpaca_dataset(
     dataset_name = dataset_name or None
 
     if data_files:
-        logger.info("Loading Alpaca from local file(s): %s", data_files)
-        raw = load_dataset("parquet", data_files=data_files, split="train")
+        # Auto-detect HF `load_dataset` builder by file extension. Accepts a
+        # single path or a glob (e.g. ".../data/*.json"); for globs we pick
+        # the format from the first matching extension.
+        sample = str(data_files).split(",")[0].split()[0].lower()
+        if sample.endswith((".json", ".jsonl")):
+            fmt = "json"
+        elif sample.endswith(".csv"):
+            fmt = "csv"
+        elif sample.endswith((".txt", ".text")):
+            fmt = "text"
+        else:
+            fmt = "parquet"
+        logger.info(
+            "Loading Alpaca from local file(s): %s | format=%s", data_files, fmt,
+        )
+        raw = load_dataset(fmt, data_files=data_files, split="train")
     elif dataset_name:
         logger.info("Loading Alpaca from HF hub: %s", dataset_name)
         raw = load_dataset(dataset_name, cache_dir=cache_dir)["train"]
     else:
         raise ValueError(
             "Neither `data_files` nor `dataset_name` is set. "
-            "Set ALPACA_DATA_FILES env var (local parquet) "
+            "Set ALPACA_DATA_FILES env var (local parquet / json / jsonl / csv) "
             "or ALPACA_DATASET_NAME (HF hub) — or set them in the YAML config."
         )
 
