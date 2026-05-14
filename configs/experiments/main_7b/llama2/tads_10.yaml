@@ -1,0 +1,15 @@
+# Llama-2-7B + Alpaca-GPT4 + TADS (λ=1, anchor on) at 10% selection
+defaults:
+  - configs/base.yaml
+  - configs/methods/tads.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/llama2/tads_10
+selection_ratio: 0.1
+train_epochs: 3
+
+anchor:
+  layer_idx: -1
+  max_samples_for_pca: 1024
+  pca_batch_size: 16

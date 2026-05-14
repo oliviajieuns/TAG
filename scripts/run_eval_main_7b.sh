@@ -19,7 +19,7 @@ if [ -z "${OUTPUT_ROOT:-}" ] || [ -z "${EVAL_RESULTS_ROOT:-}" ]; then
 fi
 
 MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
-METHODS=${METHODS:-"tads_50 data_agent_50 random_50 random_10 full_100"}
+METHODS=${METHODS:-"full_100 random_10 data_agent_10 tads_10"}
 BENCHMARKS=${BENCHMARKS:-"mmlu,gsm8k,humaneval,tydiqa"}
 LIMIT=${LIMIT:-}          # set e.g. LIMIT=200 for smoke runs
 CUDA=${CUDA_VISIBLE_DEVICES:-0}

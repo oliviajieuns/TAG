@@ -1,0 +1,10 @@
+# Qwen2.5-7B + Alpaca-GPT4 + Data Agent (= TADS λ=0, anchor off) at 10% selection
+defaults:
+  - configs/base.yaml
+  - configs/methods/data_agent.yaml
+  - configs/models/qwen2.5-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/qwen25/data_agent_10
+selection_ratio: 0.1
+train_epochs: 3
