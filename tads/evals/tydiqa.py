@@ -1,8 +1,10 @@
-"""TyDiQA evaluator (Exact-Match on English Gold-Passage dev split).
+"""TyDiQA evaluator (Exact-Match on Gold-Passage dev split, 5-shot).
 
-Note on few-shot count: this evaluator is currently 0-shot. The NAIT paper
-(Appendix D) uses 5-shot gold-passage. To match paper Table 2 numbers,
-prepend 5 demonstration QA pairs to each `tydiqa_generation_prefix` call.
+Matches the NAIT paper (Appendix D) setup: paper-faithful 5-shot
+gold-passage with demonstrations sampled from the **same language** as
+the test example. Demonstrations are loaded from
+``tydiqa-goldp-v1.1-train.json``; if absent, the evaluator falls back
+to 0-shot and logs a clear warning.
 """
 from __future__ import annotations
 
@@ -10,12 +12,15 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import tydiqa_generation_prefix
 
 logger = logging.getLogger(__name__)
+
+
+_LANG_PAT = re.compile(r"^([a-z]+)--")
 
 
 def _normalize(s: str) -> str:
@@ -28,8 +33,17 @@ def _exact_match(pred: str, gold_list: List[str]) -> bool:
     return any(pn == _normalize(g) for g in gold_list)
 
 
-def _parse_dev_file(dev_file: str):
-    with open(dev_file) as f:
+def _language_of(qa_id: Optional[str]) -> str:
+    """TyDiQA gold-passage QA ids look like ``english--<hash>-<i>-<j>``."""
+    if not qa_id:
+        return "unknown"
+    m = _LANG_PAT.match(qa_id)
+    return m.group(1) if m else "unknown"
+
+
+def _parse_squad_file(path: str) -> List[Dict[str, Any]]:
+    """Parse a SQuAD-style TyDiQA file (train or dev share the schema)."""
+    with open(path) as f:
         raw = json.load(f)
     examples = []
     for article in raw.get("data", []):
@@ -50,8 +64,33 @@ def _parse_dev_file(dev_file: str):
                     "question": qa.get("question"),
                     "context": para.get("context", ""),
                     "answers": {"text": texts},
+                    "language": _language_of(qa.get("id")),
                 })
     return examples
+
+
+def _load_demos_by_language(
+    train_path: str,
+    n_fewshot: int,
+) -> Dict[str, List[Tuple[str, str, str]]]:
+    """Return ``{language: [(context, question, answer), ...]}`` (first
+    ``n_fewshot`` train examples per language with non-empty gold)."""
+    if not os.path.exists(train_path):
+        return {}
+    train = _parse_squad_file(train_path)
+    by_lang: Dict[str, List[Tuple[str, str, str]]] = {}
+    for ex in train:
+        gold = (ex["answers"].get("text") or [""])[0]
+        if not gold.strip():
+            continue
+        bucket = by_lang.setdefault(ex["language"], [])
+        if len(bucket) < n_fewshot:
+            bucket.append((ex["context"], ex["question"], gold))
+        # All buckets full → done.
+        if all(len(v) >= n_fewshot for v in by_lang.values()) and len(by_lang) >= 9:
+            # 9 = number of TyDiQA gold-passage languages; loose check.
+            pass  # don't break — we may not have seen all languages yet.
+    return by_lang
 
 
 @register("tydiqa")
@@ -68,6 +107,7 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
         prompt_style: str = "alpaca_default",
         data_dir: Optional[str] = None,
         max_new_tokens: int = 100,
+        n_fewshot: int = 5,
         **kwargs,
     ) -> Dict[str, Any]:
         if data_dir is None:
@@ -76,11 +116,15 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 "containing tydiqa-goldp-v1.1-dev.json).",
             )
 
-        dev_file = (
-            data_dir
-            if data_dir.endswith(".json")
-            else os.path.join(data_dir, "tydiqa-goldp-v1.1-dev.json")
-        )
+        # Resolve dev/train paths. Accept either a directory or a direct .json path.
+        if data_dir.endswith(".json"):
+            dev_file = data_dir
+            base_dir = os.path.dirname(data_dir) or "."
+        else:
+            dev_file = os.path.join(data_dir, "tydiqa-goldp-v1.1-dev.json")
+            base_dir = data_dir
+        train_file = os.path.join(base_dir, "tydiqa-goldp-v1.1-train.json")
+
         if not os.path.exists(dev_file):
             summary = {"accuracy_em": 0.0, "benchmark": "tydiqa", "error": "data not found"}
             with open(output_file, "w") as f:
@@ -88,10 +132,27 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
             logger.error("TyDiQA dev not found at %s", dev_file)
             return summary
 
-        examples = _parse_dev_file(dev_file)
+        examples = _parse_squad_file(dev_file)
         if limit is not None:
             examples = examples[:limit]
-        logger.info("TyDiQA: %d examples | limit=%s", len(examples), limit)
+
+        # Load same-language demonstrations from train.json.
+        demos_by_lang = _load_demos_by_language(train_file, n_fewshot) if n_fewshot > 0 else {}
+        if n_fewshot > 0 and not demos_by_lang:
+            logger.warning(
+                "TyDiQA: %s not found; falling back to 0-shot. Download from "
+                "https://storage.googleapis.com/tydiqa/v1.1/tydiqa-goldp-v1.1-train.json "
+                "to enable paper-faithful 5-shot evaluation.",
+                train_file,
+            )
+            effective_fewshot = 0
+        else:
+            effective_fewshot = n_fewshot
+            logger.info(
+                "TyDiQA: %d examples | limit=%s | n_fewshot=%d | langs_with_demos=%s",
+                len(examples), limit, effective_fewshot,
+                {lang: len(d) for lang, d in demos_by_lang.items()},
+            )
 
         # Map alpaca_default to llama_user_assistant for the generation prefix
         # (paper convention; the prefix only affects the generation framing).
@@ -103,8 +164,11 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
         results = []
         for i, ex in enumerate(examples):
             gold = ex["answers"].get("text") or ["No answer"]
+            demos = demos_by_lang.get(ex.get("language", "unknown")) if effective_fewshot else None
             prompt = tydiqa_generation_prefix(
-                ex.get("context", ""), ex["question"], prompt_style=prefix_style,
+                ex.get("context", ""), ex["question"],
+                prompt_style=prefix_style,
+                demos=demos,
             )
             inputs = tokenizer(
                 prompt, return_tensors="pt", truncation=True, max_length=2048,
@@ -122,6 +186,7 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
             correct += int(ok)
             results.append({
                 "question": ex["question"],
+                "language": ex.get("language", "unknown"),
                 "prediction": pred,
                 "correct": ok,
             })
@@ -132,14 +197,29 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 )
 
         accuracy = correct / len(examples) if examples else 0.0
+        # Per-language accuracy breakdown (paper-style).
+        per_lang: Dict[str, Dict[str, int]] = {}
+        for r in results:
+            bucket = per_lang.setdefault(r["language"], {"correct": 0, "total": 0})
+            bucket["total"] += 1
+            bucket["correct"] += int(r["correct"])
+        per_lang_acc = {
+            lang: {**b, "accuracy": b["correct"] / b["total"] if b["total"] else 0.0}
+            for lang, b in per_lang.items()
+        }
         summary = {
             "accuracy_em": accuracy,
             "correct": correct,
             "total": len(examples),
+            "n_fewshot": effective_fewshot,
             "benchmark": "tydiqa",
+            "per_language": per_lang_acc,
             "per_question": results,
         }
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)
-        logger.info("TyDiQA EM: %.4f (%d/%d)", accuracy, correct, len(examples))
+        logger.info(
+            "TyDiQA EM: %.4f (%d/%d) | n_fewshot=%d",
+            accuracy, correct, len(examples), effective_fewshot,
+        )
         return summary
