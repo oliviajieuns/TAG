@@ -74,7 +74,7 @@ _tads_warn MODEL_PATH_LLAMA2_7B   "$MODEL_PATH_LLAMA2_7B"   "Llama-2-7B base che
 _tads_warn MODEL_PATH_QWEN25_7B   "$MODEL_PATH_QWEN25_7B"   "Qwen2.5-7B base checkpoint dir"
 _tads_warn MODEL_PATH_MISTRAL_7B  "$MODEL_PATH_MISTRAL_7B"  "Mistral-7B-v0.1 base checkpoint dir"
 _tads_warn MODEL_PATH_DEEPSEEK_7B "$MODEL_PATH_DEEPSEEK_7B" "DeepSeek-LLM-7B base checkpoint dir"
-_tads_warn ALPACA_DATA_FILES      "$ALPACA_DATA_FILES"      "Alpaca-GPT4 training parquet"
+_tads_warn ALPACA_DATA_FILES      "$ALPACA_DATA_FILES"      "Alpaca-GPT4 training file (parquet / json / jsonl / csv)"
 
 # Required for evaluation (only matter if you actually run that benchmark)
 _tads_warn MMLU_DATA_DIR          "$MMLU_DATA_DIR"          "MMLU 'all' parquet directory"

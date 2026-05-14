@@ -16,11 +16,13 @@ tydiqa_data_dir: ${oc.env:TYDIQA_DATA_DIR,/group-volume/IT-datasets/tydiqa}
 
 # --- Dataset (Alpaca-GPT4 by default; matches NAIT ICLR 2026, Peng et al. 2023) ---
 # Precedence:
-#   1. If ALPACA_DATA_FILES env var is set → load that local parquet/json.
+#   1. If ALPACA_DATA_FILES env var is set → load that local file.
+#      Format is auto-detected from extension: .parquet / .json / .jsonl / .csv
+#      (a glob like ".../data/*.json" is also accepted).
 #   2. Else → fall back to `dataset_name` from HF hub.
 # Example (local file):
-#   export ALPACA_DATA_FILES=/group-volume/IT-datasets/alpaca_gpt4/train.parquet
-data_files: ${oc.env:ALPACA_DATA_FILES,/group-volume/IT-datasets/alpaca_gpt4/train.parquet}
+#   export ALPACA_DATA_FILES=/group-volume/IT-datasets/alpaca_gpt4/data/train.json
+data_files: ${oc.env:ALPACA_DATA_FILES,/group-volume/IT-datasets/alpaca_gpt4/data/train.json}
 dataset_name: ${oc.env:ALPACA_DATASET_NAME,liangxin/Alpaca_GPT4}
 prompt_style: alpaca_default
 max_seq_len: 512
