@@ -11,11 +11,13 @@ inside the YAML config.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -522,25 +524,68 @@ def main() -> None:
             "elapsed_sec": elapsed,
             **extras,
         }
+        # ---------- per-epoch checkpoint save (rank 0 only) ----------
+        # Bug history: training with tads/data_agent under DDP was crashing
+        # immediately after epoch 1 with no checkpoint on disk. Two failure
+        # modes are mitigated below:
+        #   (a) rank 0 OOMs / errors during a single save step (e.g.
+        #       torch.save(optimizer.state_dict()) for bnb 8-bit) and the
+        #       whole process exits, leaving workers stuck on the post-save
+        #       barrier until NCCL timeout — no partial state is recorded.
+        #   (b) memory accumulated during collect_episode + SFT pushes rank 0
+        #       to the edge; the additional CPU buffer that save_pretrained
+        #       allocates tips it over.
+        # Mitigations: free CPU+GPU memory before the save sequence, wrap
+        # every save step in its own try/except so one failure doesn't lose
+        # everything, surface tracebacks so the user can diagnose, and ALWAYS
+        # reach the post-save barrier so workers don't hang past the
+        # collective timeout.
         if is_main_process():
             metrics_log.append(metrics)
             logger.info("Epoch %d done | %s", epoch, metrics)
 
+            # Drop transient tensors before allocating the save buffers.
+            try:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                logger.info("Pre-save memory cleanup | %s", cuda_mem_str())
+            except Exception as e:  # never block save on a cleanup hiccup
+                logger.warning("Pre-save cleanup failed (continuing): %s", e)
+
             ckpt_path = output_dir / f"epoch_{epoch}"
             ckpt_path.mkdir(parents=True, exist_ok=True)
+            save_errors: list = []
+
+            def _safe(step_name: str, fn) -> bool:
+                """Run a save step; on exception record it and keep going."""
+                try:
+                    t = time.time()
+                    fn()
+                    logger.info("Saved %s | %.1fs", step_name, time.time() - t)
+                    return True
+                except Exception as exc:
+                    tb = traceback.format_exc()
+                    logger.error(
+                        "Save step '%s' FAILED: %s\n%s", step_name, exc, tb,
+                    )
+                    save_errors.append((step_name, repr(exc)))
+                    return False
+
             m = model.module if hasattr(model, "module") else model
-            m.save_pretrained(str(ckpt_path))
-            tokenizer.save_pretrained(str(ckpt_path))
-            # Save optimizer + scheduler so a time-limited resume keeps momentum
-            # and LR schedule continuity.
-            torch.save(optimizer.state_dict(), str(ckpt_path / "optimizer.pt"))
-            torch.save(scheduler.state_dict(), str(ckpt_path / "scheduler.pt"))
-            # Record the env meta that downstream load_state_dict cares about
-            # — bitsandbytes 8-bit optimizer state has a version-coupled
-            # quantisation layout, and resuming under a different bnb minor
-            # would silently fail to restore momentum (try/except just logs a
-            # warning). Saving the version lets _maybe_warn_bnb_mismatch
-            # surface a precise reason on the resume side.
+            ok_model = _safe("model.safetensors",
+                             lambda: m.save_pretrained(str(ckpt_path)))
+            _safe("tokenizer",
+                  lambda: tokenizer.save_pretrained(str(ckpt_path)))
+            ok_opt = _safe("optimizer.pt",
+                           lambda: torch.save(optimizer.state_dict(),
+                                              str(ckpt_path / "optimizer.pt")))
+            _safe("scheduler.pt",
+                  lambda: torch.save(scheduler.state_dict(),
+                                     str(ckpt_path / "scheduler.pt")))
+
+            # env_meta — bnb version etc.
             env_meta: Dict[str, Any] = {
                 "torch": torch.__version__,
                 "use_8bit_optimizer": bool(cfg.get("use_8bit_optimizer", False)),
@@ -550,29 +595,60 @@ def main() -> None:
                 env_meta["bitsandbytes"] = _bnb.__version__
             except Exception:
                 env_meta["bitsandbytes"] = None
-            _atomic_json_dump(env_meta, ckpt_path / "env_meta.json")
+            _safe("env_meta.json",
+                  lambda: _atomic_json_dump(env_meta, ckpt_path / "env_meta.json"))
+
             if agent is not None:
-                agent.save(str(ckpt_path / "agent.pt"))
+                _safe("agent.pt",
+                      lambda: agent.save(str(ckpt_path / "agent.pt")))
             if anchor is not None:
-                torch.save(anchor.state_dict(), str(ckpt_path / "trajectory_anchor.pt"))
-                _atomic_json_dump(
-                    anchor.get_history_summary(),
-                    ckpt_path / "anchor_history.json",
+                _safe("trajectory_anchor.pt",
+                      lambda: torch.save(anchor.state_dict(),
+                                         str(ckpt_path / "trajectory_anchor.pt")))
+                _safe("anchor_history.json",
+                      lambda: _atomic_json_dump(
+                          anchor.get_history_summary(),
+                          ckpt_path / "anchor_history.json"))
+            _safe("metrics.json",
+                  lambda: _atomic_json_dump(metrics_log,
+                                            output_dir / "metrics.json"))
+
+            # Sentinel: ONLY written when the two state files that auto-resume
+            # depends on (model weights + optimizer) both succeeded. A failed
+            # auxiliary save (anchor history etc.) is non-fatal — log it,
+            # carry on. A failed core save → no sentinel → resume skips this
+            # epoch and re-trains it next run.
+            if ok_model and ok_opt:
+                sentinel = ckpt_path / "_complete"
+                sentinel_tmp = ckpt_path / "_complete.tmp"
+                try:
+                    with open(sentinel_tmp, "w") as f:
+                        f.write(str(epoch))
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(sentinel_tmp, sentinel)
+                    logger.info("Checkpoint saved + sealed: %s", ckpt_path)
+                except Exception as exc:
+                    logger.error("Sentinel write FAILED: %s", exc)
+                    save_errors.append(("_complete", repr(exc)))
+            else:
+                logger.error(
+                    "Core save failed (model_ok=%s, optim_ok=%s) — sentinel "
+                    "not written; epoch %d will be redone on resume.",
+                    ok_model, ok_opt, epoch,
                 )
-            _atomic_json_dump(metrics_log, output_dir / "metrics.json")
-            # Sentinel: written ATOMICALLY at the very end so a crash mid-save
-            # leaves an incomplete checkpoint without the marker, and
-            # _find_latest_epoch_ckpt skips it on the next run. Without this,
-            # auto-resume could load a partial optimizer.pt and crash with the
-            # 1EB OOM signature on the next forward (corrupt tensor metadata).
-            sentinel = ckpt_path / "_complete"
-            sentinel_tmp = ckpt_path / "_complete.tmp"
-            with open(sentinel_tmp, "w") as f:
-                f.write(str(epoch))
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(sentinel_tmp, sentinel)
-            logger.info("Checkpoint saved + sealed: %s", ckpt_path)
+
+            if save_errors:
+                # Drop a sidecar so the diagnostic survives the next epoch.
+                err_path = ckpt_path / "_save_errors.json"
+                try:
+                    _atomic_json_dump(
+                        {"epoch": epoch, "errors": save_errors},
+                        err_path,
+                    )
+                except Exception:
+                    pass
+
             # Optional: keep only last K checkpoints to avoid disk bloat.
             _keep = int(cfg.get("keep_last_n_checkpoints", 0))
             if _keep > 0:
@@ -585,6 +661,9 @@ def main() -> None:
                     _shutil.rmtree(old, ignore_errors=True)
                     logger.info("Removed old checkpoint: %s", old)
 
+        # Workers MUST hit the barrier even if rank 0 raised inside the save
+        # block — otherwise NCCL stalls until its timeout and rank 0's exit
+        # code is masked by a generic collective failure on every worker.
         if use_ddp:
             dist.barrier()
 

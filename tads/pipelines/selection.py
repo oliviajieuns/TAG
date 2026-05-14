@@ -1,13 +1,33 @@
 """Per-epoch sample selection dispatch.
 
 Wraps the four selection methods behind a single function. For data_agent
-and tads the selection is performed on rank-0 only under DDP, and the
-chosen indices are shared with other ranks via a small JSON file.
+and tads the heavy collect_episode runs on rank 0 only; other ranks share
+the resulting indices through a filesystem sentinel + poll, NOT through
+an NCCL barrier — that was the deadlock that crashed runs after epoch 1.
+
+Why polling, not dist.barrier:
+    Rank 0 spends 30+ minutes inside collect_episode (52K samples × 32
+    decoder layers × chunked rewards). While that runs, the other DDP
+    ranks would be stuck inside dist.barrier() inside _broadcast_selection,
+    and any of them hitting the NCCL collective watchdog (120 min default
+    now, less previously) tears down the communicator. The next forward
+    pass then fails on every rank, and rank 0 — which never reached the
+    barrier — exits before saving any checkpoint.
+
+    The fix is to remove the NCCL barriers from this path entirely. Rank 0
+    writes the selection atomically (tmp + fsync + rename), then writes
+    a separate `.ready` sentinel; workers poll on disk for the sentinel
+    and read once it appears. The only collective in this module is a
+    single barrier at the very end, after everyone has the data — so it
+    always completes immediately.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,6 +42,13 @@ from ..core.utils import is_main_process, local_rank, rank, world_size
 logger = logging.getLogger(__name__)
 
 
+# Workers poll this often while waiting for rank-0's collect_episode.
+_POLL_INTERVAL_SEC = 2.0
+# Hard ceiling on how long workers will wait. Set generously — episodes
+# can legitimately take an hour at the 7B scale.
+_POLL_TIMEOUT_SEC = 6 * 60 * 60  # 6 hours
+
+
 def _random_indices(n_total, ratio, seed, epoch):
     g = torch.Generator()
     g.manual_seed(seed + epoch * 100)
@@ -31,19 +58,19 @@ def _random_indices(n_total, ratio, seed, epoch):
 
 
 def _broadcast_selection(selected, *, epoch=0, output_dir=None):
-    """Share selected indices from rank 0 to all ranks via filesystem.
+    """File-poll selection share — no inter-write/read NCCL barrier.
 
-    Robust replacement for the old dist.broadcast version: a barrier guarantees
-    write-before-read, missing file raises a clear error, and there are no
-    NCCL ordering / async-stream / process-group conflicts.
+    Every rank takes the same code path:
+      - rank 0 atomically writes the indices, then atomically touches a
+        `.ready` sentinel.
+      - all other ranks poll for the sentinel on disk and read once it
+        exists. They never call a collective while rank 0 is busy.
+    A single dist.barrier() at the very end keeps the SFT phase in step
+    even if some worker reads a few milliseconds before rank 0 exits its
+    write — and it always completes immediately because everyone has
+    already converged here.
     """
-    import os as _os
-    import tempfile as _tempfile
-    from pathlib import Path as _Path
-
-    _r = dist.get_rank() if dist.is_initialized() else 0
-    print("[sel-share] rank=" + str(_r) + " pid=" + str(_os.getpid())
-          + " type=" + type(selected).__name__, flush=True)
+    r = dist.get_rank() if dist.is_initialized() else 0
 
     if not dist.is_initialized():
         if hasattr(selected, "tolist"):
@@ -51,50 +78,101 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None):
         return list(selected) if not isinstance(selected, list) else selected
 
     SRC = 0
-    base = _Path(output_dir) if output_dir is not None else _Path(_tempfile.gettempdir())
+    base = Path(output_dir) if output_dir is not None else Path(tempfile.gettempdir())
     base.mkdir(parents=True, exist_ok=True)
-    sel_path = base / ("_selection_epoch" + str(epoch) + ".json")
+    sel_path = base / f"_selection_epoch{epoch}.json"
+    ready_path = base / f"_selection_epoch{epoch}.ready"
+    ready_tmp = base / f"_selection_epoch{epoch}.ready.tmp"
 
-    if _r == SRC:
+    if r == SRC:
+        # Clean up any stale sentinel from a previous run before writing.
+        for stale in (ready_path, ready_tmp):
+            try:
+                stale.unlink()
+            except FileNotFoundError:
+                pass
+
         if hasattr(selected, "tolist"):
             selected = selected.tolist()
         elif not isinstance(selected, list):
             selected = list(selected)
         selected = [int(x) for x in selected]
-        print("[sel-share] rank=0 NORMALIZED type=list len=" + str(len(selected))
-              + " first5=" + str(selected[:5]), flush=True)
+        logger.info(
+            "[sel-share] rank=0 normalized selection | len=%d | first5=%s",
+            len(selected), selected[:5],
+        )
+
+        # 1) atomic write of the selection itself.
         tmp_path = sel_path.with_suffix(".json.tmp")
         with open(tmp_path, "w") as f:
             json.dump(selected, f)
             f.flush()
-            _os.fsync(f.fileno())
-        _os.replace(tmp_path, sel_path)
-        print("[sel-share] rank=0 WROTE " + str(sel_path)
-              + " (" + str(len(selected)) + " ids)", flush=True)
+            os.fsync(f.fileno())
+        os.replace(tmp_path, sel_path)
 
+        # 2) atomic write of the `.ready` sentinel — workers only start
+        # reading once this exists, so we never race a half-written
+        # selection file.
+        with open(ready_tmp, "w") as f:
+            f.write(str(epoch))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(ready_tmp, ready_path)
+
+        logger.info(
+            "[sel-share] rank=0 WROTE %s (%d ids) + ready sentinel",
+            sel_path, len(selected),
+        )
+        result = selected
+    else:
+        # Workers poll on disk. No NCCL collective during the wait, so
+        # rank 0's long collect_episode can't trigger a collective watchdog.
+        t_start = time.time()
+        last_log = t_start
+        while not ready_path.exists():
+            now = time.time()
+            if now - t_start > _POLL_TIMEOUT_SEC:
+                raise RuntimeError(
+                    f"[rank {r}] timed out after "
+                    f"{int(now - t_start)}s waiting for "
+                    f"{ready_path}. Rank 0 likely crashed before writing.",
+                )
+            if now - last_log > 60.0:
+                logger.info(
+                    "[sel-share] rank=%d polling for selection (%.0fs elapsed)",
+                    r, now - t_start,
+                )
+                last_log = now
+            time.sleep(_POLL_INTERVAL_SEC)
+
+        if not sel_path.exists():
+            raise RuntimeError(
+                f"[rank {r}] ready sentinel present but selection file "
+                f"{sel_path} missing.",
+            )
+        with open(sel_path, "r") as f:
+            result = json.load(f)
+        if not isinstance(result, list):
+            raise RuntimeError(
+                f"[rank {r}] selection file has wrong shape: "
+                f"type={type(result).__name__}",
+            )
+        logger.info(
+            "[sel-share] rank=%d READ %s len=%d", r, sel_path, len(result),
+        )
+
+    # One collective at the end so the SFT phase is aligned. By the time
+    # any rank reaches this line it already holds the indices, so the
+    # barrier is fast — no rank waits on rank 0's long episode here.
     dist.barrier()
 
-    if not sel_path.exists():
-        raise RuntimeError(
-            "[rank " + str(_r) + "] selection file missing after barrier: "
-            + str(sel_path) + ". Rank 0 likely crashed before writing."
-        )
-    with open(sel_path, "r") as f:
-        result = json.load(f)
-    if not isinstance(result, list):
-        raise RuntimeError(
-            "[rank " + str(_r) + "] selection file has wrong shape: type="
-            + type(result).__name__
-        )
-    print("[sel-share] rank=" + str(_r) + " READ " + str(sel_path)
-          + " len=" + str(len(result)), flush=True)
-
-    dist.barrier()
-    if _r == SRC:
-        try:
-            sel_path.unlink()
-        except FileNotFoundError:
-            pass
+    if r == SRC:
+        # Best-effort cleanup; missing files are fine.
+        for stale in (sel_path, ready_path):
+            try:
+                stale.unlink()
+            except FileNotFoundError:
+                pass
 
     return result
 
