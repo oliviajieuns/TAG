@@ -1,4 +1,4 @@
-﻿"""Per-epoch sample selection dispatch.
+"""Per-epoch sample selection dispatch.
 
 Wraps the four selection methods behind a single function. For ``data_agent``
 and ``tads`` the selection is performed on rank-0 only under DDP, and the
@@ -33,6 +33,9 @@ def _random_indices(n_total: int, ratio: float, seed: int, epoch: int) -> List[i
 
 def _broadcast_selection(selected) -> List[int]:
     """Broadcast selected indices from GLOBAL rank 0 to all ranks (defensive)."""
+    import os as _os
+    _r_enter = dist.get_rank() if dist.is_initialized() else 0
+    print(f"[bcast-enter] rank={_r_enter} pid={_os.getpid()} type={type(selected).__name__}", flush=True)
     if not dist.is_initialized():
         if hasattr(selected, "tolist"):
             return selected.tolist()
@@ -119,57 +122,71 @@ def select_indices(
 
     # --- data_agent or tads: episode collection (rank-0 only under DDP) ---
     if is_main_process():
-        if method == "tads" and anchor is not None:
-            logger.info("Updating trajectory anchor ...")
-            anchor_stats = anchor.update(
-                model=model, dataset=dataset, seed=seed, epoch=epoch,
+        print(f"[trace] rank=0 ENTER main branch | method={method} | anchor={'set' if anchor is not None else 'None'}", flush=True)
+        import traceback as _tb
+        try:
+            if method == "tads" and anchor is not None:
+                logger.info("Updating trajectory anchor ...")
+                print(f"[trace] rank=0 BEFORE anchor.update", flush=True)
+                anchor_stats = anchor.update(
+                    model=model, dataset=dataset, seed=seed, epoch=epoch,
+                )
+                print(f"[trace] rank=0 AFTER anchor.update | stats_keys={list(anchor_stats.keys()) if anchor_stats else None}", flush=True)
+                extras["anchor_stats"] = anchor_stats
+
+            tads_cfg = cfg.get("tads", {}) or {}
+            exp_tag = f"{cfg.get('model_key','?')}/alpaca/{method}"
+
+            print(f"[trace] rank=0 BEFORE collect_episode", flush=True)
+            episode = collect_episode(
+                model=model,
+                agent=agent,
+                dataset=dataset,
+                selection_ratio=ratio,
+                trajectory_anchor=anchor if method == "tads" else None,
+                lam=float(tads_cfg.get("lam", 0.0)),
+                use_anchor=bool(tads_cfg.get("use_anchor", False)) and method == "tads",
+                batch_size=int(cfg.get("episode_batch_size", 1)),
+                device=str(device),
+                seed=seed,
+                epoch=epoch,
+                exp_tag=exp_tag,
             )
-            extras["anchor_stats"] = anchor_stats
+            print(f"[trace] rank=0 AFTER collect_episode | episode_keys={list(episode.keys())}", flush=True)
+            selected = episode["selected_indices"]
+            print(f"[trace] rank=0 selected={type(selected).__name__} len={len(selected) if hasattr(selected,'__len__') else '?'}", flush=True)
 
-        tads_cfg = cfg.get("tads", {}) or {}
-        exp_tag = f"{cfg.get('model_key','?')}/alpaca/{method}"
+            extras.update({
+                "r_loss_mean": episode["r_loss_mean"],
+                "r_entropy_mean": episode["r_entropy_mean"],
+                "r_weight": episode["r_weight"],
+                "rdiff_mean": episode["rdiff_mean"],
+                "rconf_mean": episode["rconf_mean"],
+                "lam": episode["lam"],
+                "use_anchor": episode["use_anchor"],
+                "align_mean": episode["align_mean"],
+                "align_std": episode["align_std"],
+            })
 
-        episode = collect_episode(
-            model=model,
-            agent=agent,
-            dataset=dataset,
-            selection_ratio=ratio,
-            trajectory_anchor=anchor if method == "tads" else None,
-            lam=float(tads_cfg.get("lam", 0.0)),
-            use_anchor=bool(tads_cfg.get("use_anchor", False)) and method == "tads",
-            batch_size=int(cfg.get("episode_batch_size", 1)),
-            device=str(device),
-            seed=seed,
-            epoch=epoch,
-            exp_tag=exp_tag,
-        )
-        selected = episode["selected_indices"]
-
-        extras.update({
-            "r_loss_mean": episode["r_loss_mean"],
-            "r_entropy_mean": episode["r_entropy_mean"],
-            "r_weight": episode["r_weight"],
-            "rdiff_mean": episode["rdiff_mean"],
-            "rconf_mean": episode["rconf_mean"],
-            "lam": episode["lam"],
-            "use_anchor": episode["use_anchor"],
-            "align_mean": episode["align_mean"],
-            "align_std": episode["align_std"],
-        })
-
-        # PPO update (rank-0 only).
-        if agent is not None:
-            actor_loss, critic_loss = agent.update(
-                states=episode["states"],
-                actions=episode["actions"],
-                old_log_probs=episode["log_probs"],
-                rewards=episode["rewards"],
-            )
-            extras.update({"actor_loss": actor_loss, "critic_loss": critic_loss})
-            logger.info(
-                "PPO update | actor_loss=%.4f | critic_loss=%.4f",
-                actor_loss, critic_loss,
-            )
+            # PPO update (rank-0 only).
+            if agent is not None:
+                actor_loss, critic_loss = agent.update(
+                    states=episode["states"],
+                    actions=episode["actions"],
+                    old_log_probs=episode["log_probs"],
+                    rewards=episode["rewards"],
+                )
+                extras.update({"actor_loss": actor_loss, "critic_loss": critic_loss})
+                logger.info(
+                    "PPO update | actor_loss=%.4f | critic_loss=%.4f",
+                    actor_loss, critic_loss,
+                )
+        except Exception as _e:
+            print(f"[trace] rank=0 EXCEPTION in main branch: {type(_e).__name__}: {_e}", flush=True)
+            _tb.print_exc()
+            import sys as _sys
+            _sys.stdout.flush(); _sys.stderr.flush()
+            raise
     else:
         selected = []  # placeholder, will be broadcast
 
