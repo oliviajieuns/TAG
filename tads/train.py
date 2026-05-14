@@ -89,9 +89,21 @@ def _apply_overrides(cfg: Dict[str, Any], overrides) -> None:
 
 
 def _setup_ddp() -> bool:
-    """Initialise torch.distributed if launched under torchrun."""
+    """Initialise torch.distributed if launched under torchrun.
+
+    NCCL timeout is bumped from PyTorch's 10-min default to 120 min: rank 0
+    runs collect_episode (full forward over the ~52K candidate pool) solo
+    while the other ranks idle at the next barrier. For Llama-2-7B at
+    episode_batch_size=16 that pass takes 30–90 min; with the default
+    timeout the idle ranks would trip a Watchdog collective-timeout error
+    mid-selection and crash the job.
+    """
     if "RANK" in os.environ and not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        from datetime import timedelta
+        dist.init_process_group(
+            backend="nccl",
+            timeout=timedelta(minutes=120),
+        )
         torch.cuda.set_device(local_rank())
         return True
     return dist.is_initialized()

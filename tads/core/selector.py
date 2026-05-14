@@ -89,6 +89,7 @@ def collect_episode(
     all_log_probs: List[torch.Tensor] = []
     all_r_loss: List[torch.Tensor] = []
     all_r_entropy: List[torch.Tensor] = []
+    all_alignment_raw: List[torch.Tensor] = []  # streaming alignment (per-batch)
 
     loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=False,
@@ -103,6 +104,21 @@ def collect_episode(
         and trajectory_anchor is not None
         and trajectory_anchor.is_fitted
     )
+
+    # Pre-cache the per-layer anchor directions on GPU (each is (H,) fp32, total
+    # ~512 KB for 32 layers × 4096 H). Done once outside the batch loop so we
+    # don't pay a CPU→GPU copy per batch per layer.
+    v_cache_gpu: Dict[int, torch.Tensor] = {}
+    if apply_anchor:
+        if not trajectory_anchor.layer_indices:
+            raise RuntimeError(
+                "trajectory_anchor.layer_indices is empty — anchor.update() "
+                "must run before collect_episode for use_anchor=True.",
+            )
+        for li in trajectory_anchor.layer_indices:
+            v_cache_gpu[li] = trajectory_anchor.v_by_layer[li].to(
+                device, dtype=torch.float32, non_blocking=True,
+            )
 
     tag = f" | tag={exp_tag}" if exp_tag else ""
     logger.info(
@@ -124,40 +140,47 @@ def collect_episode(
             output_hidden_states=True,
         )
 
-        # Build per-layer (first-last) deltas across every decoder layer.
         # hidden_states[0] is the embedding; decoder layers occupy [1:].
-        # Resulting `states` shape:
-        #   single-layer mode (anchor.layer_indices unset)  ??(B, H)
-        #   multi-layer mode  (anchor.layer_indices = ...)  ??(B, L, H)
-        # The agent always consumes a flat (B, H) ??we use the LAST decoder
-        # layer's last-token hidden state, which preserves the pre-refactor
-        # input distribution for the PPO actor.
+        # We always store the LAST decoder layer's last-token hidden as the
+        # state for the PPO actor (shape (B, H)). For multi-layer anchor mode
+        # we ALSO compute the per-batch NAIT Eq.5 alignment inline and only
+        # accumulate the (B,) scalar — instead of stacking (B, L, H) deltas
+        # and aggregating after the loop, which used to peak at ~27 GB on
+        # CPU for Llama-2-7B (52K samples × 32 layers × 4096 H × 4 bytes).
         decoder_hidden = out.hidden_states[1:]
         lengths = attention_mask.sum(dim=1).clamp_min(1) - 1
         lengths = lengths.to(decoder_hidden[0].device)
         bidx = torch.arange(decoder_hidden[0].size(0), device=decoder_hidden[0].device)
 
-        if use_anchor and trajectory_anchor is not None and trajectory_anchor.is_multi_layer:
-            anchor_layer_indices = trajectory_anchor.layer_indices
-            if not anchor_layer_indices:
-                # First call ??anchor's layer_indices is resolved on its own
-                # first update() pass; here we mirror that lazy resolution.
-                from .trajectory_anchor import _resolve_layer_indices
-                anchor_layer_indices = _resolve_layer_indices(
-                    trajectory_anchor.layer_indices_spec, len(decoder_hidden),
-                )
-            deltas = []
-            for li in anchor_layer_indices:
-                h_l = decoder_hidden[li]
-                first_h = h_l[:, 0, :]
-                last_h = h_l[bidx, lengths]
-                deltas.append((last_h - first_h).detach())
-            states = torch.stack(deltas, dim=1).float().cpu()  # (B, num_layers, H)
-        else:
-            hidden = decoder_hidden[-1]
-            states = hidden[bidx, lengths].detach().float().cpu()  # (B, H)
-        # PPO agent input: last-layer last-token (single H) regardless of mode.
+        # Always (B, H) — last layer, last real token. This is what the actor
+        # consumes both at action-sampling time AND inside agent.update.
         agent_input = decoder_hidden[-1][bidx, lengths].detach().float().cpu()
+
+        if apply_anchor:
+            B_local = input_ids.size(0)
+            if trajectory_anchor.is_multi_layer:
+                # Σ_l ⟨Δh_l, v_l⟩  (NAIT Eq.5), accumulated on GPU and then
+                # moved to CPU as a small (B,) vector.
+                batch_align = torch.zeros(B_local, dtype=torch.float32, device=device)
+                for li in trajectory_anchor.layer_indices:
+                    h_l = decoder_hidden[li]
+                    first_h = h_l[:, 0, :]
+                    last_h = h_l[bidx, lengths]
+                    delta_l = (last_h - first_h).float()  # (B, H) fp32
+                    batch_align += delta_l @ v_cache_gpu[li]
+                    del delta_l
+                all_alignment_raw.append(batch_align.detach().cpu())
+                del batch_align
+            else:
+                # Legacy single-layer mode: dot-product the last-token hidden
+                # with the single anchor direction. Matches the pre-refactor
+                # `compute_alignment([N, H])` path (NOT the delta).
+                v = v_cache_gpu[trajectory_anchor.layer_indices[0]]
+                last_token_gpu = decoder_hidden[-1][bidx, lengths].float()
+                all_alignment_raw.append((last_token_gpu @ v).detach().cpu())
+                del last_token_gpu
+
+        all_states.append(agent_input)
         del decoder_hidden
 
         # FIX: ignore per-batch r_weight (degenerate at batch_size=1).
@@ -174,7 +197,8 @@ def collect_episode(
         states_for_agent = agent_input.to(agent.device, non_blocking=True)
         action, log_prob, _ = agent.ac.get_action(states_for_agent)
 
-        all_states.append(states)
+        # all_states already received agent_input above the compute_rewards
+        # block; here we only append the per-batch action / reward outputs.
         all_actions.append(_flatten_cpu_float(action))
         all_log_probs.append(_flatten_cpu_float(log_prob))
         all_r_loss.append(r_loss_cpu)
@@ -229,7 +253,16 @@ def collect_episode(
     a = all_actions.view(-1)
 
     if apply_anchor:
-        alignment = trajectory_anchor.compute_alignment(all_states).view(-1)
+        # Streaming alignment: per-batch raw scores were accumulated inside the
+        # episode loop. Concat and apply the same min-max normalisation as
+        # `TrajectoryAnchor.compute_alignment` so downstream behaviour is
+        # bit-equivalent to the old "stack all states then project" path.
+        alignment_raw = torch.cat(all_alignment_raw, dim=0).view(-1)
+        a_min, a_max = alignment_raw.min(), alignment_raw.max()
+        if (a_max - a_min) > 1e-8:
+            alignment = (alignment_raw - a_min) / (a_max - a_min)
+        else:
+            alignment = torch.full_like(alignment_raw, 0.5)
         boost = 1.0 + lam * alignment
         score = R * a * boost
         align_mean = float(alignment.mean().item())
