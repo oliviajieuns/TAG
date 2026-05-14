@@ -147,7 +147,16 @@ def main() -> None:
 
     # ---------- resume: find latest epoch checkpoint, if any ----------
     def _find_latest_epoch_ckpt(out_dir: Path):
-        """Return (epoch_num, path) of latest epoch_N/ under out_dir, or (0, None)."""
+        """Return (epoch_num, path) of latest epoch_N/ under out_dir, or (0, None).
+
+        A checkpoint is considered "complete" only if the ``_complete`` sentinel
+        file exists in it. The save sequence (model, tokenizer, optimizer,
+        scheduler, agent, anchor, metrics) writes this sentinel as the very
+        last step. Partial checkpoints (process killed mid-save) lack the
+        sentinel and are skipped — preventing the next run from auto-resuming
+        a corrupted optimizer.pt and tripping a 1EB OOM on garbage tensor
+        metadata.
+        """
         if not out_dir.exists():
             return 0, None
         epochs = []
@@ -158,7 +167,9 @@ def main() -> None:
                 n = int(p.name.replace("epoch_", ""))
             except ValueError:
                 continue
-            # Require the model file to exist; partial checkpoints are ignored.
+            if not (p / "_complete").exists():
+                continue
+            # Backstop: the model file must also be present.
             if (p / "config.json").exists() or (p / "adapter_config.json").exists():
                 epochs.append((n, p))
         if not epochs:
@@ -308,7 +319,19 @@ def main() -> None:
         opt_path = resume_ckpt / "optimizer.pt"
         if opt_path.exists():
             try:
-                optimizer.load_state_dict(torch.load(opt_path, map_location=device))
+                # map_location="cpu": optimizer state for 7B full-FT is ~14 GB;
+                # the live optimizer that was just constructed already holds
+                # GPU memory for its (empty) state. Loading directly to GPU
+                # would peak at 2× (28 GB) before the old state is freed and
+                # OOM the rank. Loading to CPU and letting load_state_dict
+                # move tensors per-param keeps the peak at ~14 GB.
+                # weights_only=False is required because optimizer state
+                # (especially bnb.AdamW8bit) contains non-tensor pickled
+                # quantisation metadata; it's also future-proofs for
+                # PyTorch 2.6+ where weights_only defaults to True.
+                optimizer.load_state_dict(
+                    torch.load(opt_path, map_location="cpu", weights_only=False),
+                )
                 if is_main_process():
                     logger.info("Restored optimizer state from %s", opt_path)
             except Exception as e:
@@ -317,7 +340,9 @@ def main() -> None:
         sch_path = resume_ckpt / "scheduler.pt"
         if sch_path.exists():
             try:
-                scheduler.load_state_dict(torch.load(sch_path))
+                scheduler.load_state_dict(
+                    torch.load(sch_path, map_location="cpu", weights_only=False),
+                )
                 if is_main_process():
                     logger.info("Restored scheduler state from %s", sch_path)
             except Exception as e:
@@ -337,7 +362,9 @@ def main() -> None:
             anchor_path = resume_ckpt / "trajectory_anchor.pt"
             if anchor_path.exists():
                 try:
-                    anchor.load_state_dict(torch.load(anchor_path))
+                    anchor.load_state_dict(
+                        torch.load(anchor_path, map_location="cpu", weights_only=False),
+                    )
                     if is_main_process():
                         logger.info("Restored trajectory anchor from %s", anchor_path)
                 except Exception as e:
@@ -388,7 +415,7 @@ def main() -> None:
 
         subset = Subset(dataset, selected)
         loader = make_dataloader(
-            subset, batch_size=batch_size, shuffle=True, seed=seed,
+            subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
         )
         avg_loss = sft_one_epoch(
             model=model,
@@ -432,7 +459,19 @@ def main() -> None:
                     json.dump(anchor.get_history_summary(), f, indent=2)
             with open(output_dir / "metrics.json", "w") as f:
                 json.dump(metrics_log, f, indent=2)
-            logger.info("Checkpoint saved: %s", ckpt_path)
+            # Sentinel: written ATOMICALLY at the very end so a crash mid-save
+            # leaves an incomplete checkpoint without the marker, and
+            # _find_latest_epoch_ckpt skips it on the next run. Without this,
+            # auto-resume could load a partial optimizer.pt and crash with the
+            # 1EB OOM signature on the next forward (corrupt tensor metadata).
+            sentinel = ckpt_path / "_complete"
+            sentinel_tmp = ckpt_path / "_complete.tmp"
+            with open(sentinel_tmp, "w") as f:
+                f.write(str(epoch))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(sentinel_tmp, sentinel)
+            logger.info("Checkpoint saved + sealed: %s", ckpt_path)
             # Optional: keep only last K checkpoints to avoid disk bloat.
             _keep = int(cfg.get("keep_last_n_checkpoints", 0))
             if _keep > 0:

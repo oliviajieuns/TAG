@@ -148,7 +148,7 @@ def main() -> None:
     metrics_log = []
     for epoch in range(1, train_epochs + 1):
         logger.info("=== NAIT epoch %d/%d ===", epoch, train_epochs)
-        loader = make_dataloader(subset, batch_size=batch_size, shuffle=True, seed=seed)
+        loader = make_dataloader(subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch)
         avg_loss = sft_one_epoch(
             model=model, loader=loader,
             optimizer=optimizer, scheduler=scheduler,
