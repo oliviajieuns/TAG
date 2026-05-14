@@ -71,6 +71,13 @@ def main() -> None:
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
     quiet_repeated_warnings()
 
+    # Eval is designed to run on a single GPU. If invoked under torchrun
+    # (which sets RANK / LOCAL_RANK), only the rank-0 process should run
+    # the evaluation — otherwise every worker re-runs the full benchmark
+    # and they collide on output files. Workers exit cleanly.
+    if int(os.environ.get("RANK", "0")) != 0:
+        return
+
     args = parse_args()
     cfg = load_config(args.config)
 

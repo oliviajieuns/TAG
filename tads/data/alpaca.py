@@ -142,6 +142,7 @@ def build_alpaca_dataset(
             fmt,
             data_files=resolved.split(",") if "," in resolved else resolved,
             split="train",
+            cache_dir=cache_dir,
         )
     elif dataset_name:
         logger.info("Loading Alpaca from HF hub: %s", dataset_name)

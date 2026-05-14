@@ -1,7 +1,8 @@
 model_key: mistral-7b
 model_path: ${oc.env:MODEL_PATH_MISTRAL_7B,/group-volume/nait-models/Mistral-7B-v0.1}
 prompt_style: mistral_instruct
-max_seq_len: 2048
+# NAIT Table 8: max_length=512 (Alpaca-GPT4 samples fit comfortably).
+max_seq_len: 512
 # Zephyr / Mistral SFT recipe — mitigates first-step loss spikes.
 learning_rate: 1.0e-5
 # Zephyr SFT recipe uses 10% warmup for Mistral. Diverges from NAIT's 0.03

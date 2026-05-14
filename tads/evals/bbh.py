@@ -43,12 +43,36 @@ _ANSWER_PATTERNS = [
     re.compile(r"^\s*answer\s*[:=]\s*([^\.\n]+)", re.IGNORECASE | re.MULTILINE),
 ]
 
+# After fallback extraction we additionally try to recover the canonical BBH
+# answer shapes — "(A)", "True", "False", "Yes", "No" — that appear in
+# several sub-tasks. If the response trails off with prose, look for the
+# *last* occurrence of one of these patterns and prefer it over the raw line.
+_BBH_LABEL_PATTERNS = [
+    re.compile(r"\(([A-Z])\)"),                 # "(A)" multiple-choice
+    re.compile(r"\b(True|False)\b", re.IGNORECASE),
+    re.compile(r"\b(Yes|No)\b", re.IGNORECASE),
+]
+
 
 def _extract_answer(text: str) -> str:
+    # Phase 1: explicit "the answer is X" / "Answer: X" patterns.
     for pat in _ANSWER_PATTERNS:
         m = pat.search(text)
         if m:
-            return m.group(1).strip().rstrip(".").strip()
+            candidate = m.group(1).strip().rstrip(".").strip()
+            # If the captured group itself is prose ending with "(A)" or
+            # "True", prefer the trailing label — extracted prose is noisy.
+            for lpat in _BBH_LABEL_PATTERNS:
+                m2 = list(lpat.finditer(candidate))
+                if m2:
+                    return m2[-1].group(0)
+            return candidate
+    # Phase 2: no explicit "answer is" — look for canonical BBH labels
+    # anywhere in the response and return the LAST occurrence.
+    for lpat in _BBH_LABEL_PATTERNS:
+        ms = list(lpat.finditer(text))
+        if ms:
+            return ms[-1].group(0)
     # Last-resort: last non-empty line.
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     return lines[-1].rstrip(".").strip() if lines else text.strip()
@@ -135,9 +159,34 @@ class BBHEvaluator(BenchmarkEvaluator):
             )
 
         cot_root = data_root if (data_root / "cot-prompts").is_dir() else task_files[0].parent
+        n_cot_files = sum(
+            1 for t in task_files
+            if (cot_root / "cot-prompts" / f"{t.stem}.txt").exists()
+            or (cot_root.parent / "cot-prompts" / f"{t.stem}.txt").exists()
+        )
+        if n_cot_files == 0:
+            # Paper-faithfulness gate: NAIT reports BBH with the official
+            # 3-shot CoT prompts. Without them we fall back to a non-CoT
+            # direct-answer few-shot which scores ~10-15pt lower. Make this
+            # impossible to miss in the logs.
+            logger.error(
+                "BBH: NO cot-prompts/*.txt files found under %s. The evaluator "
+                "will fall back to a non-CoT direct-answer few-shot baseline, "
+                "which is NOT paper-faithful. To match NAIT Table 2, clone "
+                "github.com/suzgunmirac/BIG-Bench-Hard and point BBH_DATA_DIR "
+                "at it (so cot-prompts/<task>.txt exists alongside bbh/<task>.json).",
+                cot_root,
+            )
+        elif n_cot_files < len(task_files):
+            logger.warning(
+                "BBH: only %d/%d tasks have cot-prompts/*.txt — the remaining "
+                "tasks will use direct-answer fallback (not paper-faithful).",
+                n_cot_files, len(task_files),
+            )
         logger.info(
-            "BBH: %d task files | cot_prompts dir: %s | limit=%s | n_fewshot=%d",
-            len(task_files), cot_root, limit, n_fewshot,
+            "BBH: %d task files | cot_prompts dir: %s | cot_prompt_files=%d | "
+            "limit=%s | n_fewshot=%d",
+            len(task_files), cot_root, n_cot_files, limit, n_fewshot,
         )
 
         per_task: List[Dict[str, Any]] = []

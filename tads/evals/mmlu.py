@@ -51,13 +51,41 @@ def _build_few_shot_prompt(dev_examples, test_example, subject):
 
 
 def _get_choice_token_ids(tokenizer):
+    """Resolve a single token id for each of "A","B","C","D".
+
+    Tries the space-prefixed form first (matches the trailing space in the
+    "Answer:" template for sentencepiece / BPE), then the bare letter, then
+    finally falls back to the *first* token of either encoding. Always
+    returns exactly ``len(CHOICES)`` ids so the caller can ``logits[ids]``
+    safely — even on tokenisers where every encoding ends up multi-token
+    (rare, but seen in heavily-merged BPE vocabularies).
+    """
     ids = []
     for c in CHOICES:
+        chosen = None
         for candidate in (f" {c}", c):
             enc = tokenizer.encode(candidate, add_special_tokens=False)
             if len(enc) == 1:
-                ids.append(enc[0])
+                chosen = enc[0]
                 break
+        if chosen is None:
+            # Fallback: use the first token id of the bare letter encoding.
+            # This is imperfect but keeps the array length consistent and
+            # avoids an IndexError downstream when comparing argmax.
+            enc = tokenizer.encode(c, add_special_tokens=False)
+            if enc:
+                chosen = enc[0]
+                logger.warning(
+                    "MMLU: tokenizer split %r into %d tokens; using first id (%d). "
+                    "Choice-letter logits will be approximate for this model.",
+                    c, len(enc), chosen,
+                )
+            else:
+                raise RuntimeError(
+                    f"MMLU: tokenizer encoded {c!r} to empty list; cannot proceed.",
+                )
+        ids.append(chosen)
+    assert len(ids) == len(CHOICES), "choice_ids must be aligned with CHOICES"
     return ids
 
 

@@ -14,7 +14,7 @@ TyDiQA / HumanEval / GSM8K all support the four model-family styles.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -214,18 +214,54 @@ def build_cot_prompt_prefix(question: str) -> str:
 # =============================================================================
 # TyDiQA (evaluation prompts)
 # =============================================================================
-def tydiqa_user_block(context: str, question: str) -> str:
+def tydiqa_user_block(
+    context: str,
+    question: str,
+    *,
+    demos: Optional[List[Tuple[str, str, str]]] = None,
+) -> str:
+    """Build the user-side text for a TyDiQA query.
+
+    When ``demos`` is provided, the prefix becomes a flat 5-shot prompt:
+        Answer ...
+        Context: <c1>  Question: <q1>  Answer: <a1>
+        Context: <c2>  Question: <q2>  Answer: <a2>
+        ...
+        Context: <c_test>  Question: <q_test>  Answer:
+    Matches the standard lm-eval-harness layout for SQuAD-style extractive QA.
+    """
     ctx = (context or "").strip()
-    return (
-        "Answer using the passage when possible. Reply with a short extractive span.\n\n"
-        f"Context:\n{ctx}\n\nQuestion:\n{question}"
+    head = "Answer using the passage when possible. Reply with a short extractive span."
+    if not demos:
+        return f"{head}\n\nContext:\n{ctx}\n\nQuestion:\n{question}"
+    chunks = [head + "\n\n"]
+    for d_ctx, d_q, d_a in demos:
+        chunks.append(
+            f"Context:\n{(d_ctx or '').strip()}\n\n"
+            f"Question:\n{d_q}\n\n"
+            f"Answer: {d_a}\n\n"
+        )
+    chunks.append(
+        f"Context:\n{ctx}\n\n"
+        f"Question:\n{question}\n\n"
+        f"Answer:"
     )
+    return "".join(chunks)
 
 
 def tydiqa_generation_prefix(
-    context: str, question: str, *, prompt_style: str,
+    context: str,
+    question: str,
+    *,
+    prompt_style: str,
+    demos: Optional[List[Tuple[str, str, str]]] = None,
 ) -> str:
-    user = tydiqa_user_block(context, question)
+    """TyDiQA generation prefix with optional 5-shot demonstrations.
+
+    ``demos`` is an iterable of ``(context, question, answer)`` triples — when
+    provided the evaluator becomes paper-faithful 5-shot (NAIT Appendix D).
+    """
+    user = tydiqa_user_block(context, question, demos=demos)
     if prompt_style == "qwen_chatml":
         return f"{IM_START}user\n{user}\n{IM_END}\n{IM_START}assistant\n"
     if prompt_style == "mistral_instruct":
