@@ -42,11 +42,17 @@ def load_model(
     local_rank: int = 0,
     dtype: torch.dtype = torch.bfloat16,
     gradient_checkpointing: bool = True,
+    attn_implementation: Optional[str] = None,
 ):
     """Load a causal-LM model for training.
 
     Single-GPU path uses ``device_map='auto'``; DDP path puts the model on a
     single ``cuda:local_rank`` and wraps it with ``DistributedDataParallel``.
+
+    ``attn_implementation`` is passed through to ``from_pretrained``. Accepted
+    values include ``"sdpa"`` (PyTorch ≥ 2.0 efficient default),
+    ``"flash_attention_2"`` (needs ``flash-attn`` installed; ~30% speedup),
+    or ``"eager"``. ``None`` lets transformers pick.
     """
     use_ddp = use_ddp and dist.is_initialized()
 
@@ -57,8 +63,20 @@ def load_model(
     )
     if not use_ddp:
         kwargs["device_map"] = "auto"
+    if attn_implementation:
+        kwargs["attn_implementation"] = attn_implementation
 
-    base = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+    try:
+        base = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+    except (ValueError, ImportError) as e:
+        if attn_implementation == "flash_attention_2":
+            logger.warning(
+                "flash_attention_2 unavailable (%s); falling back to sdpa.", e,
+            )
+            kwargs["attn_implementation"] = "sdpa"
+            base = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+        else:
+            raise
 
     if gradient_checkpointing:
         base.gradient_checkpointing_enable()

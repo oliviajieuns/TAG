@@ -123,6 +123,7 @@ def main() -> None:
         use_ddp=use_ddp,
         local_rank=local_rank(),
         gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
+        attn_implementation=cfg.get("attn_implementation"),
     )
     device = (
         torch.device(f"cuda:{local_rank()}") if torch.cuda.is_available()
@@ -196,11 +197,22 @@ def main() -> None:
         1, int(n_total * selection_ratio / batch_size / grad_accum / max(1, world_size())),
     )
     total_steps = approx_steps_per_epoch * train_epochs
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=lr,
-        weight_decay=float(cfg.get("weight_decay", 0.1)),
-    )
+    # 8-bit AdamW cuts optimizer state from ~56GB to ~14GB per GPU on 7B
+    # full fine-tuning. Matches the NAIT paper's recipe (bnb.optim.AdamW8bit).
+    wd = float(cfg.get("weight_decay", 0.1))
+    if bool(cfg.get("use_8bit_optimizer", False)):
+        import bitsandbytes as bnb
+        optimizer = bnb.optim.AdamW8bit(
+            model.parameters(), lr=lr, weight_decay=wd,
+        )
+        if is_main_process():
+            logger.info("Optimizer: bitsandbytes.AdamW8bit | wd=%s", wd)
+    else:
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=lr, weight_decay=wd,
+        )
+        if is_main_process():
+            logger.info("Optimizer: torch.AdamW (fp32) | wd=%s", wd)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=max(1, int(total_steps * warmup_ratio)),

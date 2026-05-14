@@ -7,6 +7,8 @@ pyyaml>=6.0
 numpy>=1.24,<2.0
 tqdm>=4.66
 sentencepiece
+# 8-bit AdamW (needed for full FT 7B on A100 80GB without OOM)
+bitsandbytes>=0.43
 
 # Optional eval extras
 lm-eval>=0.4
