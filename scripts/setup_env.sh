@@ -15,18 +15,24 @@
 # -----------------------------------------------------------------------------
 
 # --- LLM checkpoints ---
+# The model loader does case-insensitive sibling lookup if these paths don't
+# match the on-disk casing exactly (Linux is case-sensitive; HF / cluster
+# naming conventions vary). So both `qwen2.5-7b` and `Qwen2.5-7B` resolve.
 export MODEL_PATH_LLAMA2_7B="${MODEL_PATH_LLAMA2_7B:-/group-volume/nait-models/Llama-2-7b-hf}"
 export MODEL_PATH_QWEN25_7B="${MODEL_PATH_QWEN25_7B:-/group-volume/nait-models/qwen2.5-7b}"
+export MODEL_PATH_QWEN25_05B="${MODEL_PATH_QWEN25_05B:-/group-volume/nait-models/qwen2.5-0.5b}"
+export MODEL_PATH_QWEN25_14B="${MODEL_PATH_QWEN25_14B:-/group-volume/jieuns/models/Qwen2.5-14B}"
 export MODEL_PATH_MISTRAL_7B="${MODEL_PATH_MISTRAL_7B:-/group-volume/nait-models/mistral-7b-v0.1}"
 export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-models/DeepSeek-LLM-7B-Base}"
 
 # --- IT training data (Alpaca-GPT4 local file) ---
 # File extension picks the loader automatically: .parquet / .json / .jsonl / .csv.
-# A glob is also accepted (and is the safest default since the official HF
-# Alpaca-GPT4 distribution shards into hashed filenames like
-# `train-00000-of-00001-XXXX.json`). Override with a concrete file path
-# before sourcing if you want exact-match behaviour.
-export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/data/train-00000-of-00001-6ef3991c06080e14.json}"
+# Default is a glob over the canonical cluster layout (the HF Alpaca-GPT4
+# distribution shards into hashed filenames like
+# `train-00000-of-00001-XXXX.json`, so a single-file path is brittle across
+# re-downloads). Override with a concrete file path before sourcing if you
+# want exact-match behaviour.
+export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/data/*.json}"
 
 # --- Output roots ---
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/minsoo3.kim/tads-checkpoints}"

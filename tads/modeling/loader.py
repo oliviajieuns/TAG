@@ -6,8 +6,9 @@ Unifies four scenarios behind one entry point:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -23,8 +24,41 @@ from ..core.utils import is_main_process
 logger = logging.getLogger(__name__)
 
 
+# --------------------------------------------------------------------- path
+def _resolve_local_path(path: str) -> str:
+    """Tolerate case differences between configured path and on-disk dir name.
+
+    Linux is case-sensitive, so a config that says ``qwen2.5-7b`` won't open
+    an on-disk ``Qwen2.5-7B`` directory. HF/cluster naming conventions vary
+    (Mistral-7B-v0.1 vs mistral-7b-v0.1, DeepSeek-LLM-7B-Base vs deepseek-
+    llm-7b-base, Qwen2.5-7B vs qwen2.5-7b, …) and the user's setup_env.sh
+    and YAML defaults can drift. If the configured path doesn't exist, look
+    for a single case-insensitive sibling in the parent directory and use
+    that with a warning. This makes both naming conventions work without
+    having to chase the exact case manually.
+    """
+    if os.path.exists(path):
+        return path
+    parent = os.path.dirname(path) or "."
+    if not os.path.isdir(parent):
+        return path  # parent missing too — let HF surface the real error
+    name_lower = os.path.basename(path).lower()
+    matches: List[str] = [
+        entry for entry in os.listdir(parent)
+        if entry.lower() == name_lower
+    ]
+    if len(matches) == 1:
+        resolved = os.path.join(parent, matches[0])
+        logger.warning(
+            "Path %r not found; using case-variant %r instead.", path, resolved,
+        )
+        return resolved
+    return path
+
+
 # --------------------------------------------------------------------- tokenizer
 def load_tokenizer(model_path: str):
+    model_path = _resolve_local_path(model_path)
     tokenizer = AutoTokenizer.from_pretrained(
         model_path,
         trust_remote_code=True,
@@ -57,6 +91,7 @@ def load_model(
     ``"flash_attention_2"`` (needs ``flash-attn`` installed; ~30% speedup),
     or ``"eager"``. ``None`` lets transformers pick.
     """
+    model_path = _resolve_local_path(model_path)
     use_ddp = use_ddp and dist.is_initialized()
 
     kwargs: Dict[str, Any] = dict(
@@ -134,6 +169,8 @@ def load_for_eval(
     If ``training_mode`` is None, auto-detect:
     LoRA when ``<ckpt_dir>/adapter_config.json`` exists, else full.
     """
+    base_model = _resolve_local_path(base_model)
+    ckpt_dir = _resolve_local_path(ckpt_dir)
     if training_mode is None:
         training_mode = (
             "lora" if (Path(ckpt_dir) / "adapter_config.json").exists() else "full"
