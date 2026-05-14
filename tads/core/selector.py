@@ -62,16 +62,27 @@ def collect_episode(
     epoch: int = 0,
     exp_tag: Optional[str] = None,
     progress_interval: int = 50,
-    empty_cache_interval: int = 100,
+    empty_cache_interval: int = 10,
 ) -> Dict[str, Any]:
     """Run one episode over the candidate pool and return selection results.
 
     ``exp_tag`` is a free-form string (e.g. ``"qwen2.5-7b/alpaca/tads"``) used
     only for log readability. It does not affect any numerics.
+
+    Memory: ``empty_cache_interval=10`` keeps the CUDA caching allocator from
+    fragmenting across the ~3000 episode batches. With Llama-2-7B + episode_
+    batch_size=16 the per-batch peak is ~5 GB (logits + entropy intermediates);
+    a long run without periodic empty_cache can fragment the allocator until a
+    new ~1 GB block can't be placed even though gross free memory is high.
     """
     torch.manual_seed(seed + epoch)
     model.eval()
     agent.ac.eval()
+    # KV cache adds nothing during a feed-forward pass and just leaks memory
+    # batch over batch on Mistral / Qwen (both default to use_cache=True).
+    _orig_use_cache = getattr(model.config, "use_cache", None)
+    if hasattr(model.config, "use_cache"):
+        model.config.use_cache = False
 
     all_states: List[torch.Tensor] = []
     all_actions: List[torch.Tensor] = []
@@ -155,6 +166,9 @@ def collect_episode(
 
         r_loss_cpu = _flatten_cpu_float(r_loss)
         r_entropy_cpu = _flatten_cpu_float(r_entropy)
+        # Drop the model output (logits is the heaviest tensor on GPU at this
+        # point — (B, T, V) bf16) BEFORE running the actor / appending CPU
+        # buffers, so the next batch's forward starts with maximum free space.
         del out
 
         states_for_agent = agent_input.to(agent.device, non_blocking=True)
@@ -257,6 +271,11 @@ def collect_episode(
 
     r_loss_mean = float(all_r_loss.mean().item())
     r_entropy_mean = float(all_r_entropy.mean().item())
+
+    # Restore the model's use_cache so subsequent eval-time generation paths
+    # (which DO want a KV cache) get their original behaviour back.
+    if hasattr(model.config, "use_cache") and _orig_use_cache is not None:
+        model.config.use_cache = _orig_use_cache
 
     return {
         "selected_indices": selected_indices,
