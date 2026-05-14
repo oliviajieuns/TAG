@@ -44,39 +44,40 @@ def _broadcast_selection(selected) -> List[int]:
     )
     SRC = 0
     rank = dist.get_rank()
-    # Normalize source-rank input to a plain python list of ints
     if rank == SRC:
-        # === DIAG ===
         _t = type(selected).__name__
         _sh = getattr(selected, "shape", None)
         _dev = getattr(selected, "device", None)
-        _repr = repr(selected)[:200] if not hasattr(selected, "shape") else f"shape={_sh} device={_dev}"
+        if hasattr(selected, "shape"):
+            _repr = f"shape={_sh} device={_dev}"
+        else:
+            _repr = repr(selected)[:200]
         print(f"[bcast] rank=0 BEFORE-NORMALIZE: type={_t} {_repr}", flush=True)
-        # === END DIAG ===
         if hasattr(selected, "tolist"):
             selected = selected.tolist()
         elif not isinstance(selected, list):
             selected = list(selected)
-        # === DIAG 2: after normalization ===
-        print(f"[bcast] rank=0 AFTER-NORMALIZE: type={type(selected).__name__} len={len(selected) if hasattr(selected, \"__len__\") else \"NO-LEN\"} first5={selected[:5] if isinstance(selected, list) else \"NOT-LIST\"}", flush=True)
+        _post_t = type(selected).__name__
+        if hasattr(selected, "__len__"):
+            _post_len = len(selected)
+        else:
+            _post_len = "NO-LEN"
+        if isinstance(selected, list):
+            _post_first5 = selected[:5]
+        else:
+            _post_first5 = "NOT-LIST"
+        print(f"[bcast] rank=0 AFTER-NORMALIZE: type={_post_t} len={_post_len} first5={_post_first5}", flush=True)
         length_val = len(selected)
-        print(f"[bcast] rank=0 len(selected)={length_val} first5={selected[:5]}", flush=True)
     else:
         length_val = 0
     length = torch.tensor([length_val], dtype=torch.long, device=device).contiguous()
     dist.broadcast(length, src=SRC)
     n = int(length.item())
     print(f"[bcast] rank={rank} after-bcast n={n} device={device}", flush=True)
-    # Sanity guard — if n is garbage, fail loudly with diagnostics
     if n < 0 or n > 10_000_000:
         raise RuntimeError(
-            f"[rank {rank}] _broadcast_selection received garbage length n={n}. "
-            f"This means dist.broadcast(length) did not transmit correctly. "
-            f"Check: (1) all ranks share the same default process group "
-            f"(no accelerate/trl-managed group conflict); "
-            f"(2) source rank reached this point and length tensor was int64 "
-            f"contiguous on device={device}; "
-            f"(3) no concurrent collective on another stream."
+            f"[rank {rank}] _broadcast_selection garbage length n={n}. "
+            f"Source rank selected appears corrupted. Check BEFORE-NORMALIZE log above."
         )
     if rank == SRC:
         payload = torch.tensor(selected, dtype=torch.long, device=device).contiguous()
