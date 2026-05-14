@@ -46,6 +46,24 @@ def _flatten_cpu_float(x: torch.Tensor) -> torch.Tensor:
     return x.detach().float().view(-1).cpu()
 
 
+def _unwrap(model):
+    """Strip DDP / PEFT wrappers to reach the underlying HF model.
+
+    Mirrors the unwrap chain in :func:`tads.modeling.loader.get_hidden_size`:
+    DDP exposes the inner module via ``.module``, and PEFT's ``PeftModel``
+    nests the base HF model under ``.base_model.model``. Either or both can
+    be present depending on training_mode and DDP launch.
+    """
+    m = model
+    while hasattr(m, "module"):
+        m = m.module
+    if hasattr(m, "base_model"):
+        m = m.base_model
+        if hasattr(m, "model"):
+            m = m.model
+    return m
+
+
 @torch.no_grad()
 def collect_episode(
     model,
@@ -80,9 +98,12 @@ def collect_episode(
     agent.ac.eval()
     # KV cache adds nothing during a feed-forward pass and just leaks memory
     # batch over batch on Mistral / Qwen (both default to use_cache=True).
-    _orig_use_cache = getattr(model.config, "use_cache", None)
-    if hasattr(model.config, "use_cache"):
-        model.config.use_cache = False
+    # NB: DDP and PEFT both wrap the base model; .config lives on the inner
+    # HF causal-LM, not on the wrapper.
+    base_model = _unwrap(model)
+    _orig_use_cache = getattr(base_model.config, "use_cache", None)
+    if hasattr(base_model.config, "use_cache"):
+        base_model.config.use_cache = False
 
     all_states: List[torch.Tensor] = []
     all_actions: List[torch.Tensor] = []
@@ -307,8 +328,8 @@ def collect_episode(
 
     # Restore the model's use_cache so subsequent eval-time generation paths
     # (which DO want a KV cache) get their original behaviour back.
-    if hasattr(model.config, "use_cache") and _orig_use_cache is not None:
-        model.config.use_cache = _orig_use_cache
+    if hasattr(base_model.config, "use_cache") and _orig_use_cache is not None:
+        base_model.config.use_cache = _orig_use_cache
 
     return {
         "selected_indices": selected_indices,
