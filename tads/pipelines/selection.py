@@ -2,7 +2,7 @@
 
 Wraps the four selection methods behind a single function. For data_agent
 and tads the selection is performed on rank-0 only under DDP, and the
-chosen indices are shared with other ranks via a small JSON file.
+chosen indices are NCCL-broadcast to the other ranks.
 """
 from __future__ import annotations
 
@@ -30,73 +30,33 @@ def _random_indices(n_total, ratio, seed, epoch):
     return perm[:k]
 
 
-def _broadcast_selection(selected, *, epoch=0, output_dir=None):
-    """Share selected indices from rank 0 to all ranks via filesystem.
+def _broadcast_selection(selected):
+    """Share selected indices from rank 0 to all ranks via NCCL broadcast.
 
-    Robust replacement for the old dist.broadcast version: a barrier guarantees
-    write-before-read, missing file raises a clear error, and there are no
-    NCCL ordering / async-stream / process-group conflicts.
+    The list is small (a few × 10k ints, ~100 KB) and the call happens once
+    per epoch, so ``broadcast_object_list`` is the natural fit. We drain
+    pending CUDA work on rank 0 first — without the sync, NCCL on the
+    default stream can race with model forwards from ``collect_episode``
+    that completed asynchronously, manifesting as hangs or wrong data.
     """
-    import os as _os
-    import tempfile as _tempfile
-    from pathlib import Path as _Path
-
-    _r = dist.get_rank() if dist.is_initialized() else 0
-    print("[sel-share] rank=" + str(_r) + " pid=" + str(_os.getpid())
-          + " type=" + type(selected).__name__, flush=True)
-
     if not dist.is_initialized():
         if hasattr(selected, "tolist"):
             return selected.tolist()
         return list(selected) if not isinstance(selected, list) else selected
 
-    SRC = 0
-    base = _Path(output_dir) if output_dir is not None else _Path(_tempfile.gettempdir())
-    base.mkdir(parents=True, exist_ok=True)
-    sel_path = base / ("_selection_epoch" + str(epoch) + ".json")
-
-    if _r == SRC:
+    if dist.get_rank() == 0:
         if hasattr(selected, "tolist"):
             selected = selected.tolist()
         elif not isinstance(selected, list):
             selected = list(selected)
-        selected = [int(x) for x in selected]
-        print("[sel-share] rank=0 NORMALIZED type=list len=" + str(len(selected))
-              + " first5=" + str(selected[:5]), flush=True)
-        tmp_path = sel_path.with_suffix(".json.tmp")
-        with open(tmp_path, "w") as f:
-            json.dump(selected, f)
-            f.flush()
-            _os.fsync(f.fileno())
-        _os.replace(tmp_path, sel_path)
-        print("[sel-share] rank=0 WROTE " + str(sel_path)
-              + " (" + str(len(selected)) + " ids)", flush=True)
+        payload = [[int(x) for x in selected]]
+    else:
+        payload = [None]
 
-    dist.barrier()
-
-    if not sel_path.exists():
-        raise RuntimeError(
-            "[rank " + str(_r) + "] selection file missing after barrier: "
-            + str(sel_path) + ". Rank 0 likely crashed before writing."
-        )
-    with open(sel_path, "r") as f:
-        result = json.load(f)
-    if not isinstance(result, list):
-        raise RuntimeError(
-            "[rank " + str(_r) + "] selection file has wrong shape: type="
-            + type(result).__name__
-        )
-    print("[sel-share] rank=" + str(_r) + " READ " + str(sel_path)
-          + " len=" + str(len(result)), flush=True)
-
-    dist.barrier()
-    if _r == SRC:
-        try:
-            sel_path.unlink()
-        except FileNotFoundError:
-            pass
-
-    return result
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    dist.broadcast_object_list(payload, src=0)
+    return payload[0]
 
 
 def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, device):
@@ -194,14 +154,7 @@ def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, d
     else:
         selected = []
 
-    _output_dir = (
-        cfg.get("output_dir")
-        or cfg.get("output_root")
-        or "/tmp/tads_selection_share"
-    )
-    selected = _broadcast_selection(
-        selected, epoch=epoch, output_dir=_output_dir,
-    )
+    selected = _broadcast_selection(selected)
     return selected, extras
 
 
