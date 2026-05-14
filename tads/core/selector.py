@@ -1,15 +1,15 @@
-"""Episode collection and selection scoring (paper 짠3, Algorithm 1).
+"""Episode collection and selection scoring (paper §3, Algorithm 1).
 
 For each candidate sample we compute:
-    h_i      = last-token hidden state under current 罐_t
+    h_i      = last-token hidden state under current θ_t
     R_i      = composite reward (paper Eq. 6)
-    a_i      = PPO actor action ??[0, 1]
-    찾lign_i  = compute_alignment(h_i) ??[0, 1]   (TADS only)
+    a_i      = PPO actor action ∈ [0, 1]
+    Align_i  = compute_alignment(h_i) ∈ [0, 1]   (TADS only)
 
 The selection score is
-    s_i^(t) = R_i 쨌 a_i 쨌 (1 + 貫 쨌 찾lign_i^(t))
+    s_i^(t) = R_i · a_i · (1 + λ · Align_i^(t))
 and the top-K samples form the training subset for this epoch.
-Setting 貫=0 (or use_anchor=False) recovers the Data Agent baseline.
+Setting λ=0 (or use_anchor=False) recovers the Data Agent baseline.
 
 Reward components (paper Eq. 1, 3, 5, 6):
     r_loss_i    = mean CE loss over response tokens          (== rdiff in the
@@ -210,7 +210,7 @@ def collect_episode(
     # ---- Composite reward per sample (paper Eq. 6) ----
     all_rewards = r_weight * all_r_loss + (1.0 - r_weight) * all_r_entropy
 
-    # ---- Selection score s_i = R_i 쨌 a_i 쨌 (1 + 貫 쨌 찾lign_i) ----
+    # ---- Selection score s_i = R_i · a_i · (1 + λ · Align_i) ----
     R = all_rewards.view(-1)
     a = all_actions.view(-1)
 
