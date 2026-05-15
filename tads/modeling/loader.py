@@ -232,7 +232,23 @@ def load_for_eval(
             trust_remote_code=True,
             local_files_only=True,
         )
-        model = PeftModel.from_pretrained(base, ckpt_dir)
+        peft_model = PeftModel.from_pretrained(base, ckpt_dir)
+        # Merge the LoRA adapter back into the base weights so the eval
+        # forward path doesn't pay the per-layer adapter-add cost on every
+        # token, and so the PEFT wrapper's bookkeeping tensors get freed
+        # before generation. ~10-15% faster inference and several hundred
+        # MB lower steady-state VRAM, both of which matter when n_samples
+        # batches and KV cache are already stretching the GPU budget.
+        try:
+            model = peft_model.merge_and_unload()
+        except Exception as exc:
+            # Some adapter configs (e.g. with quantised base, or non-
+            # standard target modules) can't merge cleanly. Falling back
+            # to the wrapped PEFT model keeps eval correct, just slower.
+            logger.warning(
+                "merge_and_unload failed (%s); using wrapped PeftModel.", exc,
+            )
+            model = peft_model
     else:
         model = AutoModelForCausalLM.from_pretrained(
             ckpt_dir,

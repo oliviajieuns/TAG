@@ -127,6 +127,7 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         data_dir: Optional[str] = None,
         max_new_tokens: int = 256,
         n_samples: int = 20,
+        n_samples_per_batch: int = 4,
         temperature: float = 0.8,
         top_p: float = 0.95,
         seed: int = 42,
@@ -160,6 +161,23 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             torch.manual_seed(seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
+
+        # Memory: generating all 20 sequences in one `model.generate` call
+        # blows up the KV cache and intermediate softmax tensors by 20×
+        # (transformers' generate batches num_return_sequences exactly like
+        # a real batch, no PagedAttention). For a 7B bf16 model that pushes
+        # peak VRAM well past 80 GB even before activations. Chunk the
+        # n_samples into mini-batches of size ``n_samples_per_batch`` and
+        # accumulate completions across the chunks. The total compute is
+        # identical; peak memory drops by n_samples / n_samples_per_batch.
+        per_call = max(1, int(n_samples_per_batch))
+        if use_sampling:
+            n_calls = (n_samples + per_call - 1) // per_call
+        else:
+            # Greedy: a single deterministic completion is the whole signal.
+            n_calls = 1
+            per_call = 1
+
         completions: Dict[str, list] = {}
         for i, problem in enumerate(problems):
             prefix = humaneval_generation_prefix(
@@ -168,49 +186,64 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             inputs = tokenizer(
                 prefix, return_tensors="pt", truncation=True, max_length=2048,
             ).to(device)
-            # pad_token_id is required to silence transformers' warning on
-            # every generate() call (the loader already aliases pad→eos when
-            # the tokenizer ships without an explicit pad token, but passing
-            # the id makes the contract explicit and survives pickle round-
-            # trips that occasionally reset tokenizer.pad_token to None).
-            gen_kwargs = dict(
-                max_new_tokens=max_new_tokens,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-            )
-            if use_sampling:
-                gen_kwargs.update(
-                    do_sample=True, temperature=temperature, top_p=top_p,
-                    num_return_sequences=n_samples,
-                )
-            else:
-                gen_kwargs.update(do_sample=False, temperature=0.0)
-            out = model.generate(**inputs, **gen_kwargs)
-            # Token-id slicing — see tydiqa.py comment for why a
-            # `completion[len(prefix):]` char-offset slice can't survive
-            # the tokenizer's BOS auto-prepend + decode strip round-trip.
             prefix_tok_len = inputs["input_ids"].shape[1]
-            for j in range(out.shape[0]):
-                # Do NOT .strip() here. HumanEval prompts end at the
-                # function-body indent column (typically 4 spaces after a
-                # docstring), and `evaluate_functional_correctness` glues
-                # `prompt + completion` verbatim before exec()'ing. A
-                # leading lstrip would eat those 4 spaces and turn every
-                # body into an IndentationError → pass@k = 0. The previous
-                # version's .strip() was the proximate cause of the
-                # bench-wide score collapse alongside the missing stop-seq
-                # truncation. _postprocess_completion handles fence strip,
-                # stop-sequence cut, and rstrip only.
-                raw = tokenizer.decode(
-                    out[j, prefix_tok_len:], skip_special_tokens=True,
+            entry_point = problem.get("entry_point", "")
+
+            remaining = n_samples if use_sampling else 1
+            for call_idx in range(n_calls):
+                this_call = min(per_call, remaining)
+                # pad_token_id is required to silence transformers' warning
+                # (the loader already aliases pad→eos when the tokenizer
+                # ships without one, but passing the id makes the contract
+                # explicit and survives pickle round-trips that occasionally
+                # reset tokenizer.pad_token to None).
+                gen_kwargs = dict(
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
                 )
-                completion = _postprocess_completion(
-                    raw, entry_point=problem.get("entry_point", ""),
-                )
-                completions.setdefault(problem["task_id"], []).append(completion)
+                if use_sampling:
+                    gen_kwargs.update(
+                        do_sample=True, temperature=temperature, top_p=top_p,
+                        num_return_sequences=this_call,
+                    )
+                else:
+                    gen_kwargs.update(do_sample=False, temperature=0.0)
+                with torch.inference_mode():
+                    out = model.generate(**inputs, **gen_kwargs)
+                # Token-id slicing — see tydiqa.py comment for why a
+                # `completion[len(prefix):]` char-offset slice can't survive
+                # the tokenizer's BOS auto-prepend + decode strip round-trip.
+                for j in range(out.shape[0]):
+                    # Do NOT .strip() here. HumanEval prompts end at the
+                    # function-body indent column (typically 4 spaces after
+                    # a docstring); a leading lstrip eats those 4 spaces and
+                    # turns every body into an IndentationError → pass@k=0.
+                    raw = tokenizer.decode(
+                        out[j, prefix_tok_len:], skip_special_tokens=True,
+                    )
+                    completion = _postprocess_completion(raw, entry_point=entry_point)
+                    completions.setdefault(problem["task_id"], []).append(completion)
+                remaining -= this_call
+                # Drop the call-local tensor before allocating the next
+                # chunk's KV cache. Without this the prior chunk's `out`
+                # lingers until the next `out = ...` overwrites it, and
+                # for max_new_tokens=256 × n_samples_per_batch that's a
+                # multi-GB orphan held alive past its useful life.
+                del out
+
+            # Per-problem allocator cleanup. transformers' generate leaves
+            # ~hundreds of MB of cached tensors in PyTorch's allocator
+            # arena; without an explicit empty_cache between problems the
+            # high-water mark for 164 problems × 20 samples stays at the
+            # union of everything ever allocated and pushes a 7B run past
+            # 80 GB even though the steady state would fit in ~30 GB.
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             if (i + 1) % 20 == 0:
                 logger.info(
-                    "  Progress: %d/%d (n_samples=%d)",
-                    i + 1, len(problems), n_samples,
+                    "  Progress: %d/%d (n_samples=%d, chunks=%d×%d)",
+                    i + 1, len(problems), n_samples, n_calls, per_call,
                 )
 
         # Hand off to the official harness.

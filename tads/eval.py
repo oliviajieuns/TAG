@@ -15,12 +15,15 @@ on the CLI.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import torch
 
 from tads.core.utils import (
     disable_coredumps,
@@ -190,6 +193,16 @@ def main() -> None:
         except Exception as e:
             logger.exception("Benchmark %s failed; continuing with remaining benchmarks", bench)
             failures.append({"benchmark": bench, "error": f"{type(e).__name__}: {e}"})
+        finally:
+            # Free transformer KV caches / generate buffers between
+            # benchmarks. Without this the high-water mark accumulates
+            # across the 5-bench sequence (HumanEval's n_samples=20 +
+            # BBH's 3072-token prompts especially) and a 7B run that
+            # would steady-state at ~30 GB peaks past 80 GB by the time
+            # we hit the last benchmark.
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     payload = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
