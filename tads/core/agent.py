@@ -49,7 +49,12 @@ class ActorCritic(nn.Module):
     def get_action(self, states: torch.Tensor):
         alpha, beta, value = self.forward(states)
         dist = Beta(alpha, beta)
-        action = dist.sample()
+        # Clamp before log_prob: when alpha or beta is large the FP-rounded
+        # sample can land exactly at 0.0 or 1.0, sending log_prob to -inf and
+        # poisoning the stored old_log_prob — the next PPO update computes
+        # ratio = exp(new - old) = exp(+inf) = inf and NaNs propagate. Mirror
+        # the eps clamp used in ``evaluate`` so the two sides stay consistent.
+        action = dist.sample().clamp(min=1e-6, max=1.0 - 1e-6)
         return action, dist.log_prob(action), value
 
     def evaluate(self, states: torch.Tensor, actions: torch.Tensor):
@@ -168,8 +173,19 @@ class PPOAgent:
                     continue
 
                 log_prob, entropy, value = self.ac.evaluate(states[mb], actions[mb])
+                # ``advantages`` is already globally normalised (mean 0, std 1)
+                # by _compute_group_advantage / _compute_gae. The previous code
+                # ran a SECOND minibatch-local normalisation here, which:
+                #  - rebased advantages to a per-mb std that varies 0.1–10× the
+                #    global scale, so clip_eps=[0.8, 1.2] no longer corresponds
+                #    to the policy-update region the hyper-parameter was tuned
+                #    for; and
+                #  - collapsed to zero whenever a minibatch had near-uniform
+                #    rewards (std → 0, divisor → 1e-8 epsilon, adv_mb → 0),
+                #    silently killing the gradient signal for that step.
+                # Use the global advantages directly; PPO's mathematical
+                # justification requires a single normalisation per rollout.
                 adv_mb = advantages[mb]
-                adv_mb = (adv_mb - adv_mb.mean()) / (adv_mb.std() + 1e-8)
                 ratio = torch.exp(log_prob - old_log_probs[mb])
                 surr1 = ratio * adv_mb
                 surr2 = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * adv_mb
