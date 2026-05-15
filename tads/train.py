@@ -281,7 +281,9 @@ def main() -> None:
     # prompt_style so tokenisation caches stay distinct even if two configs
     # share the same data_cache root.
     model_key = str(cfg.get("model_key", "default"))
-    style_key = str(cfg.get("prompt_style", "alpaca_default"))
+    # `or` (not `get(..., default)`) so an empty-string or null YAML value
+    # falls back to alpaca_default instead of being passed down literally.
+    style_key = str(cfg.get("prompt_style") or "alpaca_default")
     effective_cache = os.path.join(
         str(cfg["data_cache"]), model_key, style_key,
     )

@@ -83,6 +83,12 @@ def compute_rewards(
     else:
         var_entropy = torch.tensor(0.0, device=device)
 
+    # The r_weight returned here is the WITHIN-BATCH weight. Callers using
+    # batch_size=1 (e.g. collect_episode with episode_batch_size=1) will see
+    # r_weight=0 because both variances collapse — selector.collect_episode
+    # recomputes a DATASET-LEVEL r_weight after the loop and discards this
+    # one. Document that here so a direct caller of compute_rewards doesn't
+    # accidentally use the per-batch weight as if it were paper Eq. 5.
     r_weight = var_loss / (var_loss + var_entropy + eps)
     return r_loss.detach(), r_entropy.detach(), r_weight.detach()
 

@@ -91,7 +91,11 @@ def main() -> None:
         max_seq_len=int(cfg["max_seq_len"]),
         dataset_name=cfg.get("dataset_name"),
         data_files=cfg.get("data_files"),
-        prompt_style=str(cfg.get("prompt_style", "alpaca_default")),
+        # `or "alpaca_default"` (not just `.get(..., "alpaca_default")`)
+        # so a YAML that sets prompt_style: "" or null falls back instead
+        # of passing the empty string down to tokenize_alpaca, which would
+        # then raise ValueError("Unknown prompt_style=''").
+        prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
     )
     logger.info("Dataset size: %d", len(dataset))
 

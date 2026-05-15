@@ -41,12 +41,25 @@ def _resolve_data_files(spec: str) -> Optional[str]:
         return spec
     parent = os.path.dirname(spec) or "."
     if os.path.isdir(parent):
-        for pat in ("*.json", "*.jsonl", "*.parquet"):
+        # Sibling fallback: the canonical case is an HF re-download where the
+        # filename hash changed (e.g. train-00000-of-00001-<hash>.json). Look
+        # for files whose basename STEM matches the requested basename's
+        # leading word — NOT "every .json in this directory", which would
+        # silently sweep in valid.json / test.json / cached preprocessing
+        # artifacts and contaminate the training set.
+        want_stem = os.path.splitext(os.path.basename(spec))[0]
+        # Take the first hyphen-separated token, e.g. "train" out of
+        # "train-00000-of-00001-deadbeef". Falls back to the whole stem
+        # when the filename has no hyphen.
+        head = want_stem.split("-", 1)[0] if "-" in want_stem else want_stem
+        for pat in (f"{head}*.json", f"{head}*.jsonl", f"{head}*.parquet"):
             matches = sorted(glob.glob(os.path.join(parent, pat)))
             if matches:
                 logger.warning(
-                    "ALPACA_DATA_FILES=%r not found; using sibling fallback %s (%d files)",
-                    spec, os.path.join(parent, pat), len(matches),
+                    "ALPACA_DATA_FILES=%r not found; using sibling fallback "
+                    "matching basename prefix %r → %d file(s): %s",
+                    spec, head, len(matches),
+                    matches if len(matches) <= 3 else f"{matches[:3]} +({len(matches) - 3} more)",
                 )
                 return ",".join(matches)
     return None
