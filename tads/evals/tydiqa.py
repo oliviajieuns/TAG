@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import string
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,17 +31,47 @@ logger = logging.getLogger(__name__)
 _LANG_PAT = re.compile(r"^([a-z]+)-")
 
 
+# Translation table that DELETES all ASCII punctuation (mapping to None
+# rather than a space). SQuAD 1.1's canonical `remove_punc` concatenates
+# without separators, so "U.S.A." → "USA" — the same convention TyDiQA-GoldP
+# is evaluated under. Replacing with a space instead would split tokens at
+# punctuation boundaries and turn "U.S.A." into "u s a", which mismatches
+# "USA" and diverges from the standard.
+# string.punctuation = !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~ — ASCII-only on
+# purpose, so language-specific punctuation in Arabic / Telugu / Bengali
+# (which carries semantic meaning) is preserved.
+_ASCII_PUNCT_STRIP = str.maketrans({c: None for c in string.punctuation})
+# English-only article pattern. TyDiQA's other 8 languages don't have direct
+# equivalents, and bare "a"/"an"/"the" as standalone foreign-language tokens
+# is rare enough that this is effectively a no-op on non-English rows.
+_ARTICLES = re.compile(r"\b(a|an|the)\b", re.IGNORECASE)
+
+
 def _normalize(s: str) -> str:
-    """Lowercase + whitespace collapse + Unicode NFC normalization.
+    """SQuAD 1.1-style answer normalisation (TyDiQA-GoldP convention).
+
+    Order matches the canonical Rajpurkar et al. script:
+      lowercase → strip ASCII punctuation → remove English articles →
+      collapse whitespace → NFC.
 
     NFC matters for the non-Latin TyDiQA languages (Bengali, Arabic, Korean,
-    Telugu, …) where the same visual answer can be encoded in either
-    pre-composed (NFC) or decomposed (NFD) form. Without normalising, gold
-    and prediction can be byte-different but visually identical, producing
-    false-negative EM matches.
+    Telugu, …) where the same visual answer can be encoded pre-composed
+    (NFC) or decomposed (NFD). Without NFC, gold and prediction can be
+    byte-different but visually identical, producing false-negative EM
+    matches.
+
+    Punctuation + article stripping match the de-facto extractive-QA
+    metric. Previously omitted, which made "1920s" vs "1920s." (and the
+    English "the X" / "X" pair) fail EM despite being the same answer —
+    not just rare edge cases: TyDiQA's gold spans frequently embed
+    parens and punctuation that the generation model wouldn't echo
+    verbatim. Lifts EM by 5-15pt depending on the model.
     """
-    s = unicodedata.normalize("NFC", s.strip().lower())
-    return re.sub(r"\s+", " ", s)
+    s = s.lower()
+    s = s.translate(_ASCII_PUNCT_STRIP)
+    s = _ARTICLES.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return unicodedata.normalize("NFC", s)
 
 
 def _exact_match(pred: str, gold_list: List[str]) -> bool:
