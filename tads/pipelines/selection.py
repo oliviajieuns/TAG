@@ -57,7 +57,7 @@ def _random_indices(n_total, ratio, seed, epoch):
     return perm[:k]
 
 
-def _broadcast_selection(selected, *, epoch=0, output_dir=None):
+def _broadcast_selection(selected, *, epoch=0, output_dir=None, device=None):
     """File-poll selection share — no inter-write/read NCCL barrier.
 
     Every rank takes the same code path:
@@ -125,10 +125,20 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None):
         )
         result = selected
     else:
-        # Workers poll on disk. No NCCL collective during the wait, so
-        # rank 0's long collect_episode can't trigger a collective watchdog.
+        # Workers poll on disk for the ready sentinel. To keep the NCCL
+        # communicator alive across rank 0's long collect_episode (otherwise
+        # the heartbeat watchdog marks it dead and the first SFT all_reduce
+        # hangs), workers also fire a dummy all_reduce every 30 s — matching
+        # the cadence rank 0 uses inside collect_episode. NCCL only needs
+        # the matching call to land within its 120-minute timeout window.
+        _HEARTBEAT_INTERVAL_S = 30.0
+        _use_heartbeat = device is not None and dist.is_initialized()
+        _hb_dummy = (
+            torch.zeros(1, device=device) if _use_heartbeat else None
+        )
         t_start = time.time()
         last_log = t_start
+        last_hb = t_start
         while not ready_path.exists():
             now = time.time()
             if now - t_start > _POLL_TIMEOUT_SEC:
@@ -143,6 +153,14 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None):
                     r, now - t_start,
                 )
                 last_log = now
+            if _use_heartbeat and (now - last_hb) > _HEARTBEAT_INTERVAL_S:
+                try:
+                    dist.all_reduce(_hb_dummy, op=dist.ReduceOp.SUM)
+                    last_hb = time.time()
+                except Exception as _e:
+                    logger.warning(
+                        "[sel-share] rank=%d NCCL heartbeat failed: %s", r, _e,
+                    )
             time.sleep(_POLL_INTERVAL_SEC)
 
         if not sel_path.exists():
@@ -231,6 +249,7 @@ def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, d
                     selected = _broadcast_selection(
                         selected, epoch=epoch,
                         output_dir=_output_dir_raw,
+                        device=device,
                     )
                     extras["selection_cache_reused"] = True
                     return selected, extras
@@ -323,7 +342,7 @@ def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, d
         or "/tmp/tads_selection_share"
     )
     selected = _broadcast_selection(
-        selected, epoch=epoch, output_dir=_output_dir,
+        selected, epoch=epoch, output_dir=_output_dir, device=device,
     )
     return selected, extras
 
