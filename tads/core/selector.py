@@ -94,6 +94,12 @@ def collect_episode(
     new ~1 GB block can't be placed even though gross free memory is high.
     """
     torch.manual_seed(seed + epoch)
+    # Remember the caller's training mode so we can restore it on exit;
+    # otherwise model stays in eval() through the entire SFT phase, which
+    # is currently fine (no BN/dropout that depends on mode) but silently
+    # wrong if either is added later.
+    _was_training = model.training
+    _agent_was_training = agent.ac.training
     model.eval()
     agent.ac.eval()
     # KV cache adds nothing during a feed-forward pass and just leaks memory
@@ -350,6 +356,14 @@ def collect_episode(
 
     r_loss_mean = float(all_r_loss.mean().item())
     r_entropy_mean = float(all_r_entropy.mean().item())
+
+    # Restore the caller's training mode. Currently a no-op for downstream
+    # behaviour (sft_one_epoch calls model.train() anyway), but cheap and
+    # makes selector.py safe to reuse outside the main training loop.
+    if _was_training:
+        model.train()
+    if _agent_was_training:
+        agent.ac.train()
 
     # No use_cache restore here: the loader pins use_cache=False once at
     # model construction (when gradient_checkpointing is on) and the

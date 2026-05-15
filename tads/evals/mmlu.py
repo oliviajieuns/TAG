@@ -152,6 +152,11 @@ class MMLUEvaluator(BenchmarkEvaluator):
         logger.info("MMLU: %d subjects | limit=%s", len(subjects), limit)
 
         results = []
+        # Track truncation once per run (don't spam): a 2048-token cap can
+        # decapitate the prompt prefix when a Qwen ChatML 5-shot template is
+        # verbose, and a chopped few-shot is silently downgraded to (1..4)-shot.
+        _trunc_warned = False
+        _trunc_count = 0
         for subject in subjects:
             dev_examples = dev_df[dev_df["subject"] == subject].to_dict("records")[:num_fewshot]
             test_examples = test_df[test_df["subject"] == subject].to_dict("records")
@@ -161,6 +166,20 @@ class MMLUEvaluator(BenchmarkEvaluator):
             correct, total = 0, 0
             for ex in test_examples:
                 prompt = _build_few_shot_prompt(dev_examples, ex, subject)
+                # Tokenise once without truncation to measure the real length;
+                # only the truncated version is fed to the model.
+                full_ids = tokenizer(prompt, return_tensors="pt").input_ids
+                if full_ids.shape[1] > 2048:
+                    _trunc_count += 1
+                    if not _trunc_warned:
+                        logger.warning(
+                            "MMLU: prompt length %d > max_length 2048 — "
+                            "the 5-shot prefix is being clipped on the LEFT, "
+                            "which silently degrades few-shot quality. "
+                            "Subject=%s. (Further occurrences counted but not logged.)",
+                            full_ids.shape[1], subject,
+                        )
+                        _trunc_warned = True
                 inputs = tokenizer(
                     prompt, return_tensors="pt", truncation=True, max_length=2048,
                 ).to(device)
@@ -181,11 +200,18 @@ class MMLUEvaluator(BenchmarkEvaluator):
         total_correct = sum(r["correct"] for r in results)
         total_total = sum(r["total"] for r in results)
         overall = total_correct / total_total if total_total else 0.0
+        if _trunc_count > 0:
+            logger.warning(
+                "MMLU: %d / %d test examples had their 5-shot prefix "
+                "truncated. Score may be lower than the paper's number.",
+                _trunc_count, total_total,
+            )
         summary = {
             "overall_accuracy": overall,
             "total_correct": total_correct,
             "total_questions": total_total,
             "num_subjects": len(results),
+            "truncated_prompts": _trunc_count,
             "per_subject": results,
             "benchmark": "mmlu",
         }

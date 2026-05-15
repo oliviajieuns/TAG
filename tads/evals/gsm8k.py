@@ -81,6 +81,14 @@ class GSM8KEvaluator(BenchmarkEvaluator):
                 f"Expected `test.parquet` or `test-00000-of-00001.parquet`."
             )
         df = pd.read_parquet(test_path)
+        # GSM8K canonical schema. Validate up-front so we fail with a
+        # specific message instead of a downstream KeyError on ex["question"].
+        _missing = [c for c in ("question", "answer") if c not in df.columns]
+        if _missing:
+            raise ValueError(
+                f"GSM8K parquet at {test_path} missing required column(s) "
+                f"{_missing}. Got columns: {list(df.columns)}",
+            )
         test_data = df.to_dict("records")
         if limit is not None:
             test_data = test_data[:limit]

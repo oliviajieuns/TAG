@@ -39,8 +39,15 @@ logger = logging.getLogger(__name__)
 #   2) trailing "Answer: X"                            (alt form)
 #   3) last non-empty line                             (last-resort)
 _ANSWER_PATTERNS = [
-    re.compile(r"(?:so\s+)?the\s+answer\s+is[:\s]+([^\.\n]+)", re.IGNORECASE),
-    re.compile(r"^\s*answer\s*[:=]\s*([^\.\n]+)", re.IGNORECASE | re.MULTILINE),
+    # Non-greedy capture so "The answer is True. However, ..." → "True"
+    # rather than "True. However, " — the greedy version was pulling
+    # trailing prose into the canonical-label fallback and occasionally
+    # missing the label entirely. The terminator class still rejects
+    # period and newline so we stop at sentence boundary.
+    re.compile(r"(?:so\s+)?the\s+answer\s+is[:\s]+([^\.\n]+?)(?=[\.\n]|$)",
+               re.IGNORECASE),
+    re.compile(r"^\s*answer\s*[:=]\s*([^\.\n]+?)(?=[\.\n]|$)",
+               re.IGNORECASE | re.MULTILINE),
 ]
 
 # After fallback extraction we additionally try to recover the canonical BBH
