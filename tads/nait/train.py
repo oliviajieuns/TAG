@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from torch.utils.data import Subset
 from tads.core.schedulers import get_cosine_schedule_with_warmup
-from tads.core.utils import load_config, set_seed, setup_logger
+from tads.core.utils import disable_coredumps, load_config, set_seed, setup_logger
 from tads.data.alpaca import build_alpaca_dataset
 from tads.modeling.loader import load_model, load_tokenizer
 from tads.nait.direction import (
@@ -41,6 +41,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Cap RLIMIT_CORE on this process — see tads.train.main for rationale.
+    disable_coredumps()
+
     # OFFLINE BY DEFAULT — see tads.train.main for rationale.
     import os as _os
     _os.environ.setdefault("HF_DATASETS_OFFLINE", "1")

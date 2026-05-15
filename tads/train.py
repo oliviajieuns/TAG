@@ -44,6 +44,7 @@ from tads.core.agent import PPOAgent
 from tads.core.trajectory_anchor import TrajectoryAnchor
 from tads.core.utils import (
     cuda_mem_str,
+    disable_coredumps,
     is_main_process,
     load_config,
     local_rank,
@@ -152,6 +153,14 @@ def _setup_ddp() -> bool:
 
 
 def main() -> None:
+    # Cap RLIMIT_CORE on this process and all forks (torchrun spawns).
+    # The shell-level `ulimit -c 0` in setup_env.sh only protects launches
+    # that actually sourced it; cron / tmux-reopen / fresh-login flows
+    # bypass it and a single segfaulting 7B-DDP rank then drops ~240 GB
+    # of core onto the 50 GB user-volume, ENOSPC'ing everything else.
+    # Enforce from Python so the shell isn't load-bearing.
+    disable_coredumps()
+
     # OFFLINE BY DEFAULT — every model / tokenizer / dataset must be on local
     # disk. The HF datasets / hub / transformers libraries otherwise reach
     # over the network even when the data file is local (metadata refresh,

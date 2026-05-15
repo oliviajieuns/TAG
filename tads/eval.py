@@ -22,7 +22,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tads.core.utils import load_config, quiet_repeated_warnings, setup_logger
+from tads.core.utils import (
+    disable_coredumps,
+    load_config,
+    quiet_repeated_warnings,
+    setup_logger,
+)
 from tads.evals import get_evaluator, list_evaluators
 from tads.modeling.loader import load_for_eval
 
@@ -67,6 +72,11 @@ def _data_dir_for(
 
 
 def main() -> None:
+    # Cap RLIMIT_CORE on this process and forks — see tads.train.main for
+    # rationale. Eval rarely segfaults but if it does (CUDA OOM, model
+    # load mismatch) the dump is still ~250 GB worth of bf16 weights.
+    disable_coredumps()
+
     # OFFLINE BY DEFAULT — see tads.train.main for rationale.
     os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
     os.environ.setdefault("HF_HUB_OFFLINE", "1")

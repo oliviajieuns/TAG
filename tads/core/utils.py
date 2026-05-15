@@ -70,6 +70,39 @@ def quiet_repeated_warnings(
     warnings.simplefilter("default")
 
 
+# ----------------------------------------------------------------- coredumps
+def disable_coredumps() -> None:
+    """Set RLIMIT_CORE to (0, 0) on the current process and its children.
+
+    Why this lives in Python (not just scripts/setup_env.sh's ``ulimit -c 0``):
+    a single 7B-DDP rank that segfaults dumps its full virtual address space
+    — model weights + bnb 8-bit optimiser state + grad buffers + CUDA-mapped
+    VRAM — and ends up around 240 GB per rank. With 4 ranks that's ~1 TB
+    landing on the 50 GB user-volume, which then ENOSPC's everything else.
+
+    The shell-level ``ulimit -c 0`` works ONLY if the user actually sourced
+    setup_env.sh in the launching shell. Real cluster launches (cron jobs,
+    tmux sessions reopened later, `python -m tads.train` started from a
+    fresh login) frequently skip that. Enforce the limit from inside the
+    Python entry point so it can't be bypassed.
+
+    Opt out (debugging) by exporting ``TADS_ENABLE_COREDUMPS=1`` before
+    launching — matches the setup_env.sh contract.
+
+    Cross-platform: ``resource`` is POSIX-only. No-op on Windows.
+    """
+    if os.environ.get("TADS_ENABLE_COREDUMPS", "0") == "1":
+        return
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ImportError, ValueError, OSError):
+        # ImportError: Windows. ValueError/OSError: hardened systems where
+        # the soft limit can't be lowered (rare). Either way the worst case
+        # is the legacy shell-level ulimit takes over.
+        pass
+
+
 # ---------------------------------------------------------------------- seed
 def set_seed(seed: int) -> None:
     """Seed Python, NumPy, and (CUDA) PyTorch."""
