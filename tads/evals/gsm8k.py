@@ -121,6 +121,7 @@ class GSM8KEvaluator(BenchmarkEvaluator):
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
                 temperature=0.0,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
             )
             response = tokenizer.decode(out[0], skip_special_tokens=True)
             response = response[len(prompt):].strip()

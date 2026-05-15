@@ -76,7 +76,15 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             inputs = tokenizer(
                 prefix, return_tensors="pt", truncation=True, max_length=2048,
             ).to(device)
-            gen_kwargs = dict(max_new_tokens=max_new_tokens)
+            # pad_token_id is required to silence transformers' warning on
+            # every generate() call (the loader already aliases pad→eos when
+            # the tokenizer ships without an explicit pad token, but passing
+            # the id makes the contract explicit and survives pickle round-
+            # trips that occasionally reset tokenizer.pad_token to None).
+            gen_kwargs = dict(
+                max_new_tokens=max_new_tokens,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+            )
             if use_sampling:
                 gen_kwargs.update(
                     do_sample=True, temperature=temperature, top_p=top_p,
