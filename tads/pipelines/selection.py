@@ -329,8 +329,20 @@ def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, d
 
 
 def save_selection(output_dir, epoch, selected):
+    """Persist the per-epoch selection for resume-time cache reuse.
+
+    Atomic tmp + fsync + rename so a crash mid-write does not leave a
+    truncated JSON behind — the cache-reuse path in ``select_indices``
+    would otherwise hit json.JSONDecodeError on the next run and fall
+    back to the 30-min collect_episode unnecessarily.
+    """
     if not is_main_process():
         return
     output_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_dir / ("selected_indices_epoch" + str(epoch) + ".json"), "w") as f:
+    final = output_dir / f"selected_indices_epoch{epoch}.json"
+    tmp = final.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
         json.dump(selected, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, final)

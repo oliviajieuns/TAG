@@ -80,6 +80,7 @@ def load_model(
     dtype: torch.dtype = torch.bfloat16,
     gradient_checkpointing: bool = True,
     attn_implementation: Optional[str] = None,
+    adapter_path: Optional[str] = None,
 ):
     """Load a causal-LM model for training.
 
@@ -142,8 +143,24 @@ def load_model(
     if training_mode == "lora":
         from peft import get_peft_model  # lazy: only imported for LoRA
         from .lora import build_lora_config
-        config = build_lora_config(lora_cfg)
-        model = get_peft_model(base, config)
+        if adapter_path is not None:
+            # Resume from a saved LoRA adapter directory (PeftModel.save_pretrained
+            # writes adapter_config.json + adapter_model.* into the epoch dir).
+            # Build a PeftModel from those files rather than re-init a fresh
+            # adapter via get_peft_model — that path discards every LoRA weight
+            # the previous run learned.
+            from peft import PeftModel
+            adapter_path_resolved = _resolve_local_path(adapter_path)
+            logger.info(
+                "Resuming LoRA adapter from %s (base from %s)",
+                adapter_path_resolved, model_path,
+            )
+            model = PeftModel.from_pretrained(
+                base, adapter_path_resolved, is_trainable=True,
+            )
+        else:
+            config = build_lora_config(lora_cfg)
+            model = get_peft_model(base, config)
         if is_main_process():
             model.print_trainable_parameters()
     elif training_mode == "full":

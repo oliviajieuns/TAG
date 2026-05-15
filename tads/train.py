@@ -255,6 +255,36 @@ def main() -> None:
         logger.info("Loading model from: %s", model_load_path)
 
     training_mode = str(cfg.get("training_mode", "full"))
+    # If we're resuming, the checkpoint dir's contents are the source of
+    # truth for training_mode — a LoRA epoch dir has only
+    # ``adapter_config.json`` (no full weights), and a full-FT dir has
+    # ``config.json``. A config-vs-checkpoint mismatch used to silently
+    # send full-FT through the LoRA path (or vice versa), producing
+    # cryptic load errors a few lines later. Auto-correct + warn so the
+    # resume actually picks up where the previous run left off.
+    _adapter_path: Optional[str] = None
+    if resume_ckpt is not None:
+        _resume_path = Path(resume_ckpt)
+        _has_adapter = (_resume_path / "adapter_config.json").exists()
+        _has_full = (_resume_path / "config.json").exists() and not _has_adapter
+        _detected = "lora" if _has_adapter else ("full" if _has_full else None)
+        if _detected is not None and _detected != training_mode:
+            if is_main_process():
+                logger.warning(
+                    "training_mode=%r in config disagrees with resume checkpoint "
+                    "(%s contains %s). Overriding to %r to match the checkpoint.",
+                    training_mode, resume_ckpt,
+                    "adapter_config.json (LoRA)" if _has_adapter else "config.json (full)",
+                    _detected,
+                )
+            training_mode = _detected
+        # LoRA epoch dirs only contain the adapter — base weights must come
+        # from cfg["model_path"]. Route the resume_ckpt as adapter_path and
+        # reset model_load_path back to the base. Full-FT epoch dirs hold
+        # the whole model so model_load_path stays pointed at them.
+        if training_mode == "lora" and _has_adapter:
+            _adapter_path = str(resume_ckpt)
+            model_load_path = cfg["model_path"]
     model = load_model(
         model_load_path,
         training_mode=training_mode,
@@ -263,6 +293,7 @@ def main() -> None:
         local_rank=local_rank(),
         gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
         attn_implementation=cfg.get("attn_implementation"),
+        adapter_path=_adapter_path,
     )
     device = (
         torch.device(f"cuda:{local_rank()}") if torch.cuda.is_available()
