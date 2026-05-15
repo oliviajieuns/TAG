@@ -86,7 +86,19 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None):
 
     if r == SRC:
         # Clean up any stale sentinel from a previous run before writing.
-        for stale in (ready_path, ready_tmp):
+        # Also sweep PRIOR epochs' broadcast files (epoch-1, epoch-2, ...) —
+        # we deferred cleanup of those from each epoch's exit (see the
+        # NOTE at the bottom of this function) to avoid racing workers
+        # that hadn't finished reading the broadcast yet. By the time
+        # we re-enter for the next epoch, every worker has definitely
+        # moved past the read, so the prior epoch's files are safe to
+        # remove now. Limit the sweep to 4 prior epochs to keep the
+        # syscall cost bounded.
+        prior_stale = [ready_path, ready_tmp]
+        for prior_epoch in range(max(0, epoch - 4), epoch):
+            prior_stale.append(base / f"_selection_epoch{prior_epoch}.json")
+            prior_stale.append(base / f"_selection_epoch{prior_epoch}.ready")
+        for stale in prior_stale:
             try:
                 stale.unlink()
             except FileNotFoundError:
@@ -172,13 +184,14 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None):
         flush=True,
     )
 
-    if r == SRC:
-        # Best-effort cleanup; missing files are fine.
-        for stale in (sel_path, ready_path):
-            try:
-                stale.unlink()
-            except FileNotFoundError:
-                pass
+    # NOTE: we used to unlink sel_path + ready_path here on rank 0, but that
+    # raced with workers reading the same files — rank 0's cleanup could fire
+    # in the ~1 ms between the worker's `ready_path.exists()` check and its
+    # subsequent `sel_path.exists()` / json.load(), surfacing as
+    # "ready sentinel present but selection file missing" or a JSONDecodeError
+    # several minutes into SFT. Without a barrier (intentionally removed; see
+    # comment above) we can't safely cleanup until everyone has moved on.
+    # The next epoch's entry sweeps prior epochs' files instead.
 
     return result
 
