@@ -2,7 +2,17 @@
 
 Computes per-layer ``Δh = h_last - h_first`` over a seed JSON, fits a
 top-1 PCA direction (sign-calibrated), and scores candidate samples by
-mean-pooled projection onto that direction.
+the same Δh projection onto that direction (paper Eq 5:
+``s_y = Σ_l ⟨Δh_l(y), v_l⟩``).
+
+The seed and candidate sides must use the SAME definition of the
+contextualization vector — the directions were fitted on Δh variance,
+so projecting anything else (mean-pooled hidden state, last-token
+hidden state alone, etc.) onto v_l is not the inner product the paper
+defines and produces a different ranking. The TADS variant in
+``tads/core/trajectory_anchor.py`` follows the same Δh convention on
+both sides; keeping this file aligned avoids method-vs-method
+inconsistencies in the main 7B matrix.
 
 This module deduplicates the ``extract_delta_from_seed`` definitions in
 the original ``train_nait_v2.py`` (which had two identical copies).
@@ -108,7 +118,13 @@ def score_candidates(
     batch_size: int = 4,
     logger: Optional[logging.Logger] = None,
 ) -> torch.Tensor:
-    """Mean-pooled hidden state projected onto each direction; sum across layers."""
+    """Per-sample contextualization score s_y = Σ_l ⟨Δh_l, v_l⟩ (paper Eq 5).
+
+    ``Δh_l(y) = h_l[last-non-pad-token] - h_l[first-token]`` for sample y at
+    layer l. ``v_l`` was fitted on this same Δh quantity over the seed set
+    in :func:`fit_directions`, so projecting Δh — not mean-pooled hidden
+    state — is what the principal direction is defined against.
+    """
     model.eval()
     loader = DataLoader(
         dataset,
@@ -129,16 +145,19 @@ def score_candidates(
             output_hidden_states=True,
         )
         hidden_states = outputs.hidden_states
-        lengths = attention_mask.sum(dim=1).clamp_min(1)
+        # Index of the last non-pad token per row (clamp_min(1) - 1).
+        last_idx = attention_mask.sum(dim=1).clamp_min(1) - 1
+        bidx = torch.arange(input_ids.size(0), device=input_ids.device)
         batch_scores = torch.zeros(input_ids.size(0))
 
         for l, v_l in directions.items():
             actual_l = l if l >= 0 else len(hidden_states) + l
             h = hidden_states[actual_l].float()
-            mask = attention_mask.unsqueeze(-1).float()
-            mean_h = (h * mask).sum(dim=1) / lengths.unsqueeze(-1).float()
+            first_h = h[:, 0, :]                  # (B, H)
+            last_h = h[bidx, last_idx, :]         # (B, H)
+            delta = last_h - first_h              # (B, H)
             v_l_gpu = v_l.to(h.device)
-            batch_scores += (mean_h @ v_l_gpu).cpu()
+            batch_scores += (delta @ v_l_gpu).cpu()
 
         scores.append(batch_scores)
         del outputs, hidden_states
