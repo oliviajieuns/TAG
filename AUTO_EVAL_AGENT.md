@@ -64,22 +64,22 @@ treatment (data_agent_10, tads_10)  ← 위 둘 사이 어디쯤이어야 정상
 
 | # | 모델 | 메서드 | Role | Config (학습/eval 공용) | 체크포인트 루트 | 결과 디렉터리 | `experiment_label` | 비교 대상 / 발산 알람 |
 |---|---|---|---|---|---|---|---|---|
-| 1 | llama2 | full_100 | **BASE-FULL** | `configs/experiments/main_7b/llama2/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/full_100/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/full_100/` | `llama2_full_100` | 기준선 (천장). 절대값 자체가 sanity 체크 — 평균 정확도가 동급 reference 대비 5%p 이상 낮으면 학습 자체 의심 |
-| 2 | llama2 | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/llama2/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/random_10/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/random_10/` | `llama2_random_10` | 기준선 (바닥). 보통 BASE-FULL 대비 3~8%p 처짐이 정상 |
-| 3 | llama2 | data_agent_10 | treat | `configs/experiments/main_7b/llama2/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/data_agent_10/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/data_agent_10/` | `llama2_data_agent_10` | vs `llama2_random_10` (반드시 ≥), vs `llama2_full_100` (≤이지만 -2%p 이내 권장) |
-| 4 | llama2 | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/llama2/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/tads_10/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/tads_10/` | `llama2_tads_10` | vs `llama2_random_10` (반드시 ≥, -1%p 처지면 **빨간불**), vs `llama2_data_agent_10` (≥ 권장), vs `llama2_full_100` (-5%p 이상 처지면 **노란불**) |
-| 5 | qwen25 | full_100 | **BASE-FULL** | `configs/experiments/main_7b/qwen25/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/full_100/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/full_100/` | `qwen25_full_100` | 기준선 (천장) |
-| 6 | qwen25 | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/qwen25/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/random_10/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/random_10/` | `qwen25_random_10` | 기준선 (바닥) |
-| 7 | qwen25 | data_agent_10 | treat | `configs/experiments/main_7b/qwen25/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/data_agent_10/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/` | `qwen25_data_agent_10` | vs `qwen25_random_10` / `qwen25_full_100` (위 #3 규칙) |
-| 8 | qwen25 | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/qwen25/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/tads_10/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/tads_10/` | `qwen25_tads_10` | vs `qwen25_random_10` / `qwen25_data_agent_10` / `qwen25_full_100` (위 #4 규칙) |
-| 9 | mistral | full_100 | **BASE-FULL** | `configs/experiments/main_7b/mistral/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/full_100/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/full_100/` | `mistral_full_100` | 기준선 (천장) |
-| 10 | mistral | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/mistral/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/random_10/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/random_10/` | `mistral_random_10` | 기준선 (바닥) |
-| 11 | mistral | data_agent_10 | treat | `configs/experiments/main_7b/mistral/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/data_agent_10/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/data_agent_10/` | `mistral_data_agent_10` | vs `mistral_random_10` / `mistral_full_100` (위 #3 규칙) |
-| 12 | mistral | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/mistral/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/tads_10/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/tads_10/` | `mistral_tads_10` | vs `mistral_random_10` / `mistral_data_agent_10` / `mistral_full_100` (위 #4 규칙) |
-| 13 | deepseek | full_100 | **BASE-FULL** | `configs/experiments/main_7b/deepseek/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/full_100/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/full_100/` | `deepseek_full_100` | 기준선 (천장) |
-| 14 | deepseek | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/deepseek/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/random_10/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/random_10/` | `deepseek_random_10` | 기준선 (바닥) |
-| 15 | deepseek | data_agent_10 | treat | `configs/experiments/main_7b/deepseek/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/data_agent_10/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/data_agent_10/` | `deepseek_data_agent_10` | vs `deepseek_random_10` / `deepseek_full_100` (위 #3 규칙) |
-| 16 | deepseek | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/deepseek/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/tads_10/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/tads_10/` | `deepseek_tads_10` | vs `deepseek_random_10` / `deepseek_data_agent_10` / `deepseek_full_100` (위 #4 규칙) |
+| 1 | llama2 | full_100 | **BASE-FULL** | `configs/experiments/main_7b/llama2/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/full_100/` | `llama2_full_100` | 기준선 (천장). 절대값 자체가 sanity 체크 — 평균 정확도가 동급 reference 대비 5%p 이상 낮으면 학습 자체 의심 |
+| 2 | llama2 | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/llama2/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/random_10/` | `llama2_random_10` | 기준선 (바닥). 보통 BASE-FULL 대비 3~8%p 처짐이 정상 |
+| 3 | llama2 | data_agent_10 | treat | `configs/experiments/main_7b/llama2/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/data_agent_10/` | `llama2_data_agent_10` | vs `llama2_random_10` (반드시 ≥), vs `llama2_full_100` (≤이지만 -2%p 이내 권장) |
+| 4 | llama2 | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/llama2/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/tads_10/` | `llama2_tads_10` | vs `llama2_random_10` (반드시 ≥, -1%p 처지면 **빨간불**), vs `llama2_data_agent_10` (≥ 권장), vs `llama2_full_100` (-5%p 이상 처지면 **노란불**) |
+| 5 | qwen25 | full_100 | **BASE-FULL** | `configs/experiments/main_7b/qwen25/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/full_100/` | `qwen25_full_100` | 기준선 (천장) |
+| 6 | qwen25 | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/qwen25/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/random_10/` | `qwen25_random_10` | 기준선 (바닥) |
+| 7 | qwen25 | data_agent_10 | treat | `configs/experiments/main_7b/qwen25/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/` | `qwen25_data_agent_10` | vs `qwen25_random_10` / `qwen25_full_100` (위 #3 규칙) |
+| 8 | qwen25 | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/qwen25/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/tads_10/` | `qwen25_tads_10` | vs `qwen25_random_10` / `qwen25_data_agent_10` / `qwen25_full_100` (위 #4 규칙) |
+| 9 | mistral | full_100 | **BASE-FULL** | `configs/experiments/main_7b/mistral/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/full_100/` | `mistral_full_100` | 기준선 (천장) |
+| 10 | mistral | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/mistral/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/random_10/` | `mistral_random_10` | 기준선 (바닥) |
+| 11 | mistral | data_agent_10 | treat | `configs/experiments/main_7b/mistral/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/data_agent_10/` | `mistral_data_agent_10` | vs `mistral_random_10` / `mistral_full_100` (위 #3 규칙) |
+| 12 | mistral | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/mistral/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/tads_10/` | `mistral_tads_10` | vs `mistral_random_10` / `mistral_data_agent_10` / `mistral_full_100` (위 #4 규칙) |
+| 13 | deepseek | full_100 | **BASE-FULL** | `configs/experiments/main_7b/deepseek/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/full_100/` | `deepseek_full_100` | 기준선 (천장) |
+| 14 | deepseek | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/deepseek/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/random_10/` | `deepseek_random_10` | 기준선 (바닥) |
+| 15 | deepseek | data_agent_10 | treat | `configs/experiments/main_7b/deepseek/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/data_agent_10/` | `deepseek_data_agent_10` | vs `deepseek_random_10` / `deepseek_full_100` (위 #3 규칙) |
+| 16 | deepseek | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/deepseek/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/tads_10/` | `deepseek_tads_10` | vs `deepseek_random_10` / `deepseek_data_agent_10` / `deepseek_full_100` (위 #4 규칙) |
 
 > 모든 config 파일은 로컬에 실제로 존재함을 확인함. `random_50 / data_agent_50 / tads_50`도 디스크엔 있지만 **이번 매트릭스 범위 밖**이므로 자동 eval에서 제외.
 
@@ -245,19 +245,63 @@ source scripts/setup_env.sh
 
 ## 3. Checkpoint Layout (어디서 새 체크포인트를 찾을지)
 
-### 3-1. 현재 main matrix (이게 메인 타깃)
+### 3-1. 현재 main matrix — **history-preserving run-layout** (메인 타깃)
+
+`feature/run-layout` (커밋 `358cf11`) 이후로 학습은 매 호출마다 별도의 `runs/<tag>/`
+서브디렉터리에 떨어진다. 이전 체크포인트는 절대 덮어쓰지 않으며, 가장 최근 run은
+`_latest` 포인터가 가리킨다.
 
 ```
-${OUTPUT_ROOT}/main_7b/<model>/<method>/epoch_<N>/
+${OUTPUT_ROOT}/main_7b/<model>/<method>/
+├── runs/
+│   ├── 20260515_180000/                ← 첫 학습 (auto-timestamp tag)
+│   │   ├── cfg.yaml + cfg.json         ← 사용된 모든 하이퍼파라미터 스냅샷
+│   │   ├── epoch_1/, epoch_2/, epoch_3/
+│   │   │   ├── _complete               ← 저장 성공 시에만 생기는 sentinel
+│   │   │   ├── env_meta.json           ← torch / bitsandbytes 버전
+│   │   │   ├── optimizer.pt, scheduler.pt
+│   │   │   └── (model.safetensors 등 HF 표준)
+│   │   ├── metrics.json
+│   │   └── selected_indices_epoch{N}.json
+│   ├── 20260515_193000_lr5e5/          ← 같은 셀에 파라미터 튜닝 재학습
+│   └── 20260516_080000_anchor_all/
+└── _latest -> runs/20260516_080000_anchor_all/   ← 항상 최신 가리킴 (symlink)
 ```
 
 - `<model>` ∈ {`llama2`, `qwen25`, `mistral`, `deepseek`}
 - `<method>` ∈ {`full_100`, `random_10`, `data_agent_10`, `tads_10`} (또는 `_50` 변형)
-- `<N>` = 에폭 번호. **가장 큰 N**(`ls -1d epoch_* | sort -V | tail -n 1`)이 최신.
+- 매 sealed epoch 저장 후 `_latest` 포인터가 atomic하게 갱신됨 (학습 중 eval 가능).
+- symlink 불가 FS는 `_latest.txt` (run_tag 한 줄)로 fallback.
+- **eval은 항상 `_latest` 기준** — 사용자가 새 튜닝 잡을 띄우면 자동으로 새 결과가 평가됨.
 
 대응 config: `configs/experiments/main_7b/<model>/<method>.yaml`
 
-### 3-2. Legacy 7b_fullft (구버전, 보통은 건드릴 일 없음)
+**최신 epoch 찾는 정식 방법**:
+```bash
+ckpt_root="${OUTPUT_ROOT}/main_7b/<model>/<method>"
+latest_run="$(readlink -f "$ckpt_root/_latest" 2>/dev/null || \
+              { [ -f "$ckpt_root/_latest.txt" ] && echo "$ckpt_root/runs/$(cat "$ckpt_root/_latest.txt")"; })"
+latest_epoch="$(ls -1d "$latest_run"/epoch_* 2>/dev/null | sort -V | tail -n 1)"
+# latest_epoch에 _complete 파일이 있어야 정상적으로 sealed 됐다는 뜻.
+[ -f "$latest_epoch/_complete" ] || { echo "WARN: $latest_epoch is not sealed"; }
+```
+
+### 3-2. Legacy flat layout (`feature/run-layout` 이전 학습)
+
+```
+${OUTPUT_ROOT}/main_7b/<model>/<method>/epoch_<N>/   ← runs/ 와 _latest 없음
+```
+
+`feature/run-layout` 머지 이전에 학습된 셀은 평탄 구조로 떨어져 있다. eval 측은
+`_latest`가 없으면 평탄 구조를 fallback으로 자동 인식 (§4-4 참고). 이전 체크포인트를
+새 구조로 마이그레이션하려면 `runs/<tag>/`로 이동 후 `_latest`를 수동 설정:
+
+```bash
+mv ${OUTPUT_ROOT}/main_7b/llama2/tads_10/epoch_* ${OUTPUT_ROOT}/main_7b/llama2/tads_10/runs/legacy/
+ln -s runs/legacy ${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest
+```
+
+### 3-3. Legacy 7b_fullft (더 옛날 구버전, 보통은 건드릴 일 없음)
 
 ```
 ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/
@@ -321,14 +365,18 @@ logs/eval_main_7b_<model>_<method>.log
 
 ### 5-3. 중복 평가 방지 로직 (에이전트가 직접 판정해야 함)
 
-`run_eval_main_7b.sh`는 자체적인 "이미 함" 체크가 **없다**. 호출 전에 에이전트가 판단해야 한다:
+`run_eval_main_7b.sh`는 자체적인 "이미 함" 체크가 **없다**. 호출 전에 에이전트가 판단해야 한다.
 
-체크포인트 한 셀(`<model>/<method>`)에 대해 **다음 두 가지가 모두 만족**되면 eval 재실행 불필요:
+새 run-layout (§3-1) 기준 — 셀 한 개에 대해 **다음이 모두 만족**되면 eval 재실행 불필요:
 
-1. `${EVAL_RESULTS_ROOT}/<model>/<method>/` 내에 **최신 포맷**(§5-5) 결과 JSON이 있음.
-2. 그 결과의 mtime이 가장 큰 `epoch_*` 디렉터리의 mtime보다 **나중**.
+1. `${OUTPUT_ROOT}/main_7b/<model>/<method>/_latest`가 가리키는 run의 가장 큰
+   sealed `epoch_N/`(= `_complete` 파일이 있는 것)을 찾는다.
+2. `${EVAL_RESULTS_ROOT}/<model>/<method>/<experiment_label>-eval_summary.json`가 있고,
+   그 mtime이 위 sealed epoch 의 mtime보다 **나중**.
 
-새 epoch이 생겼는데 결과 mtime이 더 옛날 → 재평가 대상.
+`_latest` 포인터가 갱신됐다는 건 사용자가 새 학습을 마쳤다는 뜻이므로,
+포인터 변경 후 mtime이 새 → 자동으로 재평가 대상이 된다. **`runs/<tag>/`의 다른 과거
+run 들은 평가 대상이 아니다** (그것들은 사용자가 명시적으로 `--run_tag`로 평가).
 
 (Legacy 스크립트 `auto_eval_7b_fullft.sh`는 `.eval_done` 센티넬을 쓰지만, main 스크립트는 그걸 안 만든다. 일관성 유지하려면 에이전트가 평가 성공 후 `${EVAL_RESULTS_ROOT}/<model>/<method>/.eval_done`를 직접 `touch`해줘도 된다. 단, eval **실패 시 절대 touch 금지** — 옛날 버그가 이거였다.)
 
@@ -338,20 +386,52 @@ logs/eval_main_7b_<model>_<method>.log
 
 | 상태 | 판정 조건 | 에이전트 행동 | Score board 마커 |
 |---|---|---|---|
-| **NEED-TRAIN** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/` 자체가 없거나, 그 안에 `epoch_*` 디렉터리가 하나도 없음 | **아무것도 자동 실행하지 말 것**. 사용자에게 "이 셀은 학습이 아직 안 됐다" 보고만. | `학습필요` |
-| **NEED-EVAL** | `epoch_*`는 존재하지만, 결과 디렉터리에 §5-5의 최신 포맷 파일(`<experiment_label>-eval_summary.json`)이 없거나, 있어도 mtime ≤ latest epoch mtime | 다음 tick에 eval 실행 (단일 셀에 `MODELS=<m> METHODS=<x>` 필터로 호출) | `eval대기` |
+| **NEED-TRAIN** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/`이 없거나, `_latest` 포인터(또는 `_latest.txt`)가 없고 평탄 layout의 `epoch_*`도 없음 | **아무것도 자동 실행하지 말 것**. 사용자에게 "이 셀은 학습이 아직 안 됐다" 보고만. | `학습필요` |
+| **NEED-EVAL** | sealed epoch이 존재하지만, 결과 디렉터리에 §5-5의 최신 포맷 파일(`<experiment_label>-eval_summary.json`)이 없거나, 있어도 mtime ≤ latest sealed epoch mtime | 다음 tick에 eval 실행 (단일 셀에 `MODELS=<m> METHODS=<x>` 필터로 호출) | `eval대기` |
 | **LEGACY** | 결과 디렉터리에 옛 포맷 파일만 있음 (예: 접두어 없는 `eval_summary.json`, 또는 벤치별 `mmlu.json` / `gsm8k.json` 만 있고 `*-eval_summary.json` 없음) | 점수는 옛 파일에서 추출해 표에 잠정 기재하되, **재실행 권장 (NEED-EVAL과 동일하게 큐잉)**. 새 포맷으로 덮어쓰면 LEGACY → DONE 자동 전환. | `legacy(점수)` 예: `legacy(41.20)` |
-| **DONE** | 결과 디렉터리에 `<experiment_label>-eval_summary.json`이 있고, mtime > latest epoch mtime | 건너뜀. 점수 표에 숫자 반영. | 실제 숫자 (예: `42.13`) |
+| **DONE** | 결과 디렉터리에 `<experiment_label>-eval_summary.json`이 있고, mtime > latest sealed epoch mtime | 건너뜀. 점수 표에 숫자 반영. | 실제 숫자 (예: `42.13`) |
 
-판정 의사 코드:
+판정 의사 코드 (run-layout + flat-layout fallback):
 
 ```python
+def _resolve_latest_run(ckpt_root):
+    """Return path of <ckpt_root>/_latest target, or None.
+    Also handles _latest.txt fallback for symlink-less filesystems."""
+    link = f"{ckpt_root}/_latest"
+    if os.path.islink(link):
+        target = os.path.realpath(link)
+        return target if os.path.isdir(target) else None
+    if os.path.isdir(link) and glob(f"{link}/epoch_*"):
+        return link
+    txtfile = f"{ckpt_root}/_latest.txt"
+    if os.path.isfile(txtfile):
+        tag = open(txtfile).read().strip()
+        run = f"{ckpt_root}/runs/{tag}"
+        return run if os.path.isdir(run) else None
+    return None
+
+def _largest_sealed_epoch(run_dir):
+    """epoch_N/_complete 가 있는 것만 카운트. 없으면 None."""
+    sealed = []
+    for p in glob(f"{run_dir}/epoch_*"):
+        try: n = int(os.path.basename(p).replace("epoch_", ""))
+        except ValueError: continue
+        if not os.path.exists(f"{p}/_complete"): continue
+        sealed.append((n, p))
+    return max(sealed)[1] if sealed else None
+
 def classify_cell(model, method):
     ckpt_root = f"{OUTPUT_ROOT}/main_7b/{model}/{method}"
-    epochs = sorted(glob(f"{ckpt_root}/epoch_*"))
-    if not epochs:
+    # 1) 새 run-layout 우선
+    latest_run = _resolve_latest_run(ckpt_root)
+    if latest_run:
+        latest_epoch = _largest_sealed_epoch(latest_run)
+    else:
+        # 2) Legacy flat layout fallback
+        flat = sorted(glob(f"{ckpt_root}/epoch_*"))
+        latest_epoch = flat[-1] if flat else None
+    if latest_epoch is None:
         return "NEED-TRAIN", None
-    latest_epoch = epochs[-1]
     out_dir = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
     label = f"{model}_{method}"     # experiment_label 규칙 (parent_stem)
     new_summary = f"{out_dir}/{label}-eval_summary.json"
@@ -453,13 +533,26 @@ bash scripts/auto_eval_7b_fullft.sh <gpu_id> [run1 run2 ...]
 3. for model in {llama2, qwen25, mistral, deepseek}:
      for method in {full_100, random_10, data_agent_10, tads_10}:
          ckpt_root = ${OUTPUT_ROOT}/main_7b/${model}/${method}
-         latest   = ls -1d ${ckpt_root}/epoch_* | sort -V | tail -n 1
+         # 새 run-layout 우선: _latest -> runs/<tag>/epoch_<N>/_complete
+         latest_run = readlink -f ${ckpt_root}/_latest 2>/dev/null
+         if latest_run is empty:
+             # symlink 없으면 _latest.txt fallback
+             tag = cat ${ckpt_root}/_latest.txt 2>/dev/null
+             latest_run = ${ckpt_root}/runs/${tag} (if tag set)
+         if latest_run is empty:
+             # legacy flat layout fallback (구학습용)
+             latest_run = ckpt_root
+         # _complete 있는 epoch 중 가장 큰 N
+         latest = (ls -1d ${latest_run}/epoch_* | sort -V \
+                  | xargs -I{} sh -c '[ -f "{}/_complete" ] && echo {}' | tail -n 1)
          if latest is empty: continue
          out_dir  = ${EVAL_RESULTS_ROOT}/${model}/${method}
          if .eval_done exists in out_dir AND its mtime > latest's mtime:
              continue   # 이미 최신 epoch 평가됨
          enqueue (model, method) for eval
 4. enqueue된 셀들에 대해 MODELS/METHODS 필터로 run_eval_main_7b.sh 호출
+   (스크립트가 내부적으로 _latest를 resolve하므로 ckpt 인자는 안 넘겨도 됨 —
+    `tads.eval --ckpt` 생략 시 자동으로 ${ckpt_root}/_latest/<largest-sealed-epoch>로 resolve)
 5. 성공 시 out_dir/.eval_done touch
 6. 실패 시 logs/eval_main_7b_<model>_<method>.log 끝부분 캡처 → 보고
 ```
@@ -518,11 +611,41 @@ cd "$REPO"
 source scripts/setup_env.sh >/dev/null
 
 # §7 의사코드의 enqueue 로직을 그대로 수행
+# (run-layout: _latest 포인터 + _complete sealed sentinel 인식)
+
+resolve_latest_run() {
+  local ckpt_root=$1
+  local link="${ckpt_root}/_latest"
+  if [ -L "$link" ] || [ -d "$link" ]; then
+    readlink -f "$link"
+    return
+  fi
+  if [ -f "${ckpt_root}/_latest.txt" ]; then
+    local tag
+    tag=$(cat "${ckpt_root}/_latest.txt")
+    [ -d "${ckpt_root}/runs/${tag}" ] && echo "${ckpt_root}/runs/${tag}"
+    return
+  fi
+  # Legacy flat layout fallback
+  if compgen -G "${ckpt_root}/epoch_*" >/dev/null; then
+    echo "${ckpt_root}"
+  fi
+}
+
+largest_sealed_epoch() {
+  local run_dir=$1
+  ls -1d "${run_dir}"/epoch_* 2>/dev/null | sort -V | while read -r p; do
+    [ -f "${p}/_complete" ] && echo "${p}"
+  done | tail -n 1
+}
+
 need=()
 for model in llama2 qwen25 mistral deepseek; do
   for method in full_100 random_10 data_agent_10 tads_10; do
     ckpt_root="${OUTPUT_ROOT}/main_7b/${model}/${method}"
-    latest=$(ls -1d "${ckpt_root}"/epoch_* 2>/dev/null | sort -V | tail -n 1 || true)
+    latest_run=$(resolve_latest_run "$ckpt_root")
+    [ -z "$latest_run" ] && continue
+    latest=$(largest_sealed_epoch "$latest_run")
     [ -z "$latest" ] && continue
     out_dir="${EVAL_RESULTS_ROOT}/${model}/${method}"
     done_marker="${out_dir}/.eval_done"
@@ -568,7 +691,11 @@ done
 - cron이 안 돌면 → `systemctl status cron`, `/var/log/syslog | grep CRON`
 - 돌긴 하는데 환경 변수 없음 에러 → setup_env.sh가 정말 source됐는지 (cron은 `$HOME` 빼고 거의 비어있음. 절대경로 사용 필수)
 - 동시 실행으로 GPU 충돌 → flock 라인이 살아있는지 확인
-- 새 체크포인트 감지 못 함 → `ls -d ${OUTPUT_ROOT}/main_7b/*/*/epoch_*`를 tick 스크립트 안에 임시로 추가해 stdout으로 확인
+- 새 체크포인트 감지 못 함 → 다음 두 줄을 tick 스크립트 안에 임시 추가해 stdout 확인:
+  ```bash
+  ls -ld ${OUTPUT_ROOT}/main_7b/*/*/_latest 2>/dev/null    # 새 run-layout
+  ls -d  ${OUTPUT_ROOT}/main_7b/*/*/epoch_* 2>/dev/null    # legacy flat layout
+  ```
 
 ---
 
@@ -685,12 +812,32 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 ### 11-3. 튜닝 워크플로 (에이전트가 제안해야 할 순서)
 
+새 run-layout 덕분에 **튜닝은 같은 셀(`main_7b/<model>/<method>/`) 안에서 자동 격리**된다.
+사용자가 `--run_suffix=<param>` 또는 `--run_tag=<tag>` 만 다르게 줘서 학습하면 매번
+`runs/<timestamp>_<suffix>/` 가 새로 생기므로 **이전 결과는 절대 손상되지 않는다**.
+`_latest` 포인터는 가장 최근 학습을 가리키므로 **에이전트의 자동 eval은 자동으로 새 튜닝 결과를 평가**한다.
+
 1. **먼저 ablation 두 개로 원인 격리**:
    - `tads.use_anchor: false` (= data_agent 동등) → 점수가 data_agent_10에 수렴하는가? (yes면 셀렉터는 정상, anchor가 문제)
    - `tads.lam: 0.0` → λ만 끄고 anchor는 유지. 차이를 보면 λ vs anchor 기여 분리 가능.
 2. **§11-1 표대로 1차 노브 1~2개만 sweep** (한 번에 여러 개 동시 변경 금지 — 원인 추적 불가).
-3. sweep 결과는 별도 디렉터리에 저장하도록 `output_subdir`를 변경 후 학습 (예: `main_7b/llama2/tads_10__lr5e-5`). **메인 매트릭스 경로(`main_7b/<model>/<method>/`)에 덮어쓰지 말 것** — score board 망가짐.
-4. 튜닝 셀의 결과는 `experiments.md`의 **별도 섹션 ("Tuning sweeps")**에 따로 기록. 메인 16셀 표는 건드리지 말 것.
+3. **튜닝 학습 명령 권장 형태** (사용자에게 제안):
+   ```bash
+   torchrun -m tads.train \
+       --config configs/experiments/main_7b/llama2/tads_10.yaml \
+       --run_suffix=lr5e5 \
+       --override learning_rate=5e-5
+   ```
+   →  `runs/20260516_140000_lr5e5/` 에 떨어지고, 끝나면 `_latest`가 그쪽으로 옮겨감.
+   기존 baseline run (`runs/20260515_180000/`)은 그대로 보존됨.
+4. **이전 baseline run으로 다시 비교 평가**가 필요하면 사용자에게 다음 명령 제안:
+   ```bash
+   python -m tads.eval --config <cfg> --run_tag=20260515_180000 --benchmarks ...
+   ```
+   결과는 `runs/<해당 tag>/epoch_<N>/eval/` 에 저장됨 (같은 셀이지만 다른 run).
+5. 튜닝 결과 비교는 `experiments.md`의 **별도 섹션 ("Tuning sweeps")**에 따로 기록.
+   메인 16셀 표는 `_latest` 결과만 반영. 사용자가 튜닝 실패 후 baseline로 되돌리려면
+   `_latest`를 옛 tag로 다시 가리키면 됨 (또는 그 tag로 한 번 더 학습 — `--run_tag=<old>`로 resume).
 
 ### 11-4. 에이전트가 결정하지 않는 것 (사용자 컨펌 필요)
 
@@ -707,6 +854,15 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 ```bash
 cd /home/jieun/kms/tads
 source scripts/setup_env.sh
+# 새 run-layout: <ckpt_root>/_latest -> runs/<tag>/epoch_<N>/
+ls -ld ${OUTPUT_ROOT}/main_7b/*/*/_latest 2>/dev/null | head
+# 그 안의 sealed epoch들
+for r in ${OUTPUT_ROOT}/main_7b/*/*/_latest; do
+  for e in "$r"/epoch_*; do
+    [ -f "$e/_complete" ] && echo "OK   $e"
+  done
+done | head
+# Legacy flat layout (옛날 학습용)도 확인
 ls -d ${OUTPUT_ROOT}/main_7b/*/*/epoch_* 2>/dev/null | head
 ls -d ${EVAL_RESULTS_ROOT}/*/* 2>/dev/null | head
 ls -l ${EVAL_RESULTS_ROOT}/experiments.md 2>/dev/null || echo "experiments.md 아직 없음 — §0-4 템플릿으로 생성"

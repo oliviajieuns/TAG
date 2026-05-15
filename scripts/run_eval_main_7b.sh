@@ -55,8 +55,39 @@ echo "[run_eval] METHODS=$METHODS"
 mkdir -p logs
 
 latest_epoch() {
-  local dir=$1
-  ls -1d "$dir"/epoch_* 2>/dev/null | sort -V | tail -n 1
+  # Resolve <ckpt_root> -> the largest sealed (= _complete sentinel) epoch_N
+  # under the new run-layout (<ckpt_root>/_latest -> runs/<tag>/) when present,
+  # falling back to the legacy flat layout (<ckpt_root>/epoch_N) otherwise.
+  local ckpt_root=$1
+  local run_dir=""
+
+  # 1) New layout: _latest symlink/dir
+  if [ -L "${ckpt_root}/_latest" ] || [ -d "${ckpt_root}/_latest" ]; then
+    run_dir=$(readlink -f "${ckpt_root}/_latest" 2>/dev/null || echo "${ckpt_root}/_latest")
+  # 2) New layout: _latest.txt fallback (filesystems w/o symlink)
+  elif [ -f "${ckpt_root}/_latest.txt" ]; then
+    local tag
+    tag=$(cat "${ckpt_root}/_latest.txt")
+    [ -d "${ckpt_root}/runs/${tag}" ] && run_dir="${ckpt_root}/runs/${tag}"
+  fi
+
+  # 3) Legacy flat layout
+  if [ -z "$run_dir" ]; then
+    run_dir="$ckpt_root"
+  fi
+
+  # Largest epoch_N inside run_dir whose _complete sentinel exists.
+  local last=""
+  while IFS= read -r p; do
+    [ -f "${p}/_complete" ] && last="$p"
+  done < <(ls -1d "${run_dir}"/epoch_* 2>/dev/null | sort -V)
+
+  # If nothing sealed (legacy ckpt without sentinels), fall back to the
+  # largest epoch_N regardless. Backward-compat for pre-sentinel runs.
+  if [ -z "$last" ]; then
+    last=$(ls -1d "${run_dir}"/epoch_* 2>/dev/null | sort -V | tail -n 1)
+  fi
+  echo "$last"
 }
 
 eval_one() {
