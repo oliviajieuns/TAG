@@ -161,10 +161,16 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None):
             "[sel-share] rank=%d READ %s len=%d", r, sel_path, len(result),
         )
 
-    # One collective at the end so the SFT phase is aligned. By the time
-    # any rank reaches this line it already holds the indices, so the
-    # barrier is fast — no rank waits on rank 0's long episode here.
-    dist.barrier()
+    # NO dist.barrier here. After rank 0's 30+ minute solo collect_episode
+    # the NCCL communicator can be in a state where the next collective
+    # hangs even when every rank reaches it — the communicator's
+    # background socket has effectively died. Removing the barrier means
+    # ranks proceed straight to SFT, and the very first DDP all_reduce
+    # inside backward() doubles as the alignment point.
+    print(
+        f"[sel-share] rank={r} EXIT _broadcast_selection (no barrier)",
+        flush=True,
+    )
 
     if r == SRC:
         # Best-effort cleanup; missing files are fine.

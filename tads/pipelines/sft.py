@@ -123,21 +123,18 @@ def sft_one_epoch(
     n_steps = 0
     optimizer.zero_grad()
 
-    # Align every rank at the SFT entry point so the no_sync window cannot
-    # span a "rank 0 already on step 2 while rank 3 still finishing forward
-    # of step 0" situation. Without this, asymmetric arrival times leak
-    # into the first grad_accum boundary (step 3 by default) where DDP
-    # all-reduce expects every rank to have the same bucket state — a
-    # known hang trigger when SFT prints "step=0" once and then stalls.
+    # NO dist.barrier here. After rank 0's solo collect_episode the NCCL
+    # communicator can hang on the next collective even when every rank
+    # arrives. We rely on the FIRST forward / backward's all_reduce to
+    # naturally align ranks. Print each rank's entry so a real hang is
+    # visible without going through a fragile collective.
     r = _rank()
     ws = world_size()
-    if dist.is_initialized() and ws > 1:
-        t0_barrier = time.time()
-        dist.barrier()
-        logger.info(
-            "SFT entry barrier | rank=%d | epoch=%d | wait=%.2fs",
-            r, epoch, time.time() - t0_barrier,
-        )
+    print(
+        f"[sft] rank={r} ENTER sft_one_epoch | epoch={epoch} | "
+        f"ws={ws} | mem={cuda_mem_str()}",
+        flush=True,
+    )
 
     # DDP grad-accum: skip the all-reduce on intermediate micro-batches with
     # model.no_sync(), and only sync on the boundary step that actually calls
