@@ -203,6 +203,18 @@ def main() -> None:
     # advisory; it fires on every batch when any sample is longer than
     # max_seq_len, even though we truncate intentionally.
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+
+    # NCCL idle protection. The internal watchdog default (600 s) trips
+    # 3x during a 30-minute rank-0 solo collect_episode and silently
+    # marks the communicator dead — the next SFT all_reduce then hangs
+    # forever. Raise the heartbeat ceiling so the communicator survives
+    # the long single-rank phase. Also disable async error handling so
+    # any real NCCL failure raises immediately instead of hanging.
+    os.environ.setdefault("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", "99999")
+    os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "0")
+    os.environ.setdefault("NCCL_ASYNC_ERROR_HANDLING", "0")
+    os.environ.setdefault("NCCL_BLOCKING_WAIT", "0")
+
     quiet_repeated_warnings()
 
     args = parse_args()

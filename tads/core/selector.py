@@ -157,27 +157,17 @@ def collect_episode(
         selection_ratio, apply_anchor, lam, cuda_mem_str(), tag,
     )
 
-    # NCCL HEARTBEAT — keep the communicator alive across the long rank-0
-    # collect loop. Without this, all workers sit in file-polling for 30+
-    # min without any collective traffic; NCCL's internal heartbeat (default
-    # 600 s) marks the communicator dead, and the first all_reduce in the
-    # subsequent SFT backward hangs forever. Every _HEARTBEAT_INTERVAL_S
-    # seconds we fire a dummy all_reduce here, and the workers' polling
-    # loop in selection._broadcast_selection mirrors the same cadence —
-    # NCCL only needs the matching call to land in its 120-minute timeout
-    # window, not at the exact same wall-clock instant.
-    _HEARTBEAT_INTERVAL_S = 30.0
-    _use_heartbeat = dist.is_initialized() and dist.get_world_size() > 1
-    _hb_dummy = torch.zeros(1, device=device) if _use_heartbeat else None
-    _last_hb = time.time()
-
+    # NCCL heartbeat collective has been REMOVED here. Earlier experiments
+    # had rank-0 fire `dist.all_reduce(zeros(1))` every 30s during this loop
+    # and have workers do the same inside their file-polling loop. The race:
+    # when rank 0 exits the collect loop and writes the ready sentinel,
+    # a worker whose 30-second timer is about to elapse can fire one more
+    # all_reduce after rank 0 has already left selection.py for SFT —
+    # rank 0's next collective is a DDP gradient all_reduce on real tensors,
+    # which doesn't match the worker's zeros(1) all_reduce → both hang.
+    # NCCL idle protection now relies entirely on the
+    # TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC env var (set in train.main).
     for step, batch in enumerate(loader, start=1):
-        if _use_heartbeat and (time.time() - _last_hb) > _HEARTBEAT_INTERVAL_S:
-            try:
-                dist.all_reduce(_hb_dummy, op=dist.ReduceOp.SUM)
-                _last_hb = time.time()
-            except Exception as _e:
-                logger.warning("NCCL heartbeat failed at step %d: %s", step, _e)
         input_ids = batch["input_ids"].to(device, non_blocking=True)
         attention_mask = batch["attention_mask"].to(device, non_blocking=True)
         labels = batch["labels"].to(device, non_blocking=True)

@@ -125,20 +125,17 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None, device=None):
         )
         result = selected
     else:
-        # Workers poll on disk for the ready sentinel. To keep the NCCL
-        # communicator alive across rank 0's long collect_episode (otherwise
-        # the heartbeat watchdog marks it dead and the first SFT all_reduce
-        # hangs), workers also fire a dummy all_reduce every 30 s — matching
-        # the cadence rank 0 uses inside collect_episode. NCCL only needs
-        # the matching call to land within its 120-minute timeout window.
-        _HEARTBEAT_INTERVAL_S = 30.0
-        _use_heartbeat = device is not None and dist.is_initialized()
-        _hb_dummy = (
-            torch.zeros(1, device=device) if _use_heartbeat else None
-        )
+        # Workers poll on disk for the ready sentinel. NO NCCL collective is
+        # called in this loop — earlier heartbeat experiments introduced a
+        # race where the worker's all_reduce could fire AFTER rank 0 had
+        # already left _broadcast_selection (rank 0's matching call lives
+        # inside collect_episode, not after), and the unmatched collective
+        # would then hang forever.
+        # NCCL idle protection relies entirely on TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC
+        # being raised (set in train.main's environment); the collective
+        # itself never fires here.
         t_start = time.time()
         last_log = t_start
-        last_hb = t_start
         while not ready_path.exists():
             now = time.time()
             if now - t_start > _POLL_TIMEOUT_SEC:
@@ -153,14 +150,6 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None, device=None):
                     r, now - t_start,
                 )
                 last_log = now
-            if _use_heartbeat and (now - last_hb) > _HEARTBEAT_INTERVAL_S:
-                try:
-                    dist.all_reduce(_hb_dummy, op=dist.ReduceOp.SUM)
-                    last_hb = time.time()
-                except Exception as _e:
-                    logger.warning(
-                        "[sel-share] rank=%d NCCL heartbeat failed: %s", r, _e,
-                    )
             time.sleep(_POLL_INTERVAL_SEC)
 
         if not sel_path.exists():
