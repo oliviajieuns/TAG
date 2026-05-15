@@ -76,10 +76,38 @@ def main() -> None:
     quiet_repeated_warnings()
 
     # Eval is designed to run on a single GPU. If invoked under torchrun
-    # (which sets RANK / LOCAL_RANK), only the rank-0 process should run
-    # the evaluation — otherwise every worker re-runs the full benchmark
-    # and they collide on output files. Workers exit cleanly.
-    if int(os.environ.get("RANK", "0")) != 0:
+    # (which sets RANK / LOCAL_RANK / WORLD_SIZE), only the rank-0 process
+    # should run the evaluation — otherwise every worker re-runs the full
+    # benchmark and they collide on output files. Workers exit cleanly.
+    #
+    # The previous predicate `int(os.environ.get("RANK","0")) != 0` was
+    # too aggressive: a stale RANK left in the shell (from a prior torchrun
+    # session, or a SLURM env that aliases SLURM_PROCID → RANK) would
+    # silently return without ever parsing args, giving the appearance
+    # of "eval terminates immediately" with no log line.
+    #
+    # New gate: require BOTH a real torchrun signature (WORLD_SIZE > 1
+    # AND LOCAL_RANK present) AND RANK != 0 before exiting. A noisy
+    # log line on entry makes "silent immediate exit" impossible going
+    # forward — if you see no log at all, the process is being killed
+    # by something external (oom-killer, SIGTERM, etc.).
+    _rank_env = os.environ.get("RANK")
+    _local_rank_env = os.environ.get("LOCAL_RANK")
+    _world_size_env = os.environ.get("WORLD_SIZE")
+    print(
+        f"[eval] entry | pid={os.getpid()} | RANK={_rank_env!r} | "
+        f"LOCAL_RANK={_local_rank_env!r} | WORLD_SIZE={_world_size_env!r}",
+        flush=True,
+    )
+    _is_torchrun_child = (
+        _local_rank_env is not None
+        and int(_world_size_env or "1") > 1
+    )
+    if _is_torchrun_child and int(_rank_env or "0") != 0:
+        print(
+            f"[eval] non-rank-0 torchrun worker (rank={_rank_env}) — exiting cleanly",
+            flush=True,
+        )
         return
 
     args = parse_args()
