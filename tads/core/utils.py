@@ -119,6 +119,18 @@ def setup_logger(
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     suffix = f"_r{rank()}" if dist.is_initialized() else ""
     log_path = Path(log_dir) / f"{name}_{ts}{suffix}.log"
+    # `force=True` swaps the root logger's handler list but does NOT call
+    # .close() on the old ones — repeat calls (back-to-back eval invocations
+    # in the same process, pytest sessions) leak FileHandler fds and keep
+    # writing to stale log files. Close + clear first so each setup_logger
+    # call is a clean re-config.
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        try:
+            h.close()
+        except Exception:
+            pass
+        root.removeHandler(h)
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(message)s",

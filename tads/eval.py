@@ -149,6 +149,7 @@ def main() -> None:
     }
 
     summaries = []
+    failures: List[Dict[str, str]] = []
     for bench in benchmarks:
         evaluator = get_evaluator(bench)
         output_file = out_dir / f"{bench}.json"
@@ -161,15 +162,24 @@ def main() -> None:
                 training_mode=args.training_mode,
                 lm_eval_path=args.lm_eval_path,
             )
-        summary = evaluator.evaluate(
-            model, tokenizer, device,
-            output_file=str(output_file),
-            limit=args.limit,
-            prompt_style=prompt_style,
-            data_dir=_data_dir_for(bench, cli_paths, cfg),
-            **kw,
-        )
-        summaries.append(summary)
+        # Per-benchmark try/except: a single benchmark failure (missing data
+        # dir, OOM during generation, corrupted parquet) used to abort the
+        # entire eval and lose results for the other 3-4 benchmarks that
+        # already finished. Capture the error and keep going so partial
+        # metrics still land in eval_summary.json.
+        try:
+            summary = evaluator.evaluate(
+                model, tokenizer, device,
+                output_file=str(output_file),
+                limit=args.limit,
+                prompt_style=prompt_style,
+                data_dir=_data_dir_for(bench, cli_paths, cfg),
+                **kw,
+            )
+            summaries.append(summary)
+        except Exception as e:
+            logger.exception("Benchmark %s failed; continuing with remaining benchmarks", bench)
+            failures.append({"benchmark": bench, "error": f"{type(e).__name__}: {e}"})
 
     payload = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -178,9 +188,15 @@ def main() -> None:
         "limit": args.limit,
         "prompt_style": prompt_style,
         "summaries": summaries,
+        "failures": failures,
     }
     with open(out_dir / "eval_summary.json", "w") as f:
         json.dump(payload, f, indent=2)
+    if failures:
+        logger.warning(
+            "Eval finished with %d/%d benchmark failure(s): %s",
+            len(failures), len(benchmarks), [f["benchmark"] for f in failures],
+        )
     logger.info("Eval done. Summary: %s", out_dir / "eval_summary.json")
 
 

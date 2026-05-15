@@ -154,8 +154,27 @@ def tokenize_alpaca(
     if eos_id is not None:
         response_ids = response_ids + [eos_id]
 
-    input_ids = (prompt_ids + response_ids)[:max_seq_len]
-    labels = ([-100] * len(prompt_ids) + response_ids)[:max_seq_len]
+    # Guard against the degenerate case where the prompt alone already meets
+    # or exceeds max_seq_len: a naive `[:max_seq_len]` would zero out every
+    # response token, leaving labels=[-100]*max_seq_len and silently
+    # producing no loss signal for this example. We RESERVE at least one
+    # token for the response by truncating the prompt instead, then truncate
+    # the response if it's still over budget. This keeps the assistant-only
+    # mask non-empty so each example contributes to gradient flow. The
+    # log_warning surfaces this as a config issue (max_seq_len too small for
+    # the dataset's prompt distribution) without aborting training.
+    if len(prompt_ids) >= max_seq_len:
+        logger.warning(
+            "tokenize_alpaca: prompt length %d ≥ max_seq_len %d "
+            "(style=%s) — truncating prompt to keep ≥1 response token. "
+            "Raise max_seq_len if this fires frequently.",
+            len(prompt_ids), max_seq_len, prompt_style,
+        )
+        prompt_ids = prompt_ids[: max_seq_len - 1]
+    available = max_seq_len - len(prompt_ids)
+    response_ids = response_ids[:available]
+    input_ids = prompt_ids + response_ids
+    labels = [-100] * len(prompt_ids) + response_ids
 
     pad_len = max_seq_len - len(input_ids)
     attention_mask = [1] * len(input_ids) + [0] * pad_len
@@ -272,8 +291,18 @@ def tydiqa_generation_prefix(
         return f"{IM_START}user\n{user}\n{IM_END}\n{IM_START}assistant\n"
     if prompt_style == "mistral_instruct":
         return f"<s>[INST] {user} [/INST] "
-    if prompt_style in ("llama_user_assistant", "deepseek_user_assistant", "alpaca_default"):
+    if prompt_style in ("llama_user_assistant", "deepseek_user_assistant"):
         return f"<|user|>\n{user}\n<|assistant|>\n"
+    if prompt_style == "alpaca_default":
+        # Match the Alpaca SFT template the model was trained with —
+        # bucketing alpaca_default into the Llama chat wrap would expose
+        # the eval to `<|user|>` / `<|assistant|>` tokens the model has
+        # never seen as a response prefix, hurting extractive accuracy.
+        return (
+            "Below is an instruction that describes a task. "
+            "Write a response that appropriately completes the request.\n\n"
+            f"### Instruction:\n{user}\n\n### Response:\n"
+        )
     raise ValueError(f"Unknown prompt_style={prompt_style!r} for TyDiQA eval prefix")
 
 
