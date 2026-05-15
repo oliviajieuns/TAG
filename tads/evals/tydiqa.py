@@ -21,7 +21,13 @@ from ..data.sft_prompts import tydiqa_generation_prefix
 logger = logging.getLogger(__name__)
 
 
-_LANG_PAT = re.compile(r"^([a-z]+)--")
+# TyDiQA gold-passage QA ids look like:
+#   - HF parquet:                 ``arabic-2387335860751143628-1``  (single dash)
+#   - Legacy GCS JSON (v1.1):     ``english--<hash>-<i>-<j>``      (double dash)
+# The legacy double-dash pattern was hard-coded here, so every parquet row
+# fell through to "unknown" — and the per-language 5-shot demo lookup found
+# nothing, dropping every example silently to 0-shot. Accept either form.
+_LANG_PAT = re.compile(r"^([a-z]+)-")
 
 
 def _normalize(s: str) -> str:
@@ -43,7 +49,7 @@ def _exact_match(pred: str, gold_list: List[str]) -> bool:
 
 
 def _language_of(qa_id: Optional[str]) -> str:
-    """TyDiQA gold-passage QA ids look like ``english--<hash>-<i>-<j>``."""
+    """Extract the language prefix from a TyDiQA QA id."""
     if not qa_id:
         return "unknown"
     m = _LANG_PAT.match(qa_id)
@@ -78,6 +84,115 @@ def _parse_squad_file(path: str) -> List[Dict[str, Any]]:
     return examples
 
 
+def _parse_parquet_file(path: str) -> List[Dict[str, Any]]:
+    """Parse the HuggingFace `google-research-datasets/tydiqa` Gold Passage
+    parquet shard. Schema: ``id, title, context, question, answers={text,
+    answer_start}`` — same field meanings as the legacy SQuAD JSON.
+
+    The legacy v1.1 GCS JSON URLs now return HTTP 403 (the bucket revoked
+    anonymous read), so the parquet on HF is the de-facto source of truth.
+    """
+    # pandas / pyarrow are not in the project's core deps because the
+    # trainer side doesn't need them. We import lazily so installing them
+    # only matters when running TyDiQA eval against parquet.
+    try:
+        import pandas as pd  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            "Reading TyDiQA parquet requires pandas + pyarrow. Install with:\n"
+            "  pip install pandas pyarrow\n"
+            "Or convert to JSON once via scripts/download_tydiqa.sh and the\n"
+            "evaluator will fall back to the SQuAD JSON path."
+        ) from exc
+    import pandas as pd
+    df = pd.read_parquet(path)
+    examples: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        ans = row.get("answers")
+        # parquet answers is a dict with numpy arrays — normalise to list[str].
+        # Don't use `texts_raw or []` here: numpy arrays raise
+        # "truth value ambiguous" on bool conversion. Iterate directly and
+        # treat the None case explicitly.
+        if isinstance(ans, dict):
+            texts_raw = ans.get("text")
+            if texts_raw is None:
+                texts = []
+            else:
+                try:
+                    texts = [str(t) for t in texts_raw]
+                except TypeError:
+                    texts = []
+        else:
+            texts = []
+        qa_id = row.get("id")
+        examples.append({
+            "id": qa_id,
+            "question": str(row.get("question", "")),
+            "context": str(row.get("context", "")),
+            "answers": {"text": texts},
+            "language": _language_of(qa_id),
+        })
+    return examples
+
+
+def _parse_tydiqa_file(path: str) -> List[Dict[str, Any]]:
+    """Dispatch to the SQuAD JSON or HF parquet parser based on extension."""
+    if path.endswith(".parquet"):
+        return _parse_parquet_file(path)
+    return _parse_squad_file(path)
+
+
+def _resolve_split_paths(data_dir: str) -> Tuple[str, str, str]:
+    """Return (dev_path, train_path, base_dir).
+
+    Accepts either:
+      - a direct .json or .parquet path (used as dev_path; train mate is
+        looked up in the same directory using the matching extension),
+      - or a directory containing either the legacy v1.1 JSON files
+        (``tydiqa-goldp-v1.1-dev.json`` / ``…-train.json``) OR the HF
+        parquet layout (``validation-00000-of-00001.parquet`` /
+        ``train-00000-of-00001.parquet``).
+
+    Picks the first layout that actually has the dev file present; raises
+    a clear FileNotFoundError listing every checked location if nothing
+    matches.
+    """
+    if data_dir.endswith((".json", ".parquet")):
+        dev_path = data_dir
+        base_dir = os.path.dirname(data_dir) or "."
+        if data_dir.endswith(".parquet"):
+            train_path = os.path.join(base_dir, "train-00000-of-00001.parquet")
+        else:
+            train_path = os.path.join(base_dir, "tydiqa-goldp-v1.1-train.json")
+        return dev_path, train_path, base_dir
+
+    candidates = [
+        # HF parquet layout (current; preferred since the GCS JSON URLs 403).
+        (
+            os.path.join(data_dir, "validation-00000-of-00001.parquet"),
+            os.path.join(data_dir, "train-00000-of-00001.parquet"),
+        ),
+        # Legacy v1.1 JSON layout (still supported if the user has these
+        # files cached locally from before the bucket was locked down).
+        (
+            os.path.join(data_dir, "tydiqa-goldp-v1.1-dev.json"),
+            os.path.join(data_dir, "tydiqa-goldp-v1.1-train.json"),
+        ),
+    ]
+    for dev, train in candidates:
+        if os.path.exists(dev):
+            return dev, train, data_dir
+    tried = "\n  ".join(c[0] for c in candidates)
+    raise FileNotFoundError(
+        f"TyDiQA dev split not found under {data_dir}. Tried:\n  {tried}\n\n"
+        f"Download with:\n"
+        f"  bash scripts/download_tydiqa.sh {data_dir}\n\n"
+        f"That fetches both splits from "
+        f"huggingface.co/datasets/google-research-datasets/tydiqa "
+        f"(the legacy storage.googleapis.com URLs now return HTTP 403)."
+    )
+
+
 def _load_demos_by_language(
     train_path: str,
     n_fewshot: int,
@@ -86,7 +201,7 @@ def _load_demos_by_language(
     ``n_fewshot`` train examples per language with non-empty gold)."""
     if not os.path.exists(train_path):
         return {}
-    train = _parse_squad_file(train_path)
+    train = _parse_tydiqa_file(train_path)
     by_lang: Dict[str, List[Tuple[str, str, str]]] = {}
     for ex in train:
         gold = (ex["answers"].get("text") or [""])[0]
@@ -125,33 +240,12 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 "containing tydiqa-goldp-v1.1-dev.json).",
             )
 
-        # Resolve dev/train paths. Accept either a directory or a direct .json path.
-        if data_dir.endswith(".json"):
-            dev_file = data_dir
-            base_dir = os.path.dirname(data_dir) or "."
-        else:
-            dev_file = os.path.join(data_dir, "tydiqa-goldp-v1.1-dev.json")
-            base_dir = data_dir
-        train_file = os.path.join(base_dir, "tydiqa-goldp-v1.1-train.json")
+        # Resolve dev/train paths, handling both the HF parquet layout
+        # (current) and the legacy v1.1 JSON layout. Raises a clear
+        # FileNotFoundError listing every checked location on miss.
+        dev_file, train_file, base_dir = _resolve_split_paths(data_dir)
 
-        if not os.path.exists(dev_file):
-            # Used to silently return accuracy_em=0.0 with a buried error
-            # string in the summary, which mixed indistinguishably into
-            # eval_summary.json next to legitimate-but-bad runs. Raise
-            # instead so eval.py records it in "failures" and the user
-            # can't accidentally treat 0.0 as a real score.
-            raise FileNotFoundError(
-                f"TyDiQA dev file not found at {dev_file}.\n"
-                f"Download with `bash scripts/download_tydiqa.sh "
-                f"{base_dir}` (gets dev + train for paper-faithful 5-shot).\n"
-                f"Or manually:\n"
-                f"  curl -L -o {dev_file} "
-                f"https://storage.googleapis.com/tydiqa/v1.1/tydiqa-goldp-v1.1-dev.json\n"
-                f"  curl -L -o {train_file} "
-                f"https://storage.googleapis.com/tydiqa/v1.1/tydiqa-goldp-v1.1-train.json"
-            )
-
-        examples = _parse_squad_file(dev_file)
+        examples = _parse_tydiqa_file(dev_file)
         if limit is not None:
             examples = examples[:limit]
 
