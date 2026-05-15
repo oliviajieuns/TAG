@@ -97,11 +97,13 @@ def collect_episode(
     model.eval()
     agent.ac.eval()
     # KV cache adds nothing during a feed-forward pass and just leaks memory
-    # batch over batch on Mistral / Qwen (both default to use_cache=True).
+    # batch over batch on Mistral / Qwen (both default to use_cache=True at
+    # the HF config level). The loader now pins use_cache=False once when
+    # gradient_checkpointing is enabled — this block is a belt-and-braces
+    # guard for runs where gradient_checkpointing happens to be off.
     # NB: DDP and PEFT both wrap the base model; .config lives on the inner
     # HF causal-LM, not on the wrapper.
     base_model = _unwrap(model)
-    _orig_use_cache = getattr(base_model.config, "use_cache", None)
     if hasattr(base_model.config, "use_cache"):
         base_model.config.use_cache = False
 

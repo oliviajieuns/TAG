@@ -130,6 +130,14 @@ def load_model(
             base.gradient_checkpointing_enable()
         # Required for LoRA + gradient_checkpointing
         base.enable_input_require_grads()
+        # gradient_checkpointing is fundamentally incompatible with KV cache:
+        # the recomputation pass would replay forward without the cached
+        # keys/values. transformers auto-overrides to False on every forward
+        # and logs a warning each time — pin it once here so the warning
+        # stops and the state stays consistent (some DDP gradient-hook bugs
+        # have been linked to transformers flipping use_cache mid-forward).
+        if hasattr(base, "config") and hasattr(base.config, "use_cache"):
+            base.config.use_cache = False
 
     if training_mode == "lora":
         from peft import get_peft_model  # lazy: only imported for LoRA
