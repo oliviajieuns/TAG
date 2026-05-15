@@ -202,6 +202,45 @@ def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, d
     if method not in ("tads", "data_agent"):
         raise ValueError("Unknown method: " + repr(method))
 
+    # ---------- selection cache: skip collect_episode if a prior run
+    # ---------- already produced selected_indices_epoch{N}.json
+    # collect_episode for tads/data_agent takes 30+ min on 7B. If a previous
+    # run made it through scoring but hung in the post-broadcast NCCL step,
+    # the indices already exist on disk and we can reuse them directly. This
+    # path is ONLY hit when the file is present; a fresh start still runs
+    # the full episode.
+    _output_dir_raw = cfg.get("output_dir") or cfg.get("output_root")
+    if _output_dir_raw is not None:
+        _cached_path = Path(_output_dir_raw) / f"selected_indices_epoch{epoch}.json"
+        if _cached_path.exists():
+            try:
+                with open(_cached_path) as _f:
+                    _cached = json.load(_f)
+                if isinstance(_cached, list) and len(_cached) > 0:
+                    logger.info(
+                        "REUSING cached selection from %s (%d indices) — "
+                        "skipping collect_episode for epoch %d.",
+                        _cached_path, len(_cached), epoch,
+                    )
+                    # Broadcast the cached indices to all ranks via the same
+                    # file-polling mechanism so workers also get them.
+                    if is_main_process():
+                        selected = [int(x) for x in _cached]
+                    else:
+                        selected = []
+                    selected = _broadcast_selection(
+                        selected, epoch=epoch,
+                        output_dir=_output_dir_raw,
+                    )
+                    extras["selection_cache_reused"] = True
+                    return selected, extras
+            except Exception as _e:
+                logger.warning(
+                    "Could not reuse cached selection at %s (%s); "
+                    "running full collect_episode.",
+                    _cached_path, _e,
+                )
+
     if is_main_process():
         print("[trace] rank=0 ENTER main branch | method=" + method
               + " | anchor=" + ("set" if anchor is not None else "None"), flush=True)
