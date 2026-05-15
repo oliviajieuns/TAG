@@ -151,6 +151,42 @@ def _setup_ddp() -> bool:
     return dist.is_initialized()
 
 
+def _reinit_ddp_after_long_idle(model, use_ddp: bool):
+    """Destroy and recreate the NCCL process group + re-wrap model in DDP.
+
+    Empirically, after rank 0 spends 30+ minutes in collect_episode while
+    other ranks sit in file-polling (no NCCL traffic), the NCCL communicator
+    enters a state where the next collective hangs — even with our
+    120-minute init timeout. The diagnostic is "SFT step entry step=0
+    appears on every rank but no rank reaches step backward done", meaning
+    forward worked but the first all_reduce inside backward stalls.
+
+    Recovery: tear the process group down and bring it back up before SFT
+    starts. The DDP wrapper holds a reference to the old (dead) group, so
+    we also have to unwrap the model and re-wrap it after the reinit.
+    """
+    if not dist.is_initialized() or not use_ddp:
+        return model
+    from datetime import timedelta
+    inner = model.module if hasattr(model, "module") else model
+    backend = dist.get_backend()
+    print(f"[ddp-reinit] rank={dist.get_rank()} destroying old group", flush=True)
+    dist.destroy_process_group()
+    dist.init_process_group(backend=backend, timeout=timedelta(minutes=120))
+    print(f"[ddp-reinit] rank={dist.get_rank()} fresh group up", flush=True)
+    lr = int(os.environ.get("LOCAL_RANK", "0"))
+    # Match the original wrap. find_unused_parameters mirrors load_model.
+    find_unused = any(
+        not p.requires_grad for p in inner.parameters()
+    )  # heuristic: LoRA has frozen base
+    return torch.nn.parallel.DistributedDataParallel(
+        inner,
+        device_ids=[lr],
+        output_device=lr,
+        find_unused_parameters=find_unused,
+    )
+
+
 def main() -> None:
     # OFFLINE BY DEFAULT — every model / tokenizer / dataset must be on local
     # disk. The HF datasets / hub / transformers libraries otherwise reach
@@ -505,6 +541,17 @@ def main() -> None:
                 "0 batches and DDP all_reduce at end of empty loop is a known "
                 "hang source. Check selection_ratio and dataset size.",
             )
+
+        # For tads/data_agent the rank-0 collect_episode pass leaves the
+        # NCCL communicator in a state where the first SFT all_reduce
+        # hangs — empirical signature: "SFT step entry step=0" prints on
+        # every rank but "SFT step backward done step=0" never does.
+        # Tear the process group down and bring it up fresh, then re-wrap
+        # the model. random/full methods skip this because they never sit
+        # idle for 30+ minutes.
+        if method in ("tads", "data_agent") and use_ddp:
+            model = _reinit_ddp_after_long_idle(model, use_ddp)
+
         subset = Subset(dataset, selected)
         loader = make_dataloader(
             subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
