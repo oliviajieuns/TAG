@@ -1,3 +1,5 @@
+# Llama-2-7B + Alpaca-GPT4 full data — NAIT paper Table 2 row "01 Alpaca-GPT4"
+# Expected (paper): MMLU 46.87, GSM 14.63, H-Eval 27.87, TyDiQA 39.48, BBH 39.94
 defaults:
   - configs/base.yaml
   - configs/methods/full.yaml
@@ -5,4 +7,6 @@ defaults:
   - configs/modes/full_ft.yaml
 
 output_subdir: main_7b/llama2/full_100
-train_epochs: 3
+# LLAMA-TUNE: 3 → 4 to recover the last ~5% of convergence we leave on the
+# table at epoch 3. NAIT paper used 3 but our loss curves still drop here.
+train_epochs: 4

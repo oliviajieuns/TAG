@@ -218,7 +218,7 @@ tads_10       proposed *  -          -          -          -
 ## 1. Repo / Working Directory
 
 - Repo root: `/home/jieun/kms/tads` (서버에서도 동일 경로라고 가정. 다르면 `cd $(git rev-parse --show-toplevel)`로 이동.)
-- 모든 명령은 **repo root에서 실행**해야 한다 (`run_eval_main_7b.sh`가 내부에서 `cd "$(dirname "$0")/.."` 하므로 안전하긴 하지만, 기본값은 repo root).
+- 모든 명령은 **repo root에서 실행**해야 한다. 새 권장 형식(`python -m tads.eval`)은 cwd가 repo root여야 모듈 경로가 풀린다.
 
 ---
 
@@ -311,39 +311,89 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/
 
 ---
 
-## 4. Eval 실행 (메인 명령)
+## 4. Eval 실행 — **per-GPU per-experiment** (의무 형식)
 
-새 체크포인트가 보이면 **이걸 호출하면 끝이다**. 스크립트 내부에서 "최신 epoch 자동 탐색 → eval → 결과 저장"까지 다 한다.
+**원칙**: 셀 1개(`<model>/<method>`) = GPU 1장 = 백그라운드 프로세스 1개.
+에이전트는 매 tick에서 `nvidia-smi`로 **사용 중이지 않은 GPU**를 발견하면 NEED-EVAL
+큐에서 한 셀을 골라 그 GPU에 곧바로 launch한다. 다음 tick에서 다시 빈 GPU를
+찾고 큐의 다음 셀을 또 launch — 큐가 빌 때까지 반복.
 
-### 4-1. 단일 GPU, 순차 실행 (가장 단순, 권장 기본값)
+### 4-1. 한 셀 launch — 정식 명령 형태
 
-```bash
-bash scripts/run_eval_main_7b.sh --gpus 0
-```
-
-### 4-2. 여러 GPU에서 병렬
-
-```bash
-bash scripts/run_eval_main_7b.sh --gpus 4,5,6,7 --parallel
-```
-
-GPU 한 장당 잡 하나가 순환 배정된다.
-
-### 4-3. 특정 모델/메서드/벤치마크만
-
-환경변수로 필터링:
+bash 스크립트 wrapper(`run_eval_main_7b.sh`)는 더 이상 사용하지 않는다.
+**`python -m tads.eval`을 직접 호출**하고 `CUDA_VISIBLE_DEVICES`로 GPU를 핀한다.
 
 ```bash
-MODELS="llama2 qwen25" \
-METHODS="tads_10" \
-BENCHMARKS="mmlu,gsm8k" \
-bash scripts/run_eval_main_7b.sh --gpus 0
+CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval \
+    --config configs/experiments/main_7b/<model>/<method>.yaml \
+    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    >> logs/eval_<model>_<method>.log 2>&1 &
 ```
 
-- `MODELS` 기본: `"llama2 qwen25 mistral deepseek"`
-- `METHODS` 기본: `"full_100 random_10 data_agent_10 tads_10"`
-- `BENCHMARKS` 기본: `"mmlu,gsm8k,humaneval,tydiqa,bbh"` (스크립트 내부는 콤마 구분)
-- `LIMIT`: 디버그용으로 샘플 수 제한 (`--limit 16` 또는 `LIMIT=16`)
+`--ckpt`는 **생략**한다 — `tads.eval`이 `<output_dir>/_latest`에서 마지막 sealed
+epoch을 자동 resolve하므로 (§3-1 참고). `--out_dir`도 생략하면 자동으로
+`<ckpt>/eval/` 옆에 결과가 떨어진다.
+
+> **`CUDA_VISIBLE_DEVICES`는 1개 GPU만 지정**할 것. 2개 이상 주면 그 잡이 두 GPU를
+> 모두 점유해 다음 셀이 launch될 자리가 사라진다. `--cuda_device 0`은 잡 내부
+> 인덱스이므로 항상 0 (CUDA_VISIBLE_DEVICES로 이미 1개로 좁혀진 상태).
+
+### 4-2. 빈 GPU 찾기 — 결정 규칙
+
+```bash
+# 사용 가능한 GPU 목록 (memory.used < 2 GB AND compute-process 없음 = 비어있음)
+nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits \
+  | awk -F', *' '$2 < 2000 {print $1}'
+```
+
+추가 안전장치:
+1. **학습 중인 잡의 GPU는 절대 건드리지 말 것**:
+   ```bash
+   nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name --format=csv,noheader \
+     | grep -E 'python.*tads\.(train|eval)' || true
+   ```
+2. **우리 평가 잡 자체가 이미 그 GPU에 떠있는지** 체크:
+   ```bash
+   pgrep -af "python -m tads.eval.*<model>/<method>" >/dev/null && echo "already running"
+   ```
+3. 같은 셀이 이미 큐 안에 있으면 새로 enqueue 금지 (중복 lauch 방지).
+
+### 4-3. 한 tick의 알고리즘 (실행 순서)
+
+```
+1. NEED-EVAL 큐 = §5-4의 classify_cell()로 결정 (DONE/LEGACY/NEED-TRAIN 제외)
+2. 빈 GPU 리스트 = nvidia-smi 기반 §4-2
+3. for gpu in 빈 GPU:
+       if NEED-EVAL 큐 비었으면 break
+       cell = NEED-EVAL 큐.pop_front()
+       if 그 cell이 이미 어떤 GPU에서 돌고 있으면 skip (다른 cell pop)
+       launch §4-1 명령으로 (CUDA_VISIBLE_DEVICES=gpu)
+       0.5 sec sleep (CUDA init race 회피)
+4. 큐가 남아있어도 빈 GPU 없으면 다음 tick까지 대기
+5. 매 tick 시작에서 끝난 잡(=프로세스 종료) 확인 → DONE/FAIL 분류 → 보고
+```
+
+이 알고리즘은 §9 cron tick 스크립트 안에 그대로 들어있다 (§9-3 참고).
+
+### 4-4. 필터 / 제한
+
+```bash
+# 한 셀만 강제 실행 (테스트용)
+CUDA_VISIBLE_DEVICES=0 python -m tads.eval \
+    --config configs/experiments/main_7b/llama2/tads_10.yaml \
+    --benchmarks mmlu \
+    --limit 16    # 디버그용 sample cap
+
+# 과거 특정 run을 다시 평가
+CUDA_VISIBLE_DEVICES=0 python -m tads.eval \
+    --config configs/experiments/main_7b/llama2/tads_10.yaml \
+    --run_tag 20260515_180000 \
+    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh
+```
+
+- `--benchmarks` 기본 `mmlu`. 정식 매트릭스에선 `mmlu,gsm8k,humaneval,tydiqa,bbh` 명시.
+- `--limit N`: 벤치별 샘플 N개로 제한 (디버그 전용).
+- `--run_tag <tag>`: `_latest` 대신 특정 과거 run 평가.
 
 ---
 
@@ -365,7 +415,7 @@ logs/eval_main_7b_<model>_<method>.log
 
 ### 5-3. 중복 평가 방지 로직 (에이전트가 직접 판정해야 함)
 
-`run_eval_main_7b.sh`는 자체적인 "이미 함" 체크가 **없다**. 호출 전에 에이전트가 판단해야 한다.
+`python -m tads.eval`은 자체적인 "이미 함" 체크가 **없다** (기존 bash wrapper도 마찬가지였음). 호출 전에 에이전트가 판단해야 한다.
 
 새 run-layout (§3-1) 기준 — 셀 한 개에 대해 **다음이 모두 만족**되면 eval 재실행 불필요:
 
@@ -527,34 +577,47 @@ bash scripts/auto_eval_7b_fullft.sh <gpu_id> [run1 run2 ...]
 
 ## 7. 에이전트가 한 번의 tick에서 해야 할 일 (의사 코드)
 
+**원칙 재강조**: 셀 1개 = GPU 1장 = `python -m tads.eval` 백그라운드 프로세스 1개.
+bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하고, 큐에 남은 셀은
+다음 tick에서 또 빈 GPU가 생기면 launch.
+
 ```
 1. cd /home/jieun/kms/tads
 2. source scripts/setup_env.sh   # 매 쉘마다 한 번
-3. for model in {llama2, qwen25, mistral, deepseek}:
+3. classify pass — NEED-EVAL 큐 만들기
+   for model in {llama2, qwen25, mistral, deepseek}:
      for method in {full_100, random_10, data_agent_10, tads_10}:
          ckpt_root = ${OUTPUT_ROOT}/main_7b/${model}/${method}
-         # 새 run-layout 우선: _latest -> runs/<tag>/epoch_<N>/_complete
-         latest_run = readlink -f ${ckpt_root}/_latest 2>/dev/null
-         if latest_run is empty:
-             # symlink 없으면 _latest.txt fallback
-             tag = cat ${ckpt_root}/_latest.txt 2>/dev/null
-             latest_run = ${ckpt_root}/runs/${tag} (if tag set)
-         if latest_run is empty:
-             # legacy flat layout fallback (구학습용)
-             latest_run = ckpt_root
-         # _complete 있는 epoch 중 가장 큰 N
-         latest = (ls -1d ${latest_run}/epoch_* | sort -V \
-                  | xargs -I{} sh -c '[ -f "{}/_complete" ] && echo {}' | tail -n 1)
-         if latest is empty: continue
-         out_dir  = ${EVAL_RESULTS_ROOT}/${model}/${method}
-         if .eval_done exists in out_dir AND its mtime > latest's mtime:
-             continue   # 이미 최신 epoch 평가됨
-         enqueue (model, method) for eval
-4. enqueue된 셀들에 대해 MODELS/METHODS 필터로 run_eval_main_7b.sh 호출
-   (스크립트가 내부적으로 _latest를 resolve하므로 ckpt 인자는 안 넘겨도 됨 —
-    `tads.eval --ckpt` 생략 시 자동으로 ${ckpt_root}/_latest/<largest-sealed-epoch>로 resolve)
-5. 성공 시 out_dir/.eval_done touch
-6. 실패 시 logs/eval_main_7b_<model>_<method>.log 끝부분 캡처 → 보고
+         latest_run = resolve_latest_run(ckpt_root)        # §4-2의 함수
+         if not latest_run: continue                       # NEED-TRAIN
+         latest = largest_sealed_epoch(latest_run)         # _complete 있는 max N
+         if not latest: continue
+         out_dir = ${EVAL_RESULTS_ROOT}/${model}/${method}
+         done_marker = ${out_dir}/.eval_done
+         if done_marker exists AND mtime(done_marker) > mtime(latest): continue
+         # 같은 (model, method)가 이미 어디 GPU에서 돌고 있으면 skip
+         if pgrep -af "python -m tads.eval.*${model}/${method}\.yaml" > /dev/null: continue
+         queue.append((model, method))
+
+4. dispatch pass — 빈 GPU만큼 launch
+   free_gpus = nvidia-smi 기반, memory.used < 2GB AND tads.train 프로세스 없음
+   while queue and free_gpus:
+     gpu  = free_gpus.pop()
+     cell = queue.pop(0)
+     launch:
+       CUDA_VISIBLE_DEVICES=${gpu} nohup python -m tads.eval \
+         --config configs/experiments/main_7b/${cell.model}/${cell.method}.yaml \
+         --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+         >> logs/eval_${cell.model}_${cell.method}.log 2>&1 &
+     log "launched ${cell} on GPU ${gpu} (pid=$!)"
+     sleep 0.5   # CUDA init race buffer
+
+5. monitor pass — 끝난 잡 회수
+   for proc in 우리가 launch한 프로세스들 (pidfile / pgrep로 추적):
+     if exited 0:  touch ${EVAL_RESULTS_ROOT}/${model}/${method}/.eval_done
+     if exited !=0: log 끝 30줄 캡처 → 보고; .fail_count 증가
+
+6. 큐가 비지 않았으면 다음 tick에서 4번 부터 재시도 (epoch당 한 번 dispatch가 정상)
 ```
 
 ---
@@ -567,7 +630,9 @@ bash scripts/auto_eval_7b_fullft.sh <gpu_id> [run1 run2 ...]
 - **eval 실패 시 done 마커를 만들지 말 것**. 옛날 버그가 이거여서 실패한 run을 영영 재시도 안 했다.
 - **user-volume (`~`)에 절대 쓰지 말 것**. HF cache는 이미 `DATA_CACHE=${OUTPUT_ROOT}/cache` 아래로 redirect되어 있다. 새 파일을 만들 거면 `OUTPUT_ROOT` 또는 `EVAL_RESULTS_ROOT` 아래에만 만들 것 (user-volume 50GB는 금방 찬다).
 - **core dump 켜지 말 것** (`TADS_ENABLE_COREDUMPS=0` 유지). 7B DDP rank 한 개가 죽으면 ~240GB 코어 파일을 떨군다.
-- **GPU 충돌 주의**. 학습 중인 GPU에 eval을 같이 쏘면 OOM. 학습 잡이 어느 GPU를 쓰는지 모르면 `nvidia-smi`로 확인 후 비어있는 GPU에만 `--gpus`로 배정.
+- **GPU 충돌 주의**. 학습 중인 GPU에 eval을 같이 쏘면 OOM. 학습 잡(`python -m tads.train`)이 점유한 GPU는 §9-3의 `training_gpus` 필터로 자동 제외 — 그 필터를 끄지 말 것.
+- **`CUDA_VISIBLE_DEVICES`에 GPU 1개만 지정**. 여러 개 지정하면 그 잡이 둘 다 점유해 다음 셀이 launch될 자리가 사라진다. 셀 1개 = GPU 1장이 §4의 의무 형식.
+- **`scripts/run_eval_main_7b.sh` (bash wrapper) 호출 금지**. `--parallel` 모드의 sequential dispatch 로직이 우리 per-tick 큐 알고리즘과 충돌. `python -m tads.eval`을 직접 호출할 것.
 
 ---
 
@@ -663,27 +728,69 @@ fi
 
 echo "[tick $(date -Is)] need: ${need[*]}"
 
-# 빈 GPU 찾기 (사용 메모리 < 1GB)
-free_gpu=$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits \
-           | awk -F',' '$2 < 1024 {print $1; exit}')
-if [ -z "$free_gpu" ]; then
-  echo "[tick $(date -Is)] no free GPU — skipping this tick"
+# 같은 셀이 이미 어디 GPU에서 돌고 있으면 큐에서 제외 (중복 launch 방지)
+filtered=()
+for cell in "${need[@]}"; do
+  model="${cell%/*}"; method="${cell#*/}"
+  if pgrep -af "python -m tads.eval.*main_7b/${model}/${method}\.yaml" >/dev/null; then
+    echo "[tick $(date -Is)] already running: ${cell} — skip enqueue"
+    continue
+  fi
+  filtered+=("$cell")
+done
+need=("${filtered[@]}")
+
+# 빈 GPU 목록 (메모리 < 2GB, 그리고 tads.train 프로세스가 점유하지 않은 것).
+# 학습 잡이 도는 GPU는 절대 건드리지 말 것 — OOM의 가장 흔한 원인.
+training_gpus=$(nvidia-smi --query-compute-apps=gpu_uuid,process_name \
+                --format=csv,noheader 2>/dev/null \
+                | grep -E 'python.*tads\.train' | awk -F',' '{print $1}' | sort -u)
+free_gpus=()
+while IFS=, read -r idx mem; do
+  mem="${mem# }"
+  [ "${mem:-9999}" -ge 2048 ] && continue
+  # 이 GPU에 tads.train이 떠있으면 제외
+  uuid=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i "$idx" | tr -d ' ')
+  if echo "$training_gpus" | grep -q "$uuid"; then continue; fi
+  free_gpus+=("$idx")
+done < <(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits)
+
+if [ ${#free_gpus[@]} -eq 0 ]; then
+  echo "[tick $(date -Is)] no free GPU — ${#need[@]} cells stay queued for next tick"
   exit 0
 fi
+echo "[tick $(date -Is)] free GPUs: ${free_gpus[*]}  |  queue: ${need[*]}"
 
-# enqueue된 셀별로 MODELS/METHODS 필터로 호출
-for cell in "${need[@]}"; do
-  model="${cell%/*}"
-  method="${cell#*/}"
-  if MODELS="$model" METHODS="$method" \
-       bash scripts/run_eval_main_7b.sh --gpus "$free_gpu"; then
-    touch "${EVAL_RESULTS_ROOT}/${model}/${method}/.eval_done"
-    # §10 score board 갱신은 별도 헬퍼로 (에이전트가 이어서 처리)
-  else
-    echo "[tick $(date -Is)] eval failed: ${cell} — see logs/eval_main_7b_${model}_${method}.log"
-    # 실패가 반복되면 §10의 hygiene 루틴 트리거
-  fi
+# Dispatch pass: 빈 GPU 1장에 셀 1개를 nohup 백그라운드로 launch.
+# bash wrapper(run_eval_main_7b.sh)는 의도적으로 사용하지 않음 — 한 번에 여러 셀을
+# 병렬 dispatch하려면 wrapper가 가진 sequential vs --parallel 모드와 우리 큐
+# 알고리즘이 충돌. 그냥 `python -m tads.eval`을 직접 부르는 게 가장 단순.
+launched_pids=()
+for gpu in "${free_gpus[@]}"; do
+  [ ${#need[@]} -eq 0 ] && break
+  cell="${need[0]}"; need=("${need[@]:1}")
+  model="${cell%/*}"; method="${cell#*/}"
+  cfg="configs/experiments/main_7b/${model}/${method}.yaml"
+  log="${LOG_DIR}/eval_${model}_${method}.log"
+  echo "[tick $(date -Is)] dispatch ${cell} -> GPU ${gpu}" | tee -a "$log"
+  CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tads.eval \
+      --config "$cfg" \
+      --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+      >> "$log" 2>&1 &
+  launched_pids+=("$!:${cell}")
+  sleep 0.5
 done
+
+# 이 tick에서 launch만 하고 종료 — 잡들은 백그라운드에서 계속 돈다.
+# 다음 tick에서 (a) 끝난 잡은 .eval_done 자동 갱신 되어있을 것 (eval 본체가
+# 마지막 atomic write), (b) 새 done_marker로 큐가 자동 줄어듦.
+echo "[tick $(date -Is)] launched: ${launched_pids[*]}"
+
+# OPTIONAL: 직전 tick에서 launch했던 잡의 종료 회수 — exit code 0이면 done_marker
+# touch, 0 아니면 .fail_count 증가. 이걸 모니터링하려면 tick 자체가 길게 살아야
+# 해서 cron 모델과 안 맞음. 권장: launch만 하고 .eval_done은 eval 자체에서 마지막
+# 단계로 atomic touch (이미 tads.eval이 출력 디렉토리에 결과 JSON 쓰는 시점이
+# 자연스러운 sentinel — 별도 .eval_done 없이도 §5-3의 mtime 비교로 판단 가능).
 ```
 
 ### 9-4. cron 디버깅 체크리스트

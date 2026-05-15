@@ -7,9 +7,17 @@ defaults:
 
 output_subdir: main_7b/llama2/tads_10
 selection_ratio: 0.1
-train_epochs: 3
+# LLAMA-TUNE: 3 → 4 (see full_100.yaml comment).
+train_epochs: 4
 
 anchor:
   layer_idx: -1
-  max_samples_for_pca: 1024
+  # LLAMA-TUNE: 1024 → 2048 to reduce PCA estimator variance, anchor direction
+  # stability ↑, alignment noise ↓. PCA batch_size kept at 16 (memory).
+  max_samples_for_pca: 2048
   pca_batch_size: 16
+
+# LLAMA-TUNE: bump PPO actor entropy slightly (same as data_agent_10 — keep
+# the comparison fair).
+agent:
+  entropy_coef: 0.02

@@ -7,4 +7,10 @@ defaults:
 
 output_subdir: main_7b/llama2/data_agent_10
 selection_ratio: 0.1
-train_epochs: 3
+# LLAMA-TUNE: 3 → 4 (see full_100.yaml comment).
+train_epochs: 4
+
+# LLAMA-TUNE: bump PPO actor entropy slightly to keep exploration alive —
+# default 0.01 occasionally collapses the policy onto a small subset early.
+agent:
+  entropy_coef: 0.02

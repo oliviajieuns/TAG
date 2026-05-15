@@ -1,7 +1,14 @@
 model_key: llama2-7b
 model_path: ${oc.env:MODEL_PATH_LLAMA2_7B,/group-volume/nait-models/Llama-2-7b-hf}
-prompt_style: llama_user_assistant
+# LLAMA-TUNE: switched from llama_user_assistant → alpaca_default to match
+# NAIT paper Table 2 row "01 Alpaca-GPT4" (Stanford Alpaca template). The
+# `<|user|>`/`<|assistant|>` tokens aren't in base Llama-2's vocabulary, so
+# the previous template added cold-start cost during SFT. See LLAMA_TUNING.md.
+prompt_style: alpaca_default
 # NAIT Table 8: max_length=512 (Alpaca-GPT4 samples fit comfortably).
 max_seq_len: 512
 # NAIT Table 8 / Stanford Alpaca SFT recipe.
 learning_rate: 2.0e-5
+# LLAMA-TUNE: ~30% forward speedup at identical numerics. The loader falls
+# back to sdpa if flash-attn isn't installed, so this is safe to ship.
+attn_implementation: flash_attention_2
