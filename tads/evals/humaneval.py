@@ -93,9 +93,14 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             else:
                 gen_kwargs.update(do_sample=False, temperature=0.0)
             out = model.generate(**inputs, **gen_kwargs)
+            # Token-id slicing — see tydiqa.py comment for why a
+            # `completion[len(prefix):]` char-offset slice can't survive
+            # the tokenizer's BOS auto-prepend + decode strip round-trip.
+            prefix_tok_len = inputs["input_ids"].shape[1]
             for j in range(out.shape[0]):
-                completion = tokenizer.decode(out[j], skip_special_tokens=True)
-                completion = completion[len(prefix):].strip()
+                completion = tokenizer.decode(
+                    out[j, prefix_tok_len:], skip_special_tokens=True,
+                ).strip()
                 completions.setdefault(problem["task_id"], []).append(completion)
             if (i + 1) % 20 == 0:
                 logger.info(

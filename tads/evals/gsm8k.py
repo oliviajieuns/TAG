@@ -123,8 +123,13 @@ class GSM8KEvaluator(BenchmarkEvaluator):
                 temperature=0.0,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
             )
-            response = tokenizer.decode(out[0], skip_special_tokens=True)
-            response = response[len(prompt):].strip()
+            # Token-id slicing (see tydiqa.py comment for full rationale):
+            # decoded(prompt_ids)[:len(prompt)] is not the original prompt
+            # once add_special_tokens auto-prepends BOS and decode strips
+            # it. Slicing by input_ids length gives us EXACTLY the
+            # newly-generated tokens.
+            prompt_tok_len = inputs["input_ids"].shape[1]
+            response = tokenizer.decode(out[0, prompt_tok_len:], skip_special_tokens=True).strip()
 
             ok = _grade(response, ex["answer"])
             correct += int(ok)

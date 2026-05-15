@@ -135,11 +135,21 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
         train_file = os.path.join(base_dir, "tydiqa-goldp-v1.1-train.json")
 
         if not os.path.exists(dev_file):
-            summary = {"accuracy_em": 0.0, "benchmark": "tydiqa", "error": "data not found"}
-            with open(output_file, "w") as f:
-                json.dump(summary, f, indent=2)
-            logger.error("TyDiQA dev not found at %s", dev_file)
-            return summary
+            # Used to silently return accuracy_em=0.0 with a buried error
+            # string in the summary, which mixed indistinguishably into
+            # eval_summary.json next to legitimate-but-bad runs. Raise
+            # instead so eval.py records it in "failures" and the user
+            # can't accidentally treat 0.0 as a real score.
+            raise FileNotFoundError(
+                f"TyDiQA dev file not found at {dev_file}.\n"
+                f"Download with `bash scripts/download_tydiqa.sh "
+                f"{base_dir}` (gets dev + train for paper-faithful 5-shot).\n"
+                f"Or manually:\n"
+                f"  curl -L -o {dev_file} "
+                f"https://storage.googleapis.com/tydiqa/v1.1/tydiqa-goldp-v1.1-dev.json\n"
+                f"  curl -L -o {train_file} "
+                f"https://storage.googleapis.com/tydiqa/v1.1/tydiqa-goldp-v1.1-train.json"
+            )
 
         examples = _parse_squad_file(dev_file)
         if limit is not None:
@@ -201,8 +211,24 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 temperature=0.0,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
             )
-            pred = tokenizer.decode(out[0], skip_special_tokens=True)
-            pred = pred[len(prompt):].strip()
+            # Slice on input_ids length, NOT on the decoded prompt string.
+            # tokenizer(...) auto-prepends BOS (e.g. <s> for Llama / Mistral)
+            # AND decode(skip_special_tokens=True) removes it again; the same
+            # round-trip also normalises whitespace and renders some special
+            # tokens differently. The result is that
+            # decode(out[0], skip_special_tokens=True)[:len(prompt)] is NOT
+            # the original prompt — slicing by prompt length lopped off
+            # characters from the generated answer too, which silently
+            # turned every EM into a near-empty / leading-fragment match and
+            # produced the all-zero EM the user reported.
+            prompt_tok_len = inputs["input_ids"].shape[1]
+            gen_ids = out[0, prompt_tok_len:]
+            pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+            # TyDiQA gold answers are short extractive spans. Take just the
+            # first line so trailing prose / next "Question:" demonstrations
+            # the model continued into don't poison the EM compare.
+            if pred:
+                pred = pred.splitlines()[0].strip()
 
             ok = _exact_match(pred, gold)
             correct += int(ok)
