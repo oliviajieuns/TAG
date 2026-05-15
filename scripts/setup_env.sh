@@ -173,7 +173,7 @@ _tads_warn ALPACA_DATA_FILES      "$ALPACA_DATA_FILES"      "Alpaca-GPT4 trainin
 # Required for evaluation (only matter if you actually run that benchmark)
 _tads_warn MMLU_DATA_DIR          "$MMLU_DATA_DIR"          "MMLU 'all' parquet directory"
 _tads_warn GSM8K_DATA_DIR         "$GSM8K_DATA_DIR"         "GSM8K root (contains main/test*.parquet)"
-_tads_warn HUMANEVAL_DATA_DIR     "$HUMANEVAL_DATA_DIR"     "HumanEval directory or HumanEval.jsonl.gz"
+_tads_warn HUMANEVAL_DATA_DIR     "$HUMANEVAL_DATA_DIR"     "HumanEval dir (contains HumanEval.jsonl.gz — run scripts/download_humaneval.sh \$HUMANEVAL_DATA_DIR to fetch; also needs 'pip install human-eval' for scoring)"
 _tads_warn TYDIQA_DATA_DIR        "$TYDIQA_DATA_DIR"        "TyDiQA dir (HF parquet: validation-00000-of-00001.parquet + train-00000-of-00001.parquet — run scripts/download_tydiqa.sh \$TYDIQA_DATA_DIR to fetch)"
 _tads_warn BBH_DATA_DIR           "$BBH_DATA_DIR"           "BBH directory (contains <task>.json + optional cot-prompts/)"
 
