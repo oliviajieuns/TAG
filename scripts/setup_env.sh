@@ -50,6 +50,19 @@ export BBH_DATA_DIR="${BBH_DATA_DIR:-/group-volume/IT-datasets/bbh}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
+# --- HF cache redirect (user-volume protection) ---
+# Hugging Face libraries default to ~/.cache/huggingface/{hub,datasets,...}.
+# On this cluster ~ lives on a 50 GB user-volume, and concurrent training /
+# eval jobs all write into the same directory — both racing each other and
+# filling user-volume. Force every HF cache subtree to group-volume so the
+# user-volume stays untouched even if some library bypasses our explicit
+# `cache_dir=` arguments.
+export HF_HOME="${HF_HOME:-${DATA_CACHE}/huggingface}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-${HF_HOME}/transformers}"
+mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TRANSFORMERS_CACHE" 2>/dev/null || true
+
 # --- Core dump policy ---
 # A single 7B-DDP rank that segfaults can drop a ~240 GB core file into
 # the current working directory (the dump contains the process's full

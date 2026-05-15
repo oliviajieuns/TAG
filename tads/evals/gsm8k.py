@@ -61,7 +61,12 @@ class GSM8KEvaluator(BenchmarkEvaluator):
         max_new_tokens: int = 256,
         **kwargs,
     ) -> Dict[str, Any]:
-        from datasets import load_dataset
+        # IMPORTANT: do NOT use `datasets.load_dataset` here. Without an
+        # explicit cache_dir it writes to ~/.cache/huggingface/datasets,
+        # which (a) lives on user-volume (small + private), (b) races
+        # across concurrent evaluations, and (c) leaves stale arrow files
+        # behind. pandas.read_parquet is a one-shot read with no cache.
+        import pandas as pd
 
         if data_dir is None:
             raise ValueError("GSM8K: `data_dir` is required (path to gsm8k root).")
@@ -70,8 +75,13 @@ class GSM8KEvaluator(BenchmarkEvaluator):
         test_path = os.path.join(data_dir, "main", "test.parquet")
         if not os.path.exists(test_path):
             test_path = os.path.join(data_dir, "main", "test-00000-of-00001.parquet")
-        ds = load_dataset("parquet", data_files=test_path, split="train")
-        test_data = list(ds)
+        if not os.path.exists(test_path):
+            raise FileNotFoundError(
+                f"GSM8K test parquet not found under {data_dir}/main/. "
+                f"Expected `test.parquet` or `test-00000-of-00001.parquet`."
+            )
+        df = pd.read_parquet(test_path)
+        test_data = df.to_dict("records")
         if limit is not None:
             test_data = test_data[:limit]
         logger.info("GSM8K: %d examples | limit=%s", len(test_data), limit)
