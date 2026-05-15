@@ -542,14 +542,17 @@ def main() -> None:
                 "hang source. Check selection_ratio and dataset size.",
             )
 
-        # For tads/data_agent the rank-0 collect_episode pass leaves the
-        # NCCL communicator in a state where the first SFT all_reduce
-        # hangs — empirical signature: "SFT step entry step=0" prints on
-        # every rank but "SFT step backward done step=0" never does.
-        # Tear the process group down and bring it up fresh, then re-wrap
-        # the model. random/full methods skip this because they never sit
-        # idle for 30+ minutes.
-        if method in ("tads", "data_agent") and use_ddp:
+        # NCCL reinit workaround: OPT-IN via TADS_NCCL_REINIT=1.
+        # Empirically `destroy_process_group` itself can hang when the
+        # NCCL communicator is in a deeply broken state — making this
+        # "recovery" path itself a deadlock. Default is OFF; rely on
+        # TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=99999 + async-error env vars
+        # to prevent the communicator from dying in the first place.
+        if (
+            method in ("tads", "data_agent")
+            and use_ddp
+            and os.environ.get("TADS_NCCL_REINIT", "0") == "1"
+        ):
             model = _reinit_ddp_after_long_idle(model, use_ddp)
 
         subset = Subset(dataset, selected)
