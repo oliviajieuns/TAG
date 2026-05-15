@@ -184,10 +184,14 @@ def sft_one_epoch(
             )
 
         def _forward_backward():
+            # non_blocking=True lets the H→D copy overlap with the prior
+            # micro-batch's forward. Only effective when DataLoader uses
+            # pin_memory=True (it does — see make_dataloader). Without the
+            # flag the CPU stalls on every transfer and pin_memory is wasted.
             o = model(
-                input_ids=batch["input_ids"].to(device),
-                attention_mask=batch["attention_mask"].to(device),
-                labels=batch["labels"].to(device),
+                input_ids=batch["input_ids"].to(device, non_blocking=True),
+                attention_mask=batch["attention_mask"].to(device, non_blocking=True),
+                labels=batch["labels"].to(device, non_blocking=True),
             )
             (o.loss / grad_accum).backward()
             return o
