@@ -55,10 +55,43 @@ def _truncate_at_stop(completion: str) -> str:
 _LEADING_FENCE_RE = re.compile(r"^\s*```(?:python|py)?\s*\n", re.IGNORECASE)
 
 
-def _postprocess_completion(completion: str) -> str:
+def _extract_body_after_signature(completion: str, entry_point: str) -> Optional[str]:
+    """If the completion re-emits the function signature, peel it off and
+    return just the body lines (so `prompt + body` is syntactically valid).
+
+    Chat-style instruction-tuned models routinely answer the HumanEval
+    prompt with the full function rewritten — sometimes inside a
+    ```python fence, sometimes prefixed with prose. Concatenating
+    `prompt + "def has_close_elements(...):"` to the original prompt
+    redefines the function inside its own body and crashes the test
+    runner. When we can find a signature line for ``entry_point`` we
+    return everything AFTER it (i.e. the body), so the harness ends up
+    exec'ing one well-formed definition.
+
+    Returns None if no signature is found (the caller falls back to the
+    raw continuation path).
+    """
+    sig_pat = re.compile(
+        rf"^[ \t]*def\s+{re.escape(entry_point)}\s*\(",
+        re.MULTILINE,
+    )
+    m = sig_pat.search(completion)
+    if not m:
+        return None
+    # Skip past the signature line (find the next newline AFTER the `def`).
+    nl = completion.find("\n", m.end())
+    if nl == -1:
+        return None
+    body = completion[nl + 1:]
+    return body
+
+
+def _postprocess_completion(completion: str, entry_point: str = "") -> str:
     """Clean a raw model completion for `prompt + completion` exec.
 
     - Strip a leading ```python / ``` code-fence opener (chat-style models).
+    - If the model rewrote the whole function (signature echoed), peel
+      the signature off so we exec exactly one definition.
     - Truncate at the first stop sequence (see ``_HUMANEVAL_STOP_SEQUENCES``).
     - Drop trailing whitespace ONLY — NEVER lstrip / strip, because that
       would eat the 4-space indent that the HumanEval prompt expects
@@ -67,6 +100,10 @@ def _postprocess_completion(completion: str) -> str:
       and the harness raises ``IndentationError`` on every problem.
     """
     completion = _LEADING_FENCE_RE.sub("", completion)
+    if entry_point:
+        body = _extract_body_after_signature(completion, entry_point)
+        if body is not None:
+            completion = body
     completion = _truncate_at_stop(completion)
     return completion.rstrip()
 
@@ -166,7 +203,9 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
                 raw = tokenizer.decode(
                     out[j, prefix_tok_len:], skip_special_tokens=True,
                 )
-                completion = _postprocess_completion(raw)
+                completion = _postprocess_completion(
+                    raw, entry_point=problem.get("entry_point", ""),
+                )
                 completions.setdefault(problem["task_id"], []).append(completion)
             if (i + 1) % 20 == 0:
                 logger.info(
