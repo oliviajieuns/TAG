@@ -19,18 +19,33 @@ ANSWER_PATTERN_COT = re.compile(
 
 
 def _extract_predicted_number(text: str) -> str:
-    m = ANSWER_PATTERN_COT.search(text)
-    if m:
-        return m.group(1).strip()
-    m = ANSWER_PATTERN_HASH.search(text)
-    if m:
-        return m.group(1).strip()
+    # Self-correcting responses commonly say "The answer is 7. Wait, let me
+    # recompute... The answer is 12." — .search() would have returned 7, the
+    # wrong one. Use findall + last match so the FINAL declared answer wins,
+    # matching how the canonical lm-eval-harness GSM8K extractor behaves.
+    matches = ANSWER_PATTERN_COT.findall(text)
+    if matches:
+        return matches[-1].strip()
+    matches = ANSWER_PATTERN_HASH.findall(text)
+    if matches:
+        return matches[-1].strip()
     numbers = re.findall(r"-?\d+\.?\d*", text)
     return numbers[-1].strip() if numbers else ""
 
 
 def _normalize_answer(text: str) -> str:
-    return text.replace(",", "").replace(" ", "").replace("$", "").replace("%", "").strip()
+    # Strip trailing punctuation too (the COT regex can capture a final "."
+    # or "," when the answer ends a sentence, e.g. "The answer is 8."). The
+    # downstream float comparison handles this, but string-equality on the
+    # fast path was failing on otherwise-correct predictions.
+    return (
+        text.replace(",", "")
+        .replace(" ", "")
+        .replace("$", "")
+        .replace("%", "")
+        .rstrip(".")
+        .strip()
+    )
 
 
 def _grade(response: str, ground_truth: str) -> bool:

@@ -80,9 +80,22 @@ def _extract_answer(text: str) -> str:
         ms = list(lpat.finditer(text))
         if ms:
             return ms[-1].group(0)
-    # Last-resort: last non-empty line.
+    # Last-resort: last non-empty line. For BBH numeric / word-form tasks that
+    # don't match any (A)/(B)/Yes/No/True/False label, a full trailing sentence
+    # like "The answer is 42 approximately." used to be returned verbatim and
+    # fail the gold-side comparison (which holds just "42"). If the last line
+    # contains a number, prefer the LAST numeric span — this matches the gold
+    # format for tasks like Dyck Language, Multistep Arithmetic, Object
+    # Counting, etc. Word-form tasks (yes/no, fruit names) keep the original
+    # last-line behaviour because no number will be found.
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
-    return lines[-1].rstrip(".").strip() if lines else text.strip()
+    if not lines:
+        return text.strip()
+    last_line = lines[-1].rstrip(".").strip()
+    nums = re.findall(r"-?\d+(?:\.\d+)?", last_line)
+    if nums:
+        return nums[-1]
+    return last_line
 
 
 def _normalize(s: str) -> str:
