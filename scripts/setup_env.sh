@@ -50,6 +50,34 @@ export BBH_DATA_DIR="${BBH_DATA_DIR:-/group-volume/IT-datasets/bbh}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
+# --- TADS DDP / training knobs (opt-in, all default to safe values) ---
+# Documented here so they're discoverable; uncomment to override.
+#
+# TADS_DDP_BACKEND        nccl|gloo  default nccl. Fall back to gloo only if
+#                                    NCCL is structurally broken on the host
+#                                    (much slower; CPU all-reduce).
+# TADS_DDP_FIND_UNUSED    0|1        default 1 (safe). Set 0 once you've
+#                                    verified all params receive grads.
+# TADS_DDP_STATIC_GRAPH   0|1        default 0. Enables DDP static_graph
+#                                    optimisation; requires unchanging graph
+#                                    across iterations (no dynamic control flow).
+# TADS_DDP_BROADCAST_BUFFERS 0|1     default 0. Buffers (running stats etc.)
+#                                    are not broadcast each step.
+# TADS_NCCL_REINIT        0|1        default 0. Destroy + reinit process group
+#                                    after long idle phases (selection collect).
+#                                    The destroy call itself can hang if NCCL
+#                                    state is wedged — keep at 0 unless needed.
+# TADS_DL_NUM_WORKERS     int        default 0. DataLoader worker procs. 0 is
+#                                    safest for DDP on this cluster; >0 has
+#                                    occasionally surfaced shared-memory races.
+# TADS_ENABLE_NO_SYNC     0|1        default 0. Use DDP no_sync() context for
+#                                    grad accumulation. Off by default because
+#                                    early tests in this codebase hit NCCL
+#                                    issues with it; re-enable when stable.
+#
+# Example to flip backend for a single run:
+#   TADS_DDP_BACKEND=gloo torchrun --nproc_per_node=4 -m tads.train ...
+
 # --- HF cache redirect (user-volume protection) ---
 # Hugging Face libraries default to ~/.cache/huggingface/{hub,datasets,...}.
 # On this cluster ~ lives on a 50 GB user-volume, and concurrent training /

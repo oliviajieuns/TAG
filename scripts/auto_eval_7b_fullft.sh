@@ -16,6 +16,18 @@
 #     even when eval didn't actually succeed (sentinel was touched on failure).
 set -euo pipefail
 
+# Graceful shutdown: the watcher loop sleeps for 60s between iterations, so
+# without a trap a SIGTERM (e.g. tmux kill-session) would have to interrupt the
+# sleep AND the next python subprocess separately. Forward signals to the
+# child python process group so a single Ctrl-C / kill cleans everything up.
+_cleanup() {
+  trap '' TERM INT
+  echo "[auto_eval] received signal, exiting watcher loop" >&2
+  kill -- -$$ 2>/dev/null || true
+  exit 143
+}
+trap _cleanup TERM INT
+
 GPU="${1:-0}"
 shift || true
 RUNS=("$@")
@@ -50,7 +62,7 @@ while true; do
       if CUDA_VISIBLE_DEVICES="${GPU}" python -m tads.eval \
           --config "${cfg}" \
           --ckpt "${ckpt}" \
-          --benchmarks mmlu,gsm8k,humaneval,tydiqa \
+          --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
           --out_dir "${out_dir}/"; then
         touch "${done_marker}"
         if [ "${CLEANUP_EARLY_EPOCHS}" = "1" ]; then
