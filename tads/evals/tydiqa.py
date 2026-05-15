@@ -147,13 +147,17 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
 
         # Load same-language demonstrations from train.json.
         demos_by_lang = _load_demos_by_language(train_file, n_fewshot) if n_fewshot > 0 else {}
+        fewshot_fallback_reason: Optional[str] = None
         if n_fewshot > 0 and not demos_by_lang:
-            logger.warning(
-                "TyDiQA: %s not found; falling back to 0-shot. Download from "
-                "https://storage.googleapis.com/tydiqa/v1.1/tydiqa-goldp-v1.1-train.json "
-                "to enable paper-faithful 5-shot evaluation.",
-                train_file,
+            fewshot_fallback_reason = (
+                f"train.json not found at {train_file} — running 0-shot. "
+                f"NAIT paper Table 2 reports 5-shot; 0-shot typically scores "
+                f"10-15pt lower EM, so this run is NOT directly comparable. "
+                f"Download from "
+                f"https://storage.googleapis.com/tydiqa/v1.1/tydiqa-goldp-v1.1-train.json "
+                f"to enable 5-shot."
             )
+            logger.error("TyDiQA FALLBACK: %s", fewshot_fallback_reason)
             effective_fewshot = 0
         else:
             effective_fewshot = n_fewshot
@@ -221,14 +225,26 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
             "correct": correct,
             "total": len(examples),
             "n_fewshot": effective_fewshot,
+            "n_fewshot_requested": n_fewshot,
+            # If train.json was missing and we silently dropped to 0-shot,
+            # surface that in the JSON itself — downstream paper-comparison
+            # tooling can then refuse to treat this number as 5-shot.
+            "fewshot_fallback": fewshot_fallback_reason,
+            "paper_faithful": fewshot_fallback_reason is None,
             "benchmark": "tydiqa",
             "per_language": per_lang_acc,
             "per_question": results,
         }
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)
-        logger.info(
-            "TyDiQA EM: %.4f (%d/%d) | n_fewshot=%d",
-            accuracy, correct, len(examples), effective_fewshot,
-        )
+        if fewshot_fallback_reason is not None:
+            logger.error(
+                "TyDiQA EM: %.4f (%d/%d) | NOT paper-faithful (0-shot fallback)",
+                accuracy, correct, len(examples),
+            )
+        else:
+            logger.info(
+                "TyDiQA EM: %.4f (%d/%d) | n_fewshot=%d",
+                accuracy, correct, len(examples), effective_fewshot,
+            )
         return summary

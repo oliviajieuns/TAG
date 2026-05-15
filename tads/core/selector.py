@@ -305,9 +305,32 @@ def collect_episode(
         logger.info("DataAgent score (no anchor) | epoch=%d", epoch)
 
     k = max(1, int(total_samples * selection_ratio))
-    print(f"[diag-selector] total_samples={total_samples} ratio={selection_ratio} k={k} score.shape={tuple(score.shape)} dtype={score.dtype} has_nan={bool(torch.isnan(score).any())} has_inf={bool(torch.isinf(score).any())}", flush=True)
+    if total_samples == 0:
+        raise RuntimeError(
+            "collect_episode: total_samples == 0 — empty candidate pool. "
+            "Check dataset_subset_size / data path.",
+        )
+    if k <= 0:
+        raise RuntimeError(
+            f"collect_episode: would select 0 samples "
+            f"(total={total_samples}, ratio={selection_ratio}). "
+            "Increase selection_ratio or dataset size.",
+        )
+    # NaN / Inf scores: PPO actor or anchor produced bad numbers and topk
+    # over NaN is undefined. Fail loudly rather than silently picking
+    # arbitrary indices.
+    if torch.isnan(score).any() or torch.isinf(score).any():
+        raise RuntimeError(
+            "collect_episode: selection score contains NaN/Inf — likely "
+            "from a degenerate reward (var=0 → r_weight blew up) or a "
+            "diverged PPO actor. Check r_loss/r_entropy variance in the "
+            "preceding log line.",
+        )
     selected_indices: List[int] = score.topk(k).indices.cpu().tolist()
-    print(f"[diag-selector] selected_indices type={type(selected_indices).__name__} len={len(selected_indices)} first5={selected_indices[:5]}", flush=True)
+    logger.info(
+        "Selection topk | k=%d/%d | first5=%s",
+        k, total_samples, selected_indices[:5],
+    )
 
     var_loss_val = float(all_r_loss.var().item()) if all_r_loss.numel() > 1 else 0.0
     var_entropy_val = float(all_r_entropy.var().item()) if all_r_entropy.numel() > 1 else 0.0

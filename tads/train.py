@@ -499,6 +499,12 @@ def main() -> None:
         )
         save_selection(output_dir, epoch, selected)
 
+        if len(selected) == 0:
+            raise RuntimeError(
+                f"Epoch {epoch}: selected indices is empty. SFT would produce "
+                "0 batches and DDP all_reduce at end of empty loop is a known "
+                "hang source. Check selection_ratio and dataset size.",
+            )
         subset = Subset(dataset, selected)
         loader = make_dataloader(
             subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,

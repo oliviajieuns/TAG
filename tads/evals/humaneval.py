@@ -106,13 +106,31 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
                     )
             temp_path = temp_file.name
 
+        # The reference scorer lives in the optional `human_eval` package
+        # (`pip install human-eval`). We surface a clear error if it's
+        # missing rather than a confusing NameError on the call below;
+        # the temp completions file is removed either way.
         try:
-            from human_eval.evaluation import evaluate_functional_correctness
+            try:
+                from human_eval.evaluation import (
+                    evaluate_functional_correctness,
+                )
+            except ImportError as exc:
+                raise RuntimeError(
+                    "HumanEval requires the `human_eval` package. "
+                    "Install it with `pip install human-eval` (note the dash) "
+                    "and rerun. n_samples completions have been written to "
+                    f"{temp_path}; you can score them later with the same "
+                    "package.",
+                ) from exc
             pass_at_k = evaluate_functional_correctness(
                 sample_file=temp_path, k=[1, 10], timeout=10, n_workers=4,
             )
         finally:
-            os.unlink(temp_path)
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
 
         summary = {
             "pass@1": pass_at_k.get("pass@1", 0.0),
