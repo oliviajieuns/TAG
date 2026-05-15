@@ -213,6 +213,95 @@ tads_10       proposed *  -          -          -          -
   ```
 - 셀의 LEGACY 점수가 발산 알람을 트리거하더라도, 재실행으로 DONE이 될 때까지는 알람을 빨간/노란색이 아니라 회색(`(provisional)`)으로 표기.
 
+### 0-5. Status Dashboard — **5×16 한눈 보기 표 (의무 출력)**
+
+매 tick 보고에 에이전트는 **다음 80-cell 표 한 개를 반드시 출력**한다. §0-4의
+score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 사용자가 한
+번에 진행 상태를 파악하는 dashboard. 셀 값은 정확히 4종 중 하나:
+
+| 상태 표기 | 의미 | 분류 조건 |
+|---|---|---|
+| `학습전` | 체크포인트 없음 | `<ckpt_root>/_latest`도 `_latest.txt`도 없고, legacy flat `epoch_*`도 없음. 행(=한 셀) 전체 5개 컬럼이 모두 이 표기. |
+| `학습중` | 학습 진행 중 | (a) `python -m tads.train.*<model>/<method>` 프로세스가 살아있음, **또는** (b) `<latest_run>/cfg.json`의 `train_epochs` 값보다 sealed (`_complete`) epoch 수가 적음. 행 전체 5개 컬럼 모두 이 표기. |
+| `Eval중` | 학습 끝남, 이 벤치 결과 미생성 | 학습은 완료(sealed epoch == `train_epochs`)지만 `<eval_dir>/<exp_label>-<bench>.json`이 없거나, mtime이 sealed epoch보다 옛날. **또는** `python -m tads.eval.*<model>/<method>` 프로세스가 떠 있음 (=대기든 진행이든). |
+| `47.98%` | 점수 산출 완료 | `<eval_dir>/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
+
+**판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 5×16에 투영):
+
+```python
+def status_cell(model, method, bench):
+    ckpt_root = f"{OUTPUT_ROOT}/main_7b/{model}/{method}"
+    latest_run = resolve_latest_run(ckpt_root)
+    if latest_run is None:
+        return "학습전"
+    # 학습 프로세스 검출 (행 단위 - 5개 벤치 모두 학습중)
+    if pgrep_alive(f"python.*-m tads.train.*{model}/{method}\\.yaml"):
+        return "학습중"
+    cfg = json.load(open(f"{latest_run}/cfg.json"))
+    target = int(cfg.get("train_epochs", 3))
+    sealed = [p for p in glob(f"{latest_run}/epoch_*") if exists(f"{p}/_complete")]
+    if len(sealed) < target:
+        return "학습중"
+    # 학습 완료. 이 벤치 평가 상태 확인.
+    out_dir = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
+    label   = f"{model}_{method}"
+    bench_json = f"{out_dir}/{label}-{bench}.json"
+    sealed_max = max(sealed, key=lambda p: int(basename(p).replace("epoch_","")))
+    if exists(bench_json) and mtime(bench_json) > mtime(sealed_max):
+        return f"{extract_score_pct(bench_json):.2f}%"
+    # eval 진행 중인지 확인 (실행 중 OR 대기 중 모두 'Eval중')
+    return "Eval중"
+```
+
+#### 80-cell 표 (16 행 × 5 벤치 컬럼) — 초기 상태 / 갱신 템플릿
+
+행 순서는 `(model, method)` 묶음, §0-3 16-cell 표와 동일:
+
+| # | 모델 / 메서드 | MMLU | GSM8K | HumanEval | TyDiQA | BBH |
+|---|---|---|---|---|---|---|
+| 1 | llama2 / full_100      | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 2 | llama2 / random_10     | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 3 | llama2 / data_agent_10 | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 4 | llama2 / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 5 | qwen25 / full_100      | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 6 | qwen25 / random_10     | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 7 | qwen25 / data_agent_10 | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 8 | qwen25 / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 9 | mistral / full_100     | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 10 | mistral / random_10    | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 11 | mistral / data_agent_10 | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 12 | mistral / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 13 | deepseek / full_100     | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 14 | deepseek / random_10    | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 15 | deepseek / data_agent_10 | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+| 16 | deepseek / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+
+#### 진행 예시 (이런 형태로 보고)
+
+학습이 일부 진행되고 평가도 시작된 시점의 예시:
+
+| # | 모델 / 메서드 | MMLU | GSM8K | HumanEval | TyDiQA | BBH |
+|---|---|---|---|---|---|---|
+| 1 | llama2 / full_100      | `47.98%` | `14.63%` | `27.87%` | `39.48%` | `39.94%` |
+| 2 | llama2 / random_10     | `47.14%` | `14.13%` | `Eval중` | `Eval중` | `Eval중` |
+| 3 | llama2 / data_agent_10 | `학습중` | `학습중` | `학습중` | `학습중` | `학습중` |
+| 4 | llama2 / **tads_10**   | `학습중` | `학습중` | `학습중` | `학습중` | `학습중` |
+| 5 | qwen25 / full_100      | `Eval중` | `Eval중` | `Eval중` | `Eval중` | `Eval중` |
+| ... |
+| 16 | deepseek / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+
+해석 가이드:
+- 행 전체가 `학습전`/`학습중`이면 학습 단계 → **에이전트는 자동 트리거 금지**, 사용자에게만 보고.
+- 행에 `Eval중`이 섞여 있으면 §4-3 dispatch 큐에 자동 enqueue → 빈 GPU 생기는 대로 launch.
+- 행 전체가 숫자이면 DONE → §0-4 score board에 점수 반영 + §0-2 발산 알람 평가.
+- 한 행 내에서 `47.98%`와 `Eval중`이 섞이는 건 정상 (eval은 5개 벤치 순차 처리, JSON 떨어진 순으로 셀이 갱신됨).
+
+#### 갱신 빈도 / 출력 위치
+
+- 매 tick (cron 30분 주기)마다 dispatch pass 직전 1회, dispatch 직후 1회 = tick당 2회 출력.
+- 출력은 `experiments.md` **상단**에 fenced markdown 표로 갱신 (전체 파일을 매번 다시 쓰지 말고, "STATUS DASHBOARD" 섹션 사이의 영역만 atomic 교체).
+- 채팅/슬랙 보고에는 변경된 셀만 `diff` 형태로 인용 ("[#4 llama2/tads_10] 학습중 → Eval중", "[#1 llama2/full_100, MMLU] Eval중 → 47.98%" 등). 표 전체 매번 복붙 금지.
+
 ---
 
 ## 1. Repo / Working Directory
