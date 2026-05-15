@@ -175,9 +175,17 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
 
         correct = 0
         results = []
+        # Count samples that fell back to 0-shot because their language
+        # couldn't be parsed (qa_id didn't match `lang--...`) or no demos
+        # were available for that language. Visible in the summary so a
+        # custom dev.json doesn't silently downgrade to 0-shot.
+        n_silent_zero_shot = 0
         for i, ex in enumerate(examples):
             gold = ex["answers"].get("text") or ["No answer"]
-            demos = demos_by_lang.get(ex.get("language", "unknown")) if effective_fewshot else None
+            ex_lang = ex.get("language", "unknown")
+            demos = demos_by_lang.get(ex_lang) if effective_fewshot else None
+            if effective_fewshot and not demos:
+                n_silent_zero_shot += 1
             prompt = tydiqa_generation_prefix(
                 ex.get("context", ""), ex["question"],
                 prompt_style=prefix_style,
@@ -220,17 +228,30 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
             lang: {**b, "accuracy": b["correct"] / b["total"] if b["total"] else 0.0}
             for lang, b in per_lang.items()
         }
+        if effective_fewshot and n_silent_zero_shot > 0:
+            logger.warning(
+                "TyDiQA: %d / %d samples (%.1f%%) fell back to 0-shot because "
+                "no same-language demos were available — their qa_id didn't "
+                "match `lang--...` or the train.json lacked that language.",
+                n_silent_zero_shot, len(examples),
+                100.0 * n_silent_zero_shot / max(1, len(examples)),
+            )
         summary = {
             "accuracy_em": accuracy,
             "correct": correct,
             "total": len(examples),
             "n_fewshot": effective_fewshot,
             "n_fewshot_requested": n_fewshot,
+            # Per-sample 0-shot fallback count (language unparseable or
+            # train.json had no demos for that language).
+            "n_silent_zero_shot": n_silent_zero_shot,
             # If train.json was missing and we silently dropped to 0-shot,
             # surface that in the JSON itself — downstream paper-comparison
             # tooling can then refuse to treat this number as 5-shot.
             "fewshot_fallback": fewshot_fallback_reason,
-            "paper_faithful": fewshot_fallback_reason is None,
+            "paper_faithful": (
+                fewshot_fallback_reason is None and n_silent_zero_shot == 0
+            ),
             "benchmark": "tydiqa",
             "per_language": per_lang_acc,
             "per_question": results,

@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 
 LayerSpec = Union[str, List[int], None]
 
+# Maximum number of past epochs of (v, lambda, stability) history we keep
+# in memory. NAIT-faithful runs do 3 epochs so this is effectively unlimited;
+# the cap matters only for long ablation sweeps that call .update() many
+# times against the same anchor instance.
+_MAX_HISTORY = 50
+
 
 def _resolve_layer_indices(spec: LayerSpec, num_decoder_layers: int) -> List[int]:
     """Translate a layer-spec into a concrete list of decoder-layer indices.
@@ -278,6 +284,16 @@ class TrajectoryAnchor:
         self.lambda2_history.append(self.lambda_2)
         self.gap_history.append(self.gap)
         self.stability_history.append(stability)
+        # Bound history so long-running configurations (>>3 epochs, ablation
+        # sweeps that call .update repeatedly) don't accumulate (32*H,)
+        # tensors indefinitely. ~50MB per entry at L=32, H=4096, fp32.
+        if len(self.v_history) > _MAX_HISTORY:
+            drop = len(self.v_history) - _MAX_HISTORY
+            self.v_history = self.v_history[drop:]
+            self.lambda1_history = self.lambda1_history[drop:]
+            self.lambda2_history = self.lambda2_history[drop:]
+            self.gap_history = self.gap_history[drop:]
+            self.stability_history = self.stability_history[drop:]
 
         stats = {
             "lambda_1": self.lambda_1,
