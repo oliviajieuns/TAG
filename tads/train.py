@@ -43,6 +43,7 @@ from tads.core.schedulers import get_cosine_schedule_with_warmup
 from tads.core.agent import PPOAgent
 from tads.core.trajectory_anchor import TrajectoryAnchor
 from tads.core.utils import (
+    clear_runtime_caches,
     cuda_mem_str,
     disable_coredumps,
     is_main_process,
@@ -160,6 +161,11 @@ def main() -> None:
     # of core onto the 50 GB user-volume, ENOSPC'ing everything else.
     # Enforce from Python so the shell isn't load-bearing.
     disable_coredumps()
+
+    # Start from a clean process-local cache state: GC arena, CUDA
+    # allocator cache, and stale CUDA-IPC handles from prior runs. See
+    # clear_runtime_caches() docstring for the failure modes this guards.
+    clear_runtime_caches()
 
     # OFFLINE BY DEFAULT — every model / tokenizer / dataset must be on local
     # disk. The HF datasets / hub / transformers libraries otherwise reach

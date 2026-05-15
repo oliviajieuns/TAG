@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 import torch
 
 from tads.core.utils import (
+    clear_runtime_caches,
     disable_coredumps,
     load_config,
     quiet_repeated_warnings,
@@ -79,6 +80,13 @@ def main() -> None:
     # rationale. Eval rarely segfaults but if it does (CUDA OOM, model
     # load mismatch) the dump is still ~250 GB worth of bf16 weights.
     disable_coredumps()
+
+    # Clean GC / CUDA allocator / IPC-handle state before loading the
+    # model. Eval routinely re-runs against the same checkpoint set
+    # (auto_eval_7b_fullft.sh polls in a loop), and stale handles from
+    # a crashed prior iteration can otherwise pin VRAM that the new
+    # load_for_eval can't allocate.
+    clear_runtime_caches()
 
     # OFFLINE BY DEFAULT — see tads.train.main for rationale.
     os.environ.setdefault("HF_DATASETS_OFFLINE", "1")

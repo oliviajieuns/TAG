@@ -74,6 +74,17 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 #                                    grad accumulation. Off by default because
 #                                    early tests in this codebase hit NCCL
 #                                    issues with it; re-enable when stable.
+# TADS_FRESH_DATA_CACHE   0|1        default 0. Force-re-tokenise Alpaca
+#                                    instead of reusing the HF Dataset.map
+#                                    fingerprint cache. Costs ~1-2 min on
+#                                    52K examples; use when prompt_style /
+#                                    max_seq_len changed and stale token
+#                                    IDs are suspected.
+# TADS_ENABLE_COREDUMPS   0|1        default 0. Re-enables core dumps. The
+#                                    Python entry points call RLIMIT_CORE
+#                                    setrlimit at startup; set this to skip
+#                                    that (debugging only — see comments
+#                                    above about coredump file size).
 #
 # Example to flip backend for a single run:
 #   TADS_DDP_BACKEND=gloo torchrun --nproc_per_node=4 -m tads.train ...

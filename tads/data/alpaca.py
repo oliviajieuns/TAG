@@ -195,11 +195,22 @@ def build_alpaca_dataset(
             prompt_style=prompt_style,
         )
 
+    # Cache-bypass switch: when TADS_FRESH_DATA_CACHE=1, force-re-tokenise
+    # rather than reusing the HF `Dataset.map` fingerprint cache. The
+    # fingerprint is derived from (raw dataset hash, _tokenize closure
+    # bytes), and a code change inside tokenize_alpaca SHOULD bust it —
+    # but in practice equivalent-bytes closure variations (e.g., default
+    # arg drift, import-order changes that move the byte-encoded code
+    # object) have served stale tokenisations and silently distorted
+    # training. Set the env var to force a fresh pass; otherwise the
+    # cache is used as before (saves ~1-2 minutes on Alpaca-52K).
+    _fresh_cache = os.environ.get("TADS_FRESH_DATA_CACHE", "0") == "1"
     ds = raw.map(
         _tokenize,
         remove_columns=raw.column_names,
         num_proc=num_proc,
         desc=f"Tokenising Alpaca ({prompt_style})",
+        load_from_cache_file=not _fresh_cache,
     )
     ds.set_format("torch")
     logger.info(

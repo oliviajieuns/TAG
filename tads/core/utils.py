@@ -5,6 +5,7 @@ and `${oc.env:VAR,default}` environment variable interpolation in string values.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import random
@@ -18,6 +19,8 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------- warning dedup
@@ -68,6 +71,57 @@ def quiet_repeated_warnings(
     # Bridge stdlib warnings → logging, so the dedup filter catches them.
     logging.captureWarnings(True)
     warnings.simplefilter("default")
+
+
+# ------------------------------------------------------------------ caches
+def clear_runtime_caches() -> None:
+    """Reset every process-local cache so the run starts from a clean slate.
+
+    Called at the top of train / eval / nait/train entry points alongside
+    :func:`disable_coredumps`. Three caches are reset:
+
+    1. **Python GC arena** — `gc.collect()`. A stale `tads.train` worker
+       (e.g., a re-attached tmux session that previously imported but
+       crashed before main()) can leave large tensor closures sitting in
+       gc generations and bias the first CUDA allocator request high.
+
+    2. **PyTorch CUDA allocator cache** — `torch.cuda.empty_cache()` plus
+       `torch.cuda.ipc_collect()`. The allocator caches every freed block
+       and returns from its own arena before issuing fresh cudaMallocs.
+       That's almost always the right thing during a single run, but
+       across runs (especially after a torchrun rank crash) cached IPC
+       handles can pin VRAM the new process can't see, surfacing as
+       "out of memory" on what should be a fresh GPU.
+
+    3. **HF datasets ``Dataset.map`` fingerprint cache** — opt-in via
+       ``TADS_FRESH_DATA_CACHE=1``. The legacy default is to reuse the
+       cached tokenisation (saves 1-2 minutes on Alpaca-52K), but a
+       prompt-style / max_seq_len change paired with a fingerprint hash
+       collision can quietly serve stale token IDs. When the env var
+       is set, `build_alpaca_dataset` passes `load_from_cache_file=False`
+       and re-tokenises from scratch (see tads/data/alpaca.py).
+
+    Output: a single info-level log line so a missing call is obvious in
+    the logs.
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        try:
+            # ipc_collect releases stale IPC handles from torchrun ranks
+            # that died without cleaning up (the new rank can't see those
+            # handles via CUDA-IPC but they still pin VRAM).
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
+    fresh_data = os.environ.get("TADS_FRESH_DATA_CACHE", "0") == "1"
+    logger.info(
+        "clear_runtime_caches done | cuda_avail=%s | fresh_data_cache=%s",
+        torch.cuda.is_available(), fresh_data,
+    )
 
 
 # ----------------------------------------------------------------- coredumps
