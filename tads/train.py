@@ -142,8 +142,19 @@ def _setup_ddp() -> bool:
     """
     if "RANK" in os.environ and not dist.is_initialized():
         from datetime import timedelta
+        # Backend selectable via TADS_DDP_BACKEND env. NCCL is fast but
+        # has the idle-then-hang failure mode under rank-0-solo workloads
+        # like collect_episode. gloo is ~5x slower but TCP-based and far
+        # more robust; use it as an escape hatch when NCCL won't behave.
+        #     export TADS_DDP_BACKEND=gloo
+        backend = os.environ.get("TADS_DDP_BACKEND", "nccl").lower()
+        if backend not in ("nccl", "gloo"):
+            print(f"[ddp] unknown TADS_DDP_BACKEND={backend!r}, falling back to nccl",
+                  flush=True)
+            backend = "nccl"
+        print(f"[ddp] initialising process group | backend={backend}", flush=True)
         dist.init_process_group(
-            backend="nccl",
+            backend=backend,
             timeout=timedelta(minutes=120),
         )
         torch.cuda.set_device(local_rank())
