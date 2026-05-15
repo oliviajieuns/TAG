@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import tempfile
 from typing import Any, Dict, Optional
 
@@ -14,6 +15,60 @@ from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import humaneval_generation_prefix
 
 logger = logging.getLogger(__name__)
+
+
+# Stop sequences for HumanEval completion truncation. The model is asked to
+# fill in ONE function body, but greedy / sampled decoding will happily
+# continue past the function end into the next def / class / module-level
+# code, top-level prints, or markdown fences from chat-style outputs.
+# Concatenating that trailing garbage to the prompt and exec()'ing it
+# raises SyntaxError or redefines functions in ways that break the harness
+# test cases — so every problem fails and pass@1 collapses to 0-ε.
+# Cut at the FIRST occurrence of any of these substrings. Matches the
+# stop set used by bigcode-eval-harness and the original codex paper.
+_HUMANEVAL_STOP_SEQUENCES = (
+    "\nclass ",
+    "\ndef ",
+    "\n#",
+    "\nif __name__",
+    "\nprint(",
+    "\n\n\n",
+    # Chat-style models often wrap code in ``` fences; cut at the closing one.
+    "\n```",
+)
+
+
+def _truncate_at_stop(completion: str) -> str:
+    """Return ``completion`` up to (but not including) the first stop string."""
+    min_idx = len(completion)
+    for s in _HUMANEVAL_STOP_SEQUENCES:
+        idx = completion.find(s)
+        if idx != -1 and idx < min_idx:
+            min_idx = idx
+    return completion[:min_idx]
+
+
+# Pattern for stripping a chat-style model's leading code-fence opener
+# (e.g. "```python\n" / "```\n"). The harness concatenates prompt +
+# completion verbatim, so a leading "```python\n" desyncs the indent
+# and crashes the test runner.
+_LEADING_FENCE_RE = re.compile(r"^\s*```(?:python|py)?\s*\n", re.IGNORECASE)
+
+
+def _postprocess_completion(completion: str) -> str:
+    """Clean a raw model completion for `prompt + completion` exec.
+
+    - Strip a leading ```python / ``` code-fence opener (chat-style models).
+    - Truncate at the first stop sequence (see ``_HUMANEVAL_STOP_SEQUENCES``).
+    - Drop trailing whitespace ONLY — NEVER lstrip / strip, because that
+      would eat the 4-space indent that the HumanEval prompt expects
+      immediately after the docstring. With indent eaten, the
+      `prompt + completion` join puts the function body at column 0
+      and the harness raises ``IndentationError`` on every problem.
+    """
+    completion = _LEADING_FENCE_RE.sub("", completion)
+    completion = _truncate_at_stop(completion)
+    return completion.rstrip()
 
 
 @register("humaneval")
@@ -98,9 +153,20 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             # the tokenizer's BOS auto-prepend + decode strip round-trip.
             prefix_tok_len = inputs["input_ids"].shape[1]
             for j in range(out.shape[0]):
-                completion = tokenizer.decode(
+                # Do NOT .strip() here. HumanEval prompts end at the
+                # function-body indent column (typically 4 spaces after a
+                # docstring), and `evaluate_functional_correctness` glues
+                # `prompt + completion` verbatim before exec()'ing. A
+                # leading lstrip would eat those 4 spaces and turn every
+                # body into an IndentationError → pass@k = 0. The previous
+                # version's .strip() was the proximate cause of the
+                # bench-wide score collapse alongside the missing stop-seq
+                # truncation. _postprocess_completion handles fence strip,
+                # stop-sequence cut, and rstrip only.
+                raw = tokenizer.decode(
                     out[j, prefix_tok_len:], skip_special_tokens=True,
-                ).strip()
+                )
+                completion = _postprocess_completion(raw)
                 completions.setdefault(problem["task_id"], []).append(completion)
             if (i + 1) % 20 == 0:
                 logger.info(
