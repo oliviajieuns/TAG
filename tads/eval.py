@@ -39,12 +39,41 @@ from tads.modeling.loader import load_for_eval
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True, help="YAML config (model_path, prompt_style).")
-    p.add_argument("--ckpt", required=True, help="Checkpoint directory (LoRA adapter or full).")
+    p.add_argument(
+        "--ckpt",
+        default=None,
+        help=(
+            "Checkpoint directory (LoRA adapter or full). If omitted, resolves "
+            "to <output_dir>/_latest/<latest epoch_N>; pass --epoch N to pick "
+            "a specific epoch within _latest."
+        ),
+    )
+    p.add_argument(
+        "--epoch",
+        type=int,
+        default=None,
+        help="Epoch number inside the resolved run dir to evaluate. Default: largest sealed.",
+    )
+    p.add_argument(
+        "--run_tag",
+        default=None,
+        help=(
+            "Run tag under <output_dir>/runs/ to evaluate. Mutually exclusive "
+            "with --ckpt. If neither --ckpt nor --run_tag is given, falls "
+            "back to the _latest pointer."
+        ),
+    )
+    p.add_argument(
+        "--list_runs",
+        action="store_true",
+        help="List runs/ history under <output_dir> and exit (no eval).",
+    )
     p.add_argument(
         "--benchmarks", default="mmlu",
         help=f"Comma-separated. Registered: {list_evaluators()}",
     )
-    p.add_argument("--out_dir", required=True, help="Output directory for JSON summaries.")
+    p.add_argument("--out_dir", required=False, default=None,
+                   help="Output dir for JSON summaries. Default: <ckpt>/eval/.")
     p.add_argument("--limit", type=int, default=None, help="Per-benchmark sample cap.")
     p.add_argument(
         "--training_mode", default=None, choices=[None, "full", "lora"],
@@ -134,7 +163,77 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
 
-    out_dir = Path(args.out_dir)
+    # Resolve experiment_dir = OUTPUT_ROOT/output_subdir so we can find the
+    # _latest pointer / runs/ history that the new run-layout produced.
+    experiment_dir = Path(cfg["output_root"]) / cfg["output_subdir"]
+
+    if args.list_runs:
+        from tads.core.run_layout import list_runs as _list_runs
+        from tads.core.run_layout import resolve_latest as _resolve_latest
+        runs = _list_runs(experiment_dir)
+        if not runs:
+            print(f"No runs/ directory under {experiment_dir}.")
+        else:
+            latest = _resolve_latest(experiment_dir)
+            latest_name = latest.name if latest is not None else "(unset)"
+            print(f"Runs under {experiment_dir}:")
+            for tag, _ in runs:
+                marker = "  <- _latest" if (latest and tag == latest.name) else ""
+                print(f"  {tag}{marker}")
+            print(f"_latest -> {latest_name}")
+        return
+
+    # Ckpt resolution priority:
+    #   1. --ckpt explicit (must exist)
+    #   2. --run_tag → <experiment_dir>/runs/<run_tag>/<epoch>
+    #   3. _latest pointer → <experiment_dir>/_latest/<epoch>
+    if args.ckpt and args.run_tag:
+        raise SystemExit("--ckpt and --run_tag are mutually exclusive.")
+    if args.ckpt:
+        ckpt_path = Path(args.ckpt)
+        if not ckpt_path.exists():
+            raise SystemExit(f"--ckpt {args.ckpt!r} does not exist.")
+    else:
+        from tads.core.run_layout import (
+            find_latest_complete_epoch,
+            resolve_latest,
+            run_dir_for,
+        )
+        if args.run_tag:
+            target_run = run_dir_for(experiment_dir, args.run_tag)
+            if not target_run.is_dir():
+                raise SystemExit(
+                    f"--run_tag {args.run_tag!r} not found at {target_run}.",
+                )
+        else:
+            target_run = resolve_latest(experiment_dir)
+            if target_run is None:
+                raise SystemExit(
+                    f"No --ckpt / --run_tag given and no _latest pointer "
+                    f"under {experiment_dir}. Train first or pass --ckpt.",
+                )
+        if args.epoch is not None:
+            ckpt_path = target_run / f"epoch_{args.epoch}"
+            if not ckpt_path.exists():
+                raise SystemExit(
+                    f"epoch_{args.epoch} not found in {target_run}. "
+                    f"Available: {sorted(p.name for p in target_run.glob('epoch_*'))}",
+                )
+        else:
+            n, ckpt_path = find_latest_complete_epoch(target_run)
+            if ckpt_path is None:
+                raise SystemExit(
+                    f"No sealed epoch_N found inside {target_run}.",
+                )
+
+    args.ckpt = str(ckpt_path)
+
+    # Default out_dir lands NEXT TO the checkpoint so eval results stay
+    # bundled with the run that produced them. Caller can still override.
+    if args.out_dir:
+        out_dir = Path(args.out_dir)
+    else:
+        out_dir = ckpt_path / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
     log_dir = out_dir / "logs"
     logger = setup_logger(str(log_dir), name="eval")

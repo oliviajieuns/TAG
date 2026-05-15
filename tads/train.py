@@ -7,6 +7,42 @@ Usage:
 
 The method (random/full/data_agent/tads) is selected by the ``method`` key
 inside the YAML config.
+
+Run layout (history-preserving)
+-------------------------------
+Each invocation writes its checkpoints under
+
+    <output_dir>/runs/<run_tag>/
+
+so re-running with tweaked hyperparameters never overwrites a prior run.
+The ``_latest`` symlink under ``<output_dir>/`` tracks the most recent
+sealed epoch and is what ``tads.eval`` reads by default.
+
+    # Fresh run with auto-timestamped tag
+    torchrun -m tads.train --config <cfg>
+        # → <output_dir>/runs/20260515_230514/
+
+    # Tagged run (great for hyperparameter sweeps)
+    torchrun -m tads.train --config <cfg> --run_suffix=lr2e5
+        # → <output_dir>/runs/20260515_230514_lr2e5/
+    torchrun -m tads.train --config <cfg> --run_suffix=lr5e5 \\
+        --override learning_rate=5e-5
+        # → <output_dir>/runs/20260515_230515_lr5e5/
+
+    # Resume the most recent run (auto-resume picks the largest sealed epoch)
+    torchrun -m tads.train --config <cfg> --run_tag=latest
+
+    # See all prior runs
+    python -m tads.train --config <cfg> --list_runs
+
+Each run dir contains:
+    cfg.yaml + cfg.json   — full resolved hyperparameter snapshot
+    epoch_N/              — model weights, optimizer.pt, scheduler.pt,
+                            agent.pt, trajectory_anchor.pt, env_meta.json,
+                            anchor_history.json, _complete sentinel
+    metrics.json          — per-epoch loss + selection diagnostics
+    selected_indices_epoch{N}.json  — exact data subset used per epoch
+    logs/                 — train_<method>_<ts>_r<rank>.log
 """
 from __future__ import annotations
 
@@ -41,6 +77,15 @@ from torch.utils.data import Subset
 from tads.core.schedulers import get_cosine_schedule_with_warmup
 
 from tads.core.agent import PPOAgent
+from tads.core.run_layout import (
+    find_latest_complete_epoch,
+    list_runs as _list_runs,
+    make_run_tag,
+    resolve_latest,
+    run_dir_for,
+    save_cfg_snapshot,
+    update_latest,
+)
 from tads.core.trajectory_anchor import TrajectoryAnchor
 from tads.core.utils import (
     clear_runtime_caches,
@@ -78,7 +123,33 @@ def parse_args() -> argparse.Namespace:
         "--override",
         nargs="*",
         default=[],
-        help="Top-level overrides, e.g. selection_ratio=0.3 train_epochs=1",
+        help="Top-level or dotted nested overrides, e.g. selection_ratio=0.3 anchor.layer_idx=-1 agent.lr=5e-5",
+    )
+    p.add_argument(
+        "--run_tag",
+        default=None,
+        help=(
+            "Folder name for this training run under <output_dir>/runs/. "
+            "Defaults to a timestamp YYYYMMDD_HHMMSS so a re-run with tweaked "
+            "hyperparameters never overwrites a previous run. Pass an existing "
+            "run_tag to RESUME that run (auto-resume reads the largest "
+            "_complete-sealed epoch_N inside it). Pass --run_tag=latest to "
+            "resume whatever the _latest pointer currently selects."
+        ),
+    )
+    p.add_argument(
+        "--run_suffix",
+        default="",
+        help=(
+            "Optional suffix appended to the auto timestamp tag, e.g. "
+            "--run_suffix=lr2e5 produces runs/20260515_180000_lr2e5/. Ignored "
+            "if --run_tag is also given."
+        ),
+    )
+    p.add_argument(
+        "--list_runs",
+        action="store_true",
+        help="Print the existing runs/ history under <output_dir> and exit.",
     )
     return p.parse_args()
 
@@ -194,17 +265,56 @@ def main() -> None:
     set_seed(seed)
 
     output_dir = Path(cfg["output_root"]) / cfg["output_subdir"]
-    # Expose the per-experiment output_dir to downstream modules — notably
+
+    # ---------- run-layout: history-preserving runs/<tag>/ + _latest pointer ----------
+    # Each invocation writes its checkpoints under <output_dir>/runs/<run_tag>/
+    # so re-running with tweaked hyperparameters never overwrites a prior run.
+    # The _latest symlink under <output_dir>/ tracks the most recent run, and
+    # eval defaults to reading from there. See tads.core.run_layout for the
+    # full contract.
+    if args.list_runs:
+        if is_main_process():
+            existing = _list_runs(output_dir)
+            if not existing:
+                print(f"No runs/ directory under {output_dir}.")
+            else:
+                latest = resolve_latest(output_dir)
+                latest_name = latest.name if latest is not None else "(unset)"
+                print(f"Runs under {output_dir}:")
+                for tag, _ in existing:
+                    marker = "  <- _latest" if (latest and tag == latest.name) else ""
+                    print(f"  {tag}{marker}")
+                print(f"_latest -> {latest_name}")
+        return
+
+    if args.run_tag == "latest":
+        latest = resolve_latest(output_dir)
+        if latest is None:
+            raise FileNotFoundError(
+                f"--run_tag=latest requested but no _latest pointer under "
+                f"{output_dir}. Run training without --run_tag first.",
+            )
+        run_tag = latest.name
+    elif args.run_tag:
+        run_tag = args.run_tag
+    else:
+        run_tag = make_run_tag(args.run_suffix)
+    run_dir = run_dir_for(output_dir, run_tag)
+
+    # Expose both dirs to downstream modules — notably
     # pipelines.selection._broadcast_selection, which writes a temporary
     # selection-share file. Without this, multiple parallel jobs (qwen +
     # llama2 + mistral + deepseek launched concurrently via run_main_7b.sh)
     # would all fall back to ``cfg["output_root"]`` and clobber each
     # other's _selection_epoch{N}.json — silently mixing their selected
-    # indices across experiments.
-    cfg["output_dir"] = str(output_dir)
-    log_dir = Path(cfg.get("log_dir", output_dir / "logs"))
+    # indices across experiments. ``output_dir`` is still the
+    # per-experiment dir; ``run_dir`` is the per-run dir inside it.
+    cfg["output_dir"] = str(run_dir)
+    cfg["experiment_dir"] = str(output_dir)
+    cfg["run_tag"] = run_tag
+    log_dir = Path(cfg.get("log_dir", run_dir / "logs"))
     if is_main_process():
-        output_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir(parents=True, exist_ok=True)
         log_dir.mkdir(parents=True, exist_ok=True)
     if use_ddp:
         dist.barrier()
@@ -216,42 +326,20 @@ def main() -> None:
             "TADS unified trainer | method=%s | ddp=%s | world_size=%d",
             method, use_ddp, world_size(),
         )
+        logger.info("experiment_dir = %s", output_dir)
+        logger.info("run_dir        = %s   (run_tag=%s)", run_dir, run_tag)
         logger.info("Config:\n%s", json.dumps(cfg, indent=2, default=str))
         logger.info("=" * 60)
+        # Persist the resolved cfg snapshot so a future eval / audit knows
+        # exactly which hyperparameters produced this run's checkpoints.
+        # Atomic write inside the helper.
+        save_cfg_snapshot(run_dir, cfg)
 
-    # ---------- resume: find latest epoch checkpoint, if any ----------
-    def _find_latest_epoch_ckpt(out_dir: Path):
-        """Return (epoch_num, path) of latest epoch_N/ under out_dir, or (0, None).
-
-        A checkpoint is considered "complete" only if the ``_complete`` sentinel
-        file exists in it. The save sequence (model, tokenizer, optimizer,
-        scheduler, agent, anchor, metrics) writes this sentinel as the very
-        last step. Partial checkpoints (process killed mid-save) lack the
-        sentinel and are skipped — preventing the next run from auto-resuming
-        a corrupted optimizer.pt and tripping a 1EB OOM on garbage tensor
-        metadata.
-        """
-        if not out_dir.exists():
-            return 0, None
-        epochs = []
-        for p in out_dir.glob("epoch_*"):
-            if not p.is_dir():
-                continue
-            try:
-                n = int(p.name.replace("epoch_", ""))
-            except ValueError:
-                continue
-            if not (p / "_complete").exists():
-                continue
-            # Backstop: the model file must also be present.
-            if (p / "config.json").exists() or (p / "adapter_config.json").exists():
-                epochs.append((n, p))
-        if not epochs:
-            return 0, None
-        epochs.sort()
-        return epochs[-1]
-
-    resume_epoch, resume_ckpt = _find_latest_epoch_ckpt(output_dir)
+    # ---------- resume: find latest epoch checkpoint INSIDE current run ----------
+    # Resume only crosses epochs WITHIN the same run_tag — never across runs,
+    # which would silently mix hyperparameter regimes. To resume yesterday's
+    # run, pass --run_tag=<that_tag> (or --run_tag=latest).
+    resume_epoch, resume_ckpt = find_latest_complete_epoch(run_dir)
     if resume_ckpt is not None and is_main_process():
         logger.info(
             "RESUMING from %s (epoch %d completed; continuing at epoch %d)",
@@ -504,7 +592,7 @@ def main() -> None:
                 except Exception as e:
                     if is_main_process():
                         logger.warning("Could not restore anchor (%s)", e)
-        metrics_json = output_dir / "metrics.json"
+        metrics_json = run_dir / "metrics.json"
         if metrics_json.exists():
             try:
                 with open(metrics_json) as f:
@@ -545,7 +633,7 @@ def main() -> None:
             seed=seed,
             device=device,
         )
-        save_selection(output_dir, epoch, selected)
+        save_selection(run_dir, epoch, selected)
 
         if len(selected) == 0:
             raise RuntimeError(
@@ -608,7 +696,7 @@ def main() -> None:
             except Exception as e:  # never block save on a cleanup hiccup
                 logger.warning("Pre-save cleanup failed (continuing): %s", e)
 
-            ckpt_path = output_dir / f"epoch_{epoch}"
+            ckpt_path = run_dir / f"epoch_{epoch}"
             ckpt_path.mkdir(parents=True, exist_ok=True)
             save_errors: list = []
 
@@ -665,7 +753,7 @@ def main() -> None:
                           ckpt_path / "anchor_history.json"))
             _safe("metrics.json",
                   lambda: _atomic_json_dump(metrics_log,
-                                            output_dir / "metrics.json"))
+                                            run_dir / "metrics.json"))
 
             # Sentinel: ONLY written when the two state files that auto-resume
             # depends on (model weights + optimizer) both succeeded. A failed
@@ -703,17 +791,29 @@ def main() -> None:
                 except Exception:
                     pass
 
-            # Optional: keep only last K checkpoints to avoid disk bloat.
+            # Optional: keep only last K epoch_N/ inside this run dir. This
+            # never touches OTHER runs/<tag>/ directories — those are
+            # explicit history that the user opted into preserving.
             _keep = int(cfg.get("keep_last_n_checkpoints", 0))
             if _keep > 0:
                 existing = sorted(
-                    [p for p in output_dir.glob("epoch_*") if p.is_dir()],
+                    [p for p in run_dir.glob("epoch_*") if p.is_dir()],
                     key=lambda p: int(p.name.replace("epoch_", "")),
                 )
                 for old in existing[:-_keep]:
                     import shutil as _shutil
                     _shutil.rmtree(old, ignore_errors=True)
                     logger.info("Removed old checkpoint: %s", old)
+
+            # Update _latest pointer after each completed epoch save so an
+            # eval can fire mid-training (after epoch 1 finishes, before
+            # epoch 2 starts) and pick up the freshly sealed checkpoint.
+            if ok_model and ok_opt:
+                try:
+                    mech = update_latest(output_dir, run_tag)
+                    logger.info("_latest -> runs/%s (%s)", run_tag, mech)
+                except Exception as exc:
+                    logger.warning("Failed to update _latest pointer: %s", exc)
 
         # Workers MUST hit the barrier even if rank 0 raised inside the save
         # block — otherwise NCCL stalls until its timeout and rank 0's exit
