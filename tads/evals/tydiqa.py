@@ -214,13 +214,38 @@ def _resolve_split_paths(data_dir: str) -> Tuple[str, str, str]:
         if os.path.exists(dev):
             return dev, train, data_dir
     tried = "\n  ".join(c[0] for c in candidates)
+    # Surface enough state to pinpoint the failure cause: missing dir,
+    # missing files, wrong env var, wrong permissions. The previous
+    # message only showed candidate paths, which left the user guessing
+    # whether the dir even existed.
+    diag_lines = [
+        f"  TYDIQA_DATA_DIR env  : {os.environ.get('TYDIQA_DATA_DIR', '<unset>')!r}",
+        f"  data_dir arg        : {data_dir!r}",
+        f"  data_dir is_dir     : {os.path.isdir(data_dir)}",
+    ]
+    if os.path.isdir(data_dir):
+        try:
+            contents = sorted(os.listdir(data_dir))
+            shown = contents[:10] + (["…"] if len(contents) > 10 else [])
+            diag_lines.append(f"  data_dir contents   : {shown}")
+        except PermissionError as _e:
+            diag_lines.append(f"  data_dir contents   : <PermissionError: {_e}>")
+    else:
+        parent = os.path.dirname(data_dir.rstrip("/")) or "."
+        diag_lines.append(f"  parent dir          : {parent!r} (exists={os.path.isdir(parent)})")
+    diagnostics = "\n".join(diag_lines)
     raise FileNotFoundError(
-        f"TyDiQA dev split not found under {data_dir}. Tried:\n  {tried}\n\n"
-        f"Download with:\n"
+        f"TyDiQA dev split not found under {data_dir!r}.\n\n"
+        f"Tried these candidate paths:\n  {tried}\n\n"
+        f"Diagnostics:\n{diagnostics}\n\n"
+        f"Fix:\n"
         f"  bash scripts/download_tydiqa.sh {data_dir}\n\n"
         f"That fetches both splits from "
         f"huggingface.co/datasets/google-research-datasets/tydiqa "
-        f"(the legacy storage.googleapis.com URLs now return HTTP 403)."
+        f"(the legacy storage.googleapis.com URLs now return HTTP 403).\n"
+        f"If `download_tydiqa.sh` itself failed, run it manually and "
+        f"check that the cluster has outbound HTTPS to huggingface.co "
+        f"and that you have write permission on {data_dir!r}."
     )
 
 

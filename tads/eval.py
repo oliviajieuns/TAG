@@ -138,9 +138,30 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     log_dir = out_dir / "logs"
     logger = setup_logger(str(log_dir), name="eval")
+
+    # Output files used to be plain `mmlu.json` / `eval_summary.json` —
+    # opaque once you copied a few of them into a shared results folder
+    # and couldn't tell `eval_summary.json` from `tads_10`'s vs
+    # `data_agent_10`'s. Prefix every artifact with an experiment label
+    # so a flat directory listing tells you which (model, method) the
+    # numbers belong to. Source of truth, in order:
+    #   1. cfg["experiment_name"]  — explicit override in YAML
+    #   2. <config-parent-dir>_<config-stem>  — e.g.
+    #      configs/experiments/main_7b/llama2/tads_10.yaml
+    #      → "llama2_tads_10"
+    #   3. <config-stem>  — last-resort for ad-hoc configs.
+    _cfg_path = Path(args.config)
+    _parent = _cfg_path.parent.name
+    if cfg.get("experiment_name"):
+        experiment_label = str(cfg["experiment_name"])
+    elif _parent and _parent not in ("configs", ".", ""):
+        experiment_label = f"{_parent}_{_cfg_path.stem}"
+    else:
+        experiment_label = _cfg_path.stem
+
     logger.info(
-        "Eval start | ckpt=%s | base=%s",
-        args.ckpt, cfg.get("model_path"),
+        "Eval start | exp=%s | ckpt=%s | base=%s",
+        experiment_label, args.ckpt, cfg.get("model_path"),
     )
 
     benchmarks: List[str] = [b.strip() for b in args.benchmarks.split(",") if b.strip()]
@@ -173,7 +194,7 @@ def main() -> None:
     failures: List[Dict[str, str]] = []
     for bench in benchmarks:
         evaluator = get_evaluator(bench)
-        output_file = out_dir / f"{bench}.json"
+        output_file = out_dir / f"{experiment_label}-{bench}.json"
         kw: Dict[str, Any] = {}
         if bench == "lm_harness":
             kw.update(
@@ -213,6 +234,7 @@ def main() -> None:
                 torch.cuda.empty_cache()
 
     payload = {
+        "experiment": experiment_label,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "ckpt": args.ckpt,
         "base_model": cfg.get("model_path"),
@@ -221,14 +243,15 @@ def main() -> None:
         "summaries": summaries,
         "failures": failures,
     }
-    with open(out_dir / "eval_summary.json", "w") as f:
+    summary_path = out_dir / f"{experiment_label}-eval_summary.json"
+    with open(summary_path, "w") as f:
         json.dump(payload, f, indent=2)
     if failures:
         logger.warning(
             "Eval finished with %d/%d benchmark failure(s): %s",
             len(failures), len(benchmarks), [f["benchmark"] for f in failures],
         )
-    logger.info("Eval done. Summary: %s", out_dir / "eval_summary.json")
+    logger.info("Eval done. Summary: %s", summary_path)
 
 
 if __name__ == "__main__":
