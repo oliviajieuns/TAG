@@ -328,10 +328,15 @@ def collect_episode(
     r_loss_mean = float(all_r_loss.mean().item())
     r_entropy_mean = float(all_r_entropy.mean().item())
 
-    # Restore the model's use_cache so subsequent eval-time generation paths
-    # (which DO want a KV cache) get their original behaviour back.
-    if hasattr(base_model.config, "use_cache") and _orig_use_cache is not None:
-        base_model.config.use_cache = _orig_use_cache
+    # No use_cache restore here: the loader pins use_cache=False once at
+    # model construction (when gradient_checkpointing is on) and the
+    # head of this function re-asserts False for safety. Leaving it
+    # False past collect_episode is correct for the subsequent SFT
+    # phase, which is also incompatible with KV cache. The earlier
+    # `if ... and _orig_use_cache is not None: base_model.config.use_cache
+    # = _orig_use_cache` block was a dangling reference (the variable
+    # was removed when the cache pinning moved to loader.py) and crashed
+    # tads/data_agent with `NameError: _orig_use_cache is not defined`.
 
     return {
         "selected_indices": selected_indices,
