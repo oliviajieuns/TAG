@@ -143,11 +143,28 @@ class PPOAgent:
         mb_size = min(self.mb_size, N)
         actor_losses, critic_losses = [], []
 
+        # PPO advantage normalisation needs ≥2 samples per minibatch, so
+        # episodes with N < 2 produce no gradient updates — and the
+        # return-path average over empty lists then reports actor_loss=0,
+        # critic_loss=0, which looks indistinguishable from a successful
+        # zero-loss step. Refuse rather than fake success.
+        if N < 2:
+            raise RuntimeError(
+                f"PPOAgent.update: need at least 2 samples to normalise "
+                f"advantages, got N={N}. Increase episode size or "
+                f"selection_ratio.",
+            )
+
+        # Ensure last partial minibatch is also processed — but only if it
+        # has at least 2 samples (else advantage std collapses). Mark below.
+        self.ac.train()
         for _ in range(self.ppo_epochs):
             idx = torch.randperm(N, device=self.device)
             for start in range(0, N, mb_size):
                 mb = idx[start:start + mb_size]
                 if mb.numel() < 2:
+                    # tail minibatch of size 1 — skip silently (the previous
+                    # full minibatches already produced a gradient step).
                     continue
 
                 log_prob, entropy, value = self.ac.evaluate(states[mb], actions[mb])
@@ -202,3 +219,17 @@ class PPOAgent:
         self.ac.load_state_dict(ckpt["ac_state_dict"])
         self.ac.to(self.device)
         self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        # The optimizer was loaded with map_location="cpu" inside the
+        # checkpoint, so its Adam momentum / second-moment tensors live on
+        # CPU while the actor-critic parameters have just been moved to GPU.
+        # Calling optimizer.step() in that state raises
+        #   RuntimeError: Expected all tensors to be on the same device
+        # on the very first PPO update after resume. Push every state tensor
+        # to the model's device explicitly. (torch.optim.Optimizer has no
+        # .to() of its own — this is the standard manual pattern.)
+        for state in self.optimizer.state.values():
+            if not isinstance(state, dict):
+                continue
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(self.device, non_blocking=True)

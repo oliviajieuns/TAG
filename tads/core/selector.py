@@ -290,8 +290,24 @@ def collect_episode(
         a_min, a_max = alignment_raw.min(), alignment_raw.max()
         if (a_max - a_min) > 1e-8:
             alignment = (alignment_raw - a_min) / (a_max - a_min)
+            _alignment_collapsed = False
         else:
+            # All samples produced the same alignment score — usually means
+            # the anchor's PCA hit a degenerate covariance (zero gap) or
+            # multi-layer dot products perfectly cancel out. Silently setting
+            # alignment=0.5 would turn `boost = 1 + lam * 0.5 = const` and
+            # TADS would secretly behave as Data Agent (top-k of R*a). Log
+            # the collapse and record it in extras so the user notices.
             alignment = torch.full_like(alignment_raw, 0.5)
+            _alignment_collapsed = True
+            logger.error(
+                "TADS alignment COLLAPSED (max-min < 1e-8) | "
+                "alignment_raw.std=%.2e | min=%.4f | max=%.4f. "
+                "Selection reduces to Data Agent (R*a) for this epoch. "
+                "Check anchor PCA gap or multi-layer cancellation.",
+                float(alignment_raw.std().item()),
+                float(a_min.item()), float(a_max.item()),
+            )
         boost = 1.0 + lam * alignment
         score = R * a * boost
         align_mean = float(alignment.mean().item())
@@ -394,4 +410,7 @@ def collect_episode(
         "use_anchor": apply_anchor,
         "align_mean": align_mean,
         "align_std": align_std,
+        "alignment_collapsed": (
+            _alignment_collapsed if apply_anchor else False
+        ),
     }
