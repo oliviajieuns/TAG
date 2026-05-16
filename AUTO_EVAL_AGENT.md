@@ -32,6 +32,11 @@
             separator + CJK 글자 visual width 2 cell 계산 + markdown
             pipe table 금지 (§0-4 "MD 파일 표 작성 규칙 6항"). bold
             (`**...**`) 표 셀 안에 절대 쓰지 말 것.
+[CHECK 13] (6) Current 표 Status 컬럼이 §0-6 (a) 의 3-facet 규약을 따른다:
+            `<history> · <오류> · <발산알람>` 형식 (`·` 2번 등장). 정보가
+            없는 facet 자리에는 placeholder(`(no DONE yet)` / `no err` /
+            `baseline` / `no score`)를 넣어 facet 3개 유지. 한 facet만
+            적고 끝내는 패턴 = 위반 (자주 발생).
 ```
 
 **한 항목이라도 fail이면 절대 사용자에게 'tick 완료'로 보고하지 말 것.** 누락된 섹션 / 잘못된 셀 / 빠진 컬럼을 §0-4 (6)/(7)/(8)/(9) 템플릿대로 다시 채워서 atomic 교체. 3회 재시도 후에도 fail이면 보고 중단하고 "표 구조 깨짐 — 사용자 확인 필요" 알람만 보냄.
@@ -772,39 +777,95 @@ def status_cell(model, method, bench):
 - `Status` 컬럼 (표 안) — **최근 이벤트 1개 + 현재 발산 알람**의 한 줄 요약 (≤ 60자, 넘으면 `...` 잘라쓰기)
 - `${EVAL_RESULTS_ROOT}/<model>/<method>/HISTORY.md` — append-only 시계열 로그 (최신이 위)
 
-#### (a) Status 컬럼 표기 규칙
+#### (a) Status 컬럼 표기 규칙 — 3 facet 조합 의무
 
-형식: `<facet 1> [· <facet 2> [· <facet 3>]]` — 빈 facet은 생략. 점(`·`)으로 구분.
+**Status 한 줄은 정확히 3개의 facet으로 구성** (≤ 60자, 넘으면 우측에서 `...`로 잘라씀):
 
-| facet | 표기 | 의미 |
+```
+[facet1: history]  ·  [facet2: 오류/상황]  ·  [facet3: 발산 알람]
+```
+
+- 구분자 = ` · ` (양옆에 공백 1칸씩 + middle dot U+00B7).
+- 어느 facet에 정보가 없어도 **그 자리에 placeholder를 채워서 3-facet 구조 유지**. 그냥 facet을 생략하지 말 것 — agent가 자주 facet 1만 적고 끝내는 패턴이 발생해 이번 강화.
+- placeholder는 facet별로 정해진 값을 씀 (아래 표 참조).
+
+| facet 위치 | 정상값 예시 | 정보 없을 때 placeholder |
 |---|---|---|
-| **history** | `init 47.56%` | 첫 eval 결과 |
-| | `46.98% ↑ +2.20 (lr↑)` | 점수 상승 (이전 점수, +delta, 원인 태그) |
-| | `44.78% ↓ -2.78 (seed)` | 점수 하락 |
-| | `47.56% stable ×5` | 5회 연속 동일 |
-| **시스템 오류** | `OOM ×2 retry pending` | OOM 2회, 재시도 대기 |
-| | `crash(CUDA) ×1` | CUDA 크래시 1회 |
-| | `dataset DL fail ×3 BLOCKED` | 3회 연속 실패, 자동 retry 중단 (§10) |
-| **발산 알람** | `🔴 < random_10` | RED — BASE-NAIT보다 낮음 |
-| | `🟡 -5.2p vs full_100` | YELLOW — BASE-FULL 대비 5%p 이상 처짐 |
-| | `🔵 < data_agent_10` | BLUE — 경쟁 method가 더 잘함 |
-| | `OK` | 모든 비교 정상 |
-| | (baseline 행은 알람 없음) | full_100 / random_10 행은 발산 alarm 표기 안 함 |
+| **facet1 (history)** | `init 47.56%` / `46.98% ↑ +2.20 (lr↑)` / `44.78% ↓ -2.78 (seed)` / `47.56% stable ×5` | `(no DONE yet)` — 아직 점수 산출 없음 |
+| **facet2 (오류/상황)** | `OOM ×2 retry pending` / `crash(CUDA) ×1` / `dataset DL fail ×3 BLOCKED` | `no err` — 직전 5 tick 동안 오류 없음 |
+| **facet3 (발산 알람)** | `🔴 < random_10` / `🟡 -5.2p vs full_100` / `🔵 < data_agent_10` / `OK` | `baseline` (full_100/random_10 행) 또는 `no score` (아직 점수 없어 비교 불가) |
 
-조합 예시:
-- `-` — 이벤트 없음 (초기 템플릿)
-- `init 47.56% · OK` — 첫 eval, 발산 정상
-- `46.98% ↑ +2.20 (lr↑) · 🟡 -5.2p vs full_100` — lr 튜닝으로 상승했지만 여전히 BASE-FULL 대비 처짐
-- `OOM ×2 retry pending · last 47.56%` — 오류 진행 중, 직전 점수 참고
-- `47.56% · 🔴 < random_10` — 점수는 나왔지만 RED 알람
-- `learn complete 2026-05-17 · eval큐` — 학습 막 끝남
+**facet별 상세 토큰:**
 
-원인 태그 (괄호 안):
+| facet1 (history) 토큰 | 의미 |
+|---|---|
+| `init NN.NN%` | 첫 eval 결과 |
+| `NN.NN% ↑ +Δ (태그)` | 직전 대비 점수 상승 (`Δ` = 둘째 자리, 태그는 원인) |
+| `NN.NN% ↓ -Δ (태그)` | 점수 하락 |
+| `NN.NN% stable ×K` | K회 연속 동일 점수 |
+| `(no DONE yet)` | placeholder — 점수 한 번도 안 나옴 |
+
+| facet2 (오류) 토큰 | 의미 |
+|---|---|
+| `OOM ×N retry pending` | N회 OOM, 자동 재시도 큐 (§10-3) |
+| `crash(<kind>) ×N` | kind ∈ {`CUDA`, `Killed`, `Traceback`, `Timeout`}; eval/train 비정상 종료 |
+| `dataset DL fail ×N BLOCKED` | 3회 연속 dataset 다운로드 실패, 재시도 중단 |
+| `HANG <sec>s` | log mtime 30분+ 정체 (§0-7 (d)) |
+| `(slow <sec>s)` | log mtime 5~30분 정체 (의심만, 알람 X) |
+| `no err` | placeholder — 직전 5 tick 동안 오류 0 |
+
+| facet3 (발산 알람) 토큰 | 의미 |
+|---|---|
+| `🔴 < random_10` | RED — BASE-NAIT보다 낮음 (§0-2) |
+| `🟡 -X.Xp vs full_100` | YELLOW — BASE-FULL 대비 5%p 이상 처짐 |
+| `🔵 < data_agent_10` | BLUE — 경쟁 method가 더 잘함 |
+| `OK` | 모든 비교 정상 (treatment 행 점수 ≥ random_10 AND BASE-FULL 대비 ≤ 5%p) |
+| `baseline` | placeholder — 이 행 자체가 baseline (full_100 / random_10) |
+| `no score` | placeholder — 아직 점수 없어 비교 불가 |
+
+**조합 예시 (모두 정확히 3-facet, ` · ` 구분):**
+
+```
+init 47.56%             · no err                · OK              ← treatment, 첫 eval, 정상
+46.98% ↑ +2.20 (lr↑)    · no err                · 🟡 -5.2p vs full_100  ← lr 튜닝 상승, BASE-FULL 대비 처짐
+47.56% stable ×3        · no err                · 🔴 < random_10  ← 점수는 안정이지만 RED
+(no DONE yet)           · OOM ×2 retry pending  · no score        ← 아직 점수 없음, OOM 진행 중
+47.56%                  · no err                · baseline        ← full_100 행
+(no DONE yet)           · no err                · baseline        ← random_10 행, 아직 점수 없음
+```
+
+**잘못된 예시 (agent가 자주 범하는 위반):**
+
+```
+❌ "init 47.56%"                      ← facet 2, 3 누락
+❌ "47.56% · OK"                      ← facet 2 누락 (자리에 `no err`라도 넣어야 함)
+❌ "init 47.56% OK"                   ← 구분자 ` · ` 없음
+❌ "OK"                               ← facet 1, 2 누락
+❌ "init 47.56% / no err / OK"        ← 구분자가 ` / ` (반드시 ` · ` middle dot)
+```
+
+**원인 태그 (괄호 안, facet 1의 history 변동 사유):**
+
 - `lr↑` / `lr↓` — 학습률 변경
 - `seed` — 시드 변경
 - `재학습` — 같은 cfg로 재학습
 - `cfg변경` — yaml 변경 (자세한 diff는 HISTORY.md)
 - `param` — 기타 파라미터 변경
+
+**셀프 체크 (Status 컬럼 갱신 후 반드시):**
+
+```bash
+# (6) Current 표 Status 컬럼 추출 후 검증:
+#   1. 각 행 Status 셀에 ` · ` 가 정확히 2번 등장 (= 3-facet)
+#   2. 어느 facet도 빈 문자열이 아님 (placeholder는 OK)
+awk '/^## \(6\) Current/,/^```$/' experiments.md \
+  | awk '/^[ ]*[0-9]+ /{
+       n=split($0, _, " · ");
+       if (n != 3) { print "[STATUS-FAIL] row " NR " facet count=" n; exit 1 }
+     }'
+```
+
+facet count ≠ 3 → atomic 교체 중단, Status 컬럼을 위 placeholder 규칙대로 다시 채운 후 재시도.
 
 #### (b) per-cell `HISTORY.md` 포맷
 
@@ -1548,9 +1609,11 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 > [ ] 10 학습 alive인 셀은 (6)에서 `학습중`, (7)/(8) 이전 값 유지
 > [ ] 11 (8) Best는 max() 비교만 — 낮은 새 점수로 덮어쓰지 말 것
 > [ ] 12 코드 펜스 + monospace + CJK width 2 + pipe table 금지 + bold 금지
+> [ ] 13 (6) Status 컬럼 = 3-facet (`<history> · <오류> · <발산알람>`) ←
+>       자주 facet 1만 적고 끝내는 위반. placeholder로라도 facet 3개 유지.
 > ```
 > 
-> 하나라도 미통과 → atomic 교체 중단 → 누락 부분 §0-4 (6)/(7)/(8)/(9) 템플릿으로 재생성 → 다시 12개 체크 → 통과해야 사용자에게 보고.
+> 하나라도 미통과 → atomic 교체 중단 → 누락 부분 §0-4 (6)/(7)/(8)/(9) 템플릿으로 재생성 → 다시 13개 체크 → 통과해야 사용자에게 보고.
 
 ```
 1. cd /home/jieun/kms/tads
