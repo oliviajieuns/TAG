@@ -705,29 +705,32 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 | 상태 | 셀 표기 | 판정 신호 (정확히 이렇게) |
 |---|---|---|
 | **NO-CKPT** | `학습전` | `_latest`도 `_latest.txt`도 legacy flat `epoch_*`도 없음. 행 전체 5컬럼 동일. 사용자에게 "학습이 필요한 셀 목록" 보고. |
-| **TRAINING** | `학습중` | 학습 프로세스 alive **또는** sealed epoch < `cfg_target_epochs`. 행 전체 5컬럼 동일. |
-| **NEED-EVAL** | `eval대기` | (a) 학습 끝남 (sealed == `cfg_target_epochs`) AND (b) `_latest/_complete` + `_latest/<label>-eval_summary.json` 부재 또는 stale AND **(c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime > 5분 (= 진짜 idle)**. 다음 dispatch pass에서 에이전트가 자동 launch (§4 / §7 3.7). |
-| **EVAL-RUNNING** | `eval중` | `python -m tads.eval.*<model>/<method>` 프로세스 alive **또는** eval 로그 mtime < 5분 이내 활동 (pgrep이 잠시 놓쳤어도 로그가 움직이면 살아있는 것). |
+| **TRAINING** | `학습중` | sealed epoch < `cfg_target_epochs` (= `<latest_run>/cfg.json` 의 `train_epochs` snapshot). 행 전체 5컬럼 동일. train 로그 mtime < 30분이면 진행 중, > 30분이면 Status facet2 에 `HANG <sec>s` 부기하지만 표기는 학습중 유지. |
+| **NEED-EVAL** | `eval대기` | (a) sealed == `cfg_target_epochs` AND (b) `_latest/_complete` + `_latest/<label>-<bench>.json` 부재 또는 stale AND (c) **eval 로그 mtime ≥ 5분 (또는 로그 없음, = 잡 활성도 없음)**. 다음 dispatch pass에서 에이전트가 자동 launch (§4 / §7 3.7). |
+| **EVAL-RUNNING** | `eval중` | **`<eval_base>/_latest/logs/eval_*.log` 파일 mtime < 5분 이내** (잡이 활발히 로그 쓰는 중). pgrep 안 씀 — 로그 mtime이 영구적이고 신뢰 가능한 신호. |
 | **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. **humaneval은 pass@10** (NAIT 논문 기준, n=20 sampled completions, T=0.8, p=0.95). 점수 JSON엔 `pass@1`도 같이 기록되지만 점수표는 `pass@10`만 본다. |
 
 > **분류 결정 트리 — 매 tick 반드시 위에서 아래로 순회. 어느 분기에도 안 걸린 셀은 마지막에 `eval대기`로 떨어뜨림** (절대 `-` / `err` / 공란 금지):
+>
+> 분류 입력 = **filesystem + log 파일만**. pgrep 안 씀 (top banner "📁 분류 기준" 참조).
 >
 > ```
 > 1. ckpt 측 _latest 부재 + flat epoch_* 부재
 >    → 학습전 [END]
 >
-> 2. 학습 프로세스 alive (pgrep "python.*tads.train.*<model>/<method>\.yaml")
->    OR sealed_epoch_count < cfg_target_epochs
+> 2. sealed_epoch_count < cfg_target_epochs
 >    (※ cfg_target_epochs = `<latest_run>/cfg.json`의 train_epochs.
->     라이브 YAML이 아님 — 학습 launch 시점 snapshot. §5-4 참조.)
+>     라이브 YAML 아님. sealed_n은 epoch_last/_complete 내용.)
 >    → 학습중 [END]
+>    (보조: train log mtime > 30분이면 Status facet2에 `HANG <sec>s` 부기,
+>     셀 자체 표기는 학습중 유지)
 >
-> 3. eval 프로세스 alive (pgrep "python.*tads.eval.*<model>/<method>\.yaml")
->    OR eval 로그 mtime < 5분 이내 (pgrep 사이 잠시 안 잡힌 케이스 보호)
+> 3. eval 로그 파일 mtime < 5분 이내 (= 잡이 활발히 로그 쓰는 중)
+>    (`<eval_base>/_latest/logs/eval_*.log` 가장 최근 파일 기준)
 >    → eval중 [END]
 >
 > 4. eval _latest/_complete 존재
->    AND eval _latest/<exp_label>-eval_summary.json 존재
+>    AND eval _latest/<exp_label>-<bench>.json 존재
 >    AND summary mtime > latest sealed epoch mtime
 >    → NN.NN% (정확도 % 둘째 자리 + %) [END]
 >
@@ -740,9 +743,9 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 >
 > **`eval대기`로 떨어진 셀은 §7 의사 코드의 `3.7 dispatch pass`에서 빈 GPU 만큼 자동 launch된다** (§0 / §4 — 학습 동시 실행 없는 운영 가정). 사용자 입력 불필요. launch 직후 §0-4 (6) Current 표에서 즉시 `eval대기` → `eval중`으로 갱신.
 >
-> 이전 tick의 분류 값을 캐싱하지 말 것. 에이전트가 매 tick dispatch한 잡은 #3 (pgrep 또는 로그 mtime)에서 잡혀 `eval중`, 끝나면 #4에서 잡혀 `NN.NN%` — 매 tick 처음부터 6단계 다시 돌려야 정확.
+> 이전 tick의 분류 값을 캐싱하지 말 것. 에이전트가 매 tick dispatch한 잡은 #3 (log mtime < 5분)에서 잡혀 `eval중`, 끝나면 #4에서 잡혀 `NN.NN%` — 매 tick 처음부터 6단계 다시 돌려야 정확.
 >
-> **재학습 감지** (§0-4 (10)): 셀이 이전 tick에 DONE(`NN.NN%`)이었어도, 현재 tick에서 위 결정 트리 #2 (학습 프로세스 alive 또는 새 run의 sealed < cfg_target)가 만족되면 **즉시 `학습중`으로 되돌린다**. 이전 NN.NN%는 (7) Latest 표에 유지되고 (9) History에 prev=NN.NN% new=학습중 한 줄 append. (6) Current만 학습중으로 덮어씀. DONE → 학습중 → 새 NN.NN% 흐름이 매 tick 동기화됨.
+> **재학습 감지** (§0-4 (10)): 셀이 이전 tick에 DONE(`NN.NN%`)이었어도, 현재 tick에서 위 결정 트리 #2 (sealed_n < cfg_target_epochs — 즉 사용자가 새 run을 launch해서 새 cfg.json snapshot이 더 큰 target을 가짐, 또는 새 run이 아직 epoch 안 채움) 가 만족되면 **즉시 `학습중`으로 되돌린다**. 이전 NN.NN%는 (7) Latest 표에 유지되고 (9) History에 prev=NN.NN% new=학습중 한 줄 append. (6) Current만 학습중으로 덮어씀. DONE → 학습중 → 새 NN.NN% 흐름이 매 tick 동기화됨.
 
 > **표기는 위 상태 토큰만 허용** (5종 벤치마크와 혼동 금지). `-`는 본 가이드 문서 안의 placeholder일 뿐 `experiments.md`의 셀 값으로는 **절대 쓰지 말 것** — `experiments.md`를 최초 생성할 때부터 §5-4 분류를 돌려 상태 토큰 중 하나를 채운다. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 상태 토큰 중 하나로 매핑: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
 >
@@ -776,25 +779,24 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 사용자가 한
 번에 진행 상태를 파악하는 dashboard. 셀 값은 정확히 **상태 토큰 중 하나** (§0-4 채우는 규칙과 동일 어휘):
 
-| 상태 표기 | 의미 | 분류 조건 |
+| 상태 표기 | 의미 | 분류 조건 (filesystem + log only — pgrep 안 씀, §0 정책) |
 |---|---|---|
 | `학습전` | 체크포인트 없음 | `<ckpt_root>/_latest`도 `_latest.txt`도 없고, legacy flat `epoch_*`도 없음. 행(=한 셀) 전체 5개 컬럼이 모두 이 표기. |
-| `학습중` | 학습 진행 중 | (a) `python -m tads.train.*<model>/<method>` 프로세스가 살아있음, **또는** (b) `<latest_run>/cfg.json`의 `train_epochs` 값보다 sealed (`_complete`) epoch 수가 적음. 행 전체 5개 컬럼 모두 이 표기. |
-| `eval대기` | 학습 끝남, eval 프로세스도 아직 안 떴음 | (a) sealed_n >= `cfg_target_epochs` AND (b) `<eval_base>/_latest/<exp_label>-<bench>.json` 없음 또는 mtime ≤ sealed epoch AND (c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime ≥ 5분 (= 진짜 idle). **다음 §7 3.7 dispatch pass에서 에이전트가 자동 launch.** |
-| `eval중` | eval 프로세스 떠있거나 log 활동 중 | (a) `python -m tads.eval.*<model>/<method>` 프로세스 alive **또는** (b) `<eval_base>/_latest/logs/eval_*.log` mtime < 5분 이내 (pgrep이 잠시 놓친 케이스 포함). |
-| `47.56%` | 점수 산출 완료 | `<eval_base>/_latest/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
+| `학습중` | 학습 진행 중 | sealed_n (`_latest/epoch_last/_complete` sentinel 내용, 또는 legacy max epoch_N) < `<latest_run>/cfg.json`의 `train_epochs` snapshot. 행 전체 5개 컬럼 모두 이 표기. (보조 사항: train log mtime > 30분이면 Status facet2에 `HANG <sec>s` 부기, 셀 표기 자체는 학습중 유지.) |
+| `eval대기` | 학습 끝남, eval 잡 활성도 없음 | (a) sealed_n >= cfg_target_epochs AND (b) `<eval_base>/_latest/<exp_label>-<bench>.json` 없음 또는 mtime ≤ sealed epoch AND (c) **`<eval_base>/_latest/logs/eval_*.log` mtime ≥ 5분 (또는 로그 없음)**. 다음 §7 3.7 dispatch pass에서 에이전트가 자동 launch. |
+| `eval중` | eval log 활동 중 | **`<eval_base>/_latest/logs/eval_*.log` 가 있고 mtime < 5분 이내** (= 잡이 활발히 로그 쓰는 중). pgrep 안 씀 — log mtime 만으로 충분 + 영구 신호. |
+| `47.56%` | 점수 산출 완료 | `<eval_base>/_latest/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. `_latest/_complete` sentinel도 있어야 함. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
 
 **판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 5×16에 투영):
 
 ```python
 def status_cell(model, method, bench):
+    """파일시스템 + 로그 파일 mtime 만으로 분류 (pgrep 안 씀, §0 정책)."""
     ckpt_root = f"{OUTPUT_ROOT}/main_7b/{model}/{method}"
     latest_run = resolve_latest_run(ckpt_root)
     if latest_run is None:
         return "학습전"
-    # 학습 프로세스 검출 (행 단위 - 5개 벤치 모두 학습중)
-    if pgrep_alive(f"python.*-m tads.train.*{model}/{method}\\.yaml"):
-        return "학습중"
+    # ckpt 상태 확인 — sealed epoch 수 vs cfg.json snapshot target.
     cfg = json.load(open(f"{latest_run}/cfg.json"))
     target = int(cfg.get("train_epochs", 3))
     # epoch_last/ 레이아웃 우선 — _complete sentinel 내용이 마지막 sealed
@@ -821,12 +823,9 @@ def status_cell(model, method, bench):
     if eval_latest is not None and exists(f"{eval_latest}/_complete"):
         bench_json = f"{eval_latest}/{label}-{bench}.json"
         if exists(bench_json) and mtime(bench_json) > mtime(sealed_max):
-            return f"{extract_score_pct(bench_json):.2f}%"
-    # 점수 JSON 아직 없음 또는 _latest unsealed — pgrep + log mtime으로
-    # eval중 vs eval대기 구분 (§5-4와 동일 룰).
-    if pgrep_alive(f"python.*-m tads.eval.*{model}/{method}"):
-        return "eval중"
-    # pgrep이 잠시 놓친 케이스: 로그 mtime이 5분 이내면 살아있는 잡.
+            return f"{extract_score_pct(bench_json):.2f}%"   # DONE
+    # 점수 JSON 아직 없음 또는 _latest unsealed.
+    # eval중 vs eval대기 구분 = 로그 파일 mtime 만 (pgrep 안 씀).
     eval_log = newest(f"{eval_base}/_latest/logs/eval_*.log")
     if eval_log and (now() - mtime(eval_log)) < 300:
         return "eval중"
@@ -1149,19 +1148,23 @@ EVAL_LOG=$(ls -t "${EVAL_RESULTS_ROOT}/${model}/${method}/_latest/logs/eval_"*.l
 - 학습 collect_episode 진입(`[trace] rank=0 BEFORE collect_episode`) 이후 30분+ 무응답 → PCA 또는 DataLoader 워커 wedge.
 - eval HumanEval 중 한 문제에서 generate가 ∞ loop.
 
-**탐지 로직**:
+**탐지 로직** (filesystem + log mtime 만, pgrep 안 씀 — §0 정책):
 ```bash
-# 학습이 5분 이상 로그를 안 쓰면 의심, 30분 이상이면 hang 확정
+# 학습이 5분 이상 로그를 안 쓰면 의심, 30분 이상이면 hang 확정.
+# sealed_n < target_epochs (= 학습 미완) 인 셀에서만 hang 의미가 있음 —
+# 학습 완료(NN.NN% 셀)에는 train log 정체가 정상.
 now=$(date +%s)
-mtime=$(stat -c %Y "$TRAIN_LOG")
+mtime=$(stat -c %Y "$TRAIN_LOG" 2>/dev/null || echo 0)
 elapsed=$(( now - mtime ))
-if pgrep -af "python.*tads.train.*${model}/${method}\.yaml" >/dev/null; then
+# sealed_n / target_epochs 계산은 §0-5 status_cell 의사 코드 참조.
+if [ "$sealed_n" -lt "$target_epochs" ]; then
   if [ "$elapsed" -ge 1800 ]; then
-    # 30분+ idle → HANG. Status 컬럼에 표시, HISTORY.md에 기록.
-    # 자동 kill 하지 말 것 — 사용자가 결정. 단 Status는 `HANG ${elapsed}s · last <signal>` 갱신.
+    # 30분+ idle + 학습 미완 → HANG. Status facet2에 `HANG ${elapsed}s` 부기.
+    # 셀 표기 자체는 학습중 유지. 자동 kill 하지 말 것 — 사용자가 결정.
     :
   elif [ "$elapsed" -ge 300 ]; then
-    # 5~30분 → STALLED 의심. Status에 `(slow ${elapsed}s)` 표기만, 알람 NO.
+    # 5~30분 idle + 학습 미완 → STALLED 의심. Status facet2에
+    # `(slow ${elapsed}s)` 표기만, 알람 NO.
     :
   fi
 fi
@@ -1413,7 +1416,7 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 
 매 tick 시작 시 (자세한 의사 코드는 §7 / §9-3):
 1. §0-7 (b) log-tail polling으로 각 셀의 train + eval 로그 상태 확인.
-2. §5-4 표의 5가지 판정 신호로 셀별 상태 결정 — `eval대기` vs `eval중` 구분은 §4-3.
+2. §5-4 표의 판정 신호로 셀별 상태 결정 (filesystem + log mtime only, **pgrep 분류 금지** — §0 정책). `eval대기` vs `eval중` 구분은 §4-3 4단계 우선순위.
 3. **빈 GPU 목록 ↔ `eval대기` 큐 매칭 (dispatch pass)**:
    - free_gpus = `nvidia-smi`에서 `memory.used < 2GB` AND `pgrep tads.train` 없는 GPU.
    - eval_queue = §5-4 분류에서 `eval대기`인 셀 목록 — 단, 이미 다른 GPU에서 같은 셀이 running(`pgrep tads.eval.*<model>/<method>\.yaml`)이면 큐에서 제외.
@@ -1427,17 +1430,16 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 6. `eval대기` 셀이 launch 가능했지만 빈 GPU가 모자라 큐에 남았으면 §0-4 "사용자 액션 필요" 섹션 대신 "다음 tick 자동 dispatch 예정" 섹션에 그 목록 표기. 사용자가 직접 띄울 필요 없음 (단, 사용자가 수동으로 띄워도 §4-3 1번에서 잡혀 중복 launch 안 됨).
 7. 학습 중인 GPU는 절대 건드리지 말 것 — dispatch pass의 free_gpus 필터에서 `tads.train` 점유 GPU 제외.
 
-### 4-3. eval대기 vs eval중 — 매 tick 재판정 (캐싱 금지)
+### 4-3. eval대기 vs eval중 — 매 tick 재판정 (파일시스템 + 로그만, 캐싱 금지)
 
-§5-4 표의 판정 신호를 그대로 사용. 핵심 5단계 우선순위:
+§5-4 표의 판정 신호를 그대로 사용 (**pgrep 안 씀, log mtime + ckpt + summary file 만**). 핵심 4단계 우선순위:
 
-1. `pgrep -af "python -m tads.eval.*<model>/<method>\.yaml"` ≥ 1 → **`eval중`**.
-2. pgrep 0개 + eval 로그 mtime < 5분 → **`eval중`** (grep 사이 잠시 안 잡힌 케이스 대비).
-3. pgrep 0개 + 로그 mtime ≥ 5분 + 로그 마지막 50줄에 OOM/CUDA/Traceback **있음** → **`eval대기`** + `.fail_count` 증가 + HISTORY.md `[eval]` 오류 엔트리.
-4. pgrep 0개 + 로그 mtime ≥ 5분 + 오류 없음 + sealed `_complete` 있고 summary mtime > sealed epoch → **`NN.NN%`** (DONE).
-5. 위에 다 해당 안 되고 sealed_epoch < `cfg_target_epochs` (= 해당 run의 `cfg.json` snapshot 값, 라이브 YAML 아님)이면 → **`학습중`**, 그 외 학습 끝났는데 eval 결과 없음 → **`eval대기`**.
+1. **eval 로그 mtime < 5분** (`<eval_base>/_latest/logs/eval_*.log` 가장 최근 파일) → **`eval중`**. 잡이 활발히 로그 쓰는 중이라는 영구 신호.
+2. 로그 mtime ≥ 5분 + 로그 마지막 50줄에 OOM/CUDA/Traceback **있음** → **`eval대기`** + `.fail_count` 증가 + HISTORY.md `[eval]` 오류 엔트리.
+3. 로그 mtime ≥ 5분 + 오류 없음 + sealed `_complete` 있고 summary mtime > sealed epoch → **`NN.NN%`** (DONE).
+4. 위에 다 해당 안 되고 sealed_epoch < `cfg_target_epochs` (= 해당 run의 `cfg.json` snapshot 값, 라이브 YAML 아님)이면 → **`학습중`**, 그 외 학습 끝났는데 eval 결과 없음 → **`eval대기`**.
 
-이전 tick의 분류 값을 그대로 들고 오지 말 것 — 매 tick에서 위 5단계를 처음부터 다시 돌릴 것. 사용자가 tick 사이에 eval을 launch하면 1번에서 잡혀야 표가 정확해진다.
+이전 tick의 분류 값을 그대로 들고 오지 말 것 — 매 tick에서 위 4단계를 처음부터 다시 돌릴 것. 사용자가 tick 사이에 eval을 launch하면 1번 (로그 mtime < 5분)에서 잡혀 표가 정확해진다.
 
 ### 4-4. 필터 / 제한 (사용자 수동 실행 시 참고)
 
@@ -1812,23 +1814,26 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
              status[(model, method)] = "학습전"
              continue
          latest_epoch = largest_sealed_epoch(latest_run)   # path or None
-         train_alive  = pgrep_alive(f"python.*tads.train.*{model}/{method}\\.yaml")
          cfg          = json.load(latest_run + "/cfg.json")
          target_epochs = int(cfg.get("train_epochs", 3))
          # sealed N = epoch_last/_complete sentinel content (single int),
          # or for legacy epoch_<N>/ layout the max N. See §3-1.
          sealed_n     = sealed_epoch_n(latest_epoch)   # 0 if None
-         if train_alive or sealed_n < target_epochs:
+         # 학습중 판정 = sealed_n < target. pgrep 안 씀 (§0 정책 — filesystem
+         # only). 학습 잡이 죽었어도 sealed_n < target이면 학습중 표기.
+         # (보조: train log mtime > 30분이면 Status facet2에 HANG 부기.)
+         if sealed_n < target_epochs:
              status[(model, method)] = "학습중"
              continue
 
-         # 2) eval 측 결정 — §5-4 표의 5단계 우선순위 + log 기반
-         eval_alive   = pgrep_alive(f"python.*tads.eval.*{model}/{method}\\.yaml")
+         # 2) eval 측 결정 — §4-3 4단계 우선순위 (filesystem + log only,
+         # pgrep 안 씀, §0 정책).
          eval_latest  = resolve_latest_run(eval_base)
          summary      = eval_latest + f"/{label}-eval_summary.json" if eval_latest else None
          sentinel_ok  = eval_latest and exists(eval_latest + "/_complete")
 
-         if eval_alive or sig.eval_log_mtime_age < 300:    # 5분
+         # eval중 = 가장 최근 eval log 파일 mtime < 5분 (영구 신호).
+         if sig.eval_log_mtime_age is not None and sig.eval_log_mtime_age < 300:
              status[(model, method)] = "eval중"
              continue
          if sentinel_ok and exists(summary) and mtime(summary) > mtime(latest_epoch):
@@ -2177,12 +2182,13 @@ fi
 
 echo "[tick $(date -Is)] need: ${need[*]}"
 
-# 같은 셀이 이미 어디 GPU에서 돌고 있으면 큐에서 제외 (중복 launch 방지)
+# pgrep dispatch dedup (분류 X — §0 정책상 분류는 filesystem + log mtime
+# 만 사용. 이 pgrep은 같은 셀 두 번 동시에 launch하지 않게 만드는 보호용).
 filtered=()
 for cell in "${need[@]}"; do
   model="${cell%/*}"; method="${cell#*/}"
   if pgrep -af "python -m tads.eval.*main_7b/${model}/${method}\.yaml" >/dev/null; then
-    echo "[tick $(date -Is)] already running: ${cell} — skip enqueue"
+    echo "[tick $(date -Is)] already running: ${cell} — skip enqueue (dispatch dedup, not classification)"
     continue
   fi
   filtered+=("$cell")
