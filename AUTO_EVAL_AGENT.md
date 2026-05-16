@@ -182,23 +182,63 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 4. `eval중` — `python -m tads.eval.*<model>/<method>` 프로세스 살아있음
 5. `NN.NN%` — 점수 산출 완료 (`47.56%` 형식, 둘째 자리 + `%`)
 
-**`-`는 셀 값이 아니다** — 이것은 **본 가이드 문서(AUTO_EVAL_AGENT.md) 안의 빈 템플릿 placeholder**일 뿐이다. `experiments.md`를 **최초 생성하는 순간부터** 모든 셀은 위 5종 중 하나여야 한다. 즉:
-- `experiments.md`를 새로 만들면서 가이드 §0-4의 `-` 채워진 템플릿을 그대로 복사하지 말 것. 복사 후 **첫 tick에서 즉시** 모든 80개 셀을 §5-4 분류로 채워야 한다. `experiments.md`에 `-`가 단 하나라도 남아있다면 그건 미완성 출력이고 에이전트가 다시 채워야 한다.
-- 학습이 아직 시작 안 된 셀? → `학습전`이 정답 (`-` 아님).
-- 학습은 끝났는데 eval 안 돌린 셀? → `eval대기`가 정답 (`-` 아님).
-- 옛 포맷 점수 / LEGACY / 부분 실패? → 위 5종 중 가장 가까운 것으로 매핑 (§0-4 채우는 규칙 표 참조).
+**🚫 금지된 토큰** — 아래 중 어떤 것도 `experiments.md`의 셀 값으로 절대 들어가면 안 된다:
+- `-` (dash) — 가이드 문서의 placeholder일 뿐. 셀 값이 아님.
+- `err` / `error` / `Error` / `ERR` / `ERROR` / `에러` / `오류` / `실패` — eval/train 실패는 위 5종 중 하나로 **반드시 매핑**해서 표기한다 (아래 매핑 규칙 참조).
+- 공란 / `null` / `None` / `nil` / `n/a` / `N/A` / `TBD` / `?` — 의미 모호. 5종 중 하나로 결정.
+- `legacy(...)` / `학습필요` / `재학습` / `eval필요` 같은 옛 임시 표기.
+- `**bold**` / `*italic*` / 백틱(\`)으로 감싼 형태 — 표 셀에는 평문만 (markdown 강조 금지, terminal에서 별표/백틱이 그대로 보임).
 
-**셀프 체크 — 매 tick의 표 작성 직후 반드시 수행:**
+**모든 가능한 상태를 5종으로 매핑 — 빠짐없이:**
+
+| 셀의 실제 상황 | 정답 토큰 | 비고 |
+|---|---|---|
+| `_latest` 부재, legacy `epoch_*`도 없음 | `학습전` | NO-CKPT |
+| 학습 프로세스 alive, 또는 sealed < `train_epochs` | `학습중` | TRAINING |
+| **학습 완료, eval 안 돌린 셀** | **`eval대기`** | NEED-EVAL — 정답은 `-`가 아니다 |
+| eval 프로세스 alive, 또는 eval 로그 mtime < 5분 | `eval중` | EVAL-RUNNING |
+| eval 잡이 죽었음 (OOM/CUDA/Traceback) | `eval대기` | 재시도 큐. `.fail_count` 증가하지만 셀 값은 `eval대기` |
+| eval 잡이 정상 종료했지만 sentinel 없음 | `eval대기` | 미완성으로 간주, 재시도 큐 |
+| `.fail_count ≥ 3` (BLOCKED) | `eval대기` | 표 셀은 그대로 `eval대기`. BLOCKED 신호는 §0-6 Status 컬럼에만 표기 |
+| `_latest/_complete` + summary 있음 + mtime > sealed epoch | `NN.NN%` | DONE — `47.56%` 식 |
+| 옛 포맷(접두어 없음, flat layout) 점수가 BASE에만 있음 | `NN.NN%` (provisional) | LEGACY — 점수는 잠정 사용, 다음 tick에 새 포맷 덮어쓰면 자동 갱신 |
+| Summary JSON 파싱 실패 (스키마 모름) | `eval대기` | 점수 추출 못 했으면 미완성 — 재시도 큐 |
+| 위 어디에도 해당 안 됨 | `eval대기` | **fall-through 기본값** (학습 끝난 셀의 미정 상태는 항상 `eval대기`) |
+
+> **핵심 fall-through 규칙**: 분류 로직에서 어떤 분기에도 안 걸린 셀이 있으면 **무조건 `eval대기`**. 절대 `-` / `err` / 공란을 남기지 말 것. "모르겠으면 eval대기" — 사용자가 §0-4 "사용자 액션 필요 — eval 미실행 셀" 섹션에서 보고 결정한다.
+
+**셀프 체크 — 매 tick의 표 작성 직후 반드시 수행 (3단계 검증):**
 ```bash
-# experiments.md의 §0-4(6) 80-cell 표 안에서 `-` 카운트
-n_dash=$(awk '/^## 80-cell Consolidated Score Table/,/^```$/' experiments.md \
-         | grep -oE '\s-\s' | wc -l)
-if [ "$n_dash" -gt 0 ]; then
-  echo "[FAIL] 80-cell 표에 dash($n_dash개)가 남아있음 — 5종 어휘로 재분류 필요"
+# 1. §0-4(6) 80-cell 표의 16개 행 × 5개 벤치 컬럼 = 80개 셀 모두 추출
+table=$(awk '/^## 80-cell Consolidated Score Table/,0' experiments.md \
+        | awk '/^```$/{f=!f; next} f' | grep -E '^[ ]*[0-9]+ ')
+
+# 2. 5종 어휘 외의 토큰이 있는지 확인 (정규식: 학습전/학습중/eval대기/eval중/NN.NN%)
+bad=$(echo "$table" \
+      | grep -oE '[^[:space:]]+' \
+      | grep -vE '^([0-9]+|llama2|qwen25|mistral|deepseek|/|full_100|random_10|data_agent_10|tads_10|학습전|학습중|eval대기|eval중|[0-9]+\.[0-9]{2}%)$' \
+      | sort -u)
+if [ -n "$bad" ]; then
+  echo "[FAIL] 80-cell 표에 금지 토큰 발견 — 5종 어휘로 재분류 필요:"
+  echo "$bad" | sed 's/^/  - /'
+  echo "  (`-`, `err`, `error`, 공란 등은 모두 5종 중 하나로 매핑할 것. 모르면 eval대기로 떨어뜨릴 것.)"
   exit 1
 fi
+
+# 3. 80개 셀 전체 카운트 검증 — 16행 × 5컬럼 = 80개여야 함
+n=$(echo "$table" | awk '{for(i=3;i<=NF;i++) print $i}' | wc -l)
+if [ "$n" -ne 80 ]; then
+  echo "[FAIL] 80-cell 표의 셀 개수가 $n (≠80) — 행/컬럼 폭이 깨졌거나 빈 셀이 있음"
+  exit 1
+fi
+
+echo "[OK] 80-cell 표 검증 통과 (모든 셀이 5종 어휘로 채워짐)"
 ```
-이 체크가 fail이면 그 tick의 출력은 **사용자에게 보고하지 말고 재분류 후 다시 시도**할 것. dash가 남아있는 표는 잘못된 표다.
+
+이 체크가 한 단계라도 fail이면:
+1. **그 tick의 출력은 사용자에게 보고하지 말 것** (잘못된 표를 채팅에 인용 금지).
+2. **즉시 분류 로직 재돌림** — fall-through 규칙(모르면 `eval대기`)으로 모든 셀을 다시 채운 뒤 검증 통과해야 보고.
+3. 재시도 3회 fail이면 사용자에게 "분류 로직 자체에 버그가 있다"고 보고하고 표 갱신 중단 — 절대 잘못된 표를 atomic 교체하지 말 것.
 
 - 80개 셀 전체가 `NN.NN%`로 채워지면 = 실험 완료. 이 시점에 §0-2 발산 알람 최종 평가를 별도 섹션 `## 최종 발산 알람 요약`으로 (6) 표 바로 위에 추가.
 
@@ -318,12 +358,35 @@ tads_10         -          -          -          -
 | **EVAL-RUNNING** | `eval중` | `python -m tads.eval.*<model>/<method>` 프로세스 alive **또는** eval 로그 mtime < 5분 이내 활동 (pgrep이 잠시 놓쳤어도 로그가 움직이면 살아있는 것). |
 | **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. humaneval은 pass@1. |
 
-> **`eval대기` vs `eval중` 구분 — 매 tick 반드시 재판정** (이전 tick 값을 캐싱하지 말 것):
-> 1. `pgrep -af "python -m tads.eval.*<model>/<method>\.yaml"` → 1개 이상 → `eval중`.
-> 2. pgrep 0개여도 `<EVAL_RESULTS_ROOT>/<model>/<method>/_latest/logs/eval_*.log` 파일이 있고 `mtime` 이 현재 시각 −5분 이내 → `eval중` (프로세스가 grep 사이 잠시 안 잡힌 케이스).
-> 3. pgrep 0개 + 로그 mtime > 5분 (또는 로그 없음) → `eval대기`. **사용자가 직접 launch할 때까지 그대로 둘 것 — 에이전트는 절대 자동 launch하지 않는다 (§0).**
-> 4. pgrep 0개 + 로그 mtime > 30분 + sealed_epoch < train_epochs → 학습이 끝나지 않음 → `학습중`으로 분류 (eval과 무관). `eval대기` 분류 전에 학습 종료 여부를 먼저 확인.
-> 5. (특수) eval 로그에 OOM/CUDA error/Traceback이 마지막 50줄 안에 있고 프로세스도 죽음 → `eval대기` (재시도 큐). §0-6 (c)에 따라 HISTORY.md에 실패 엔트리 작성 + `.fail_count` 증가.
+> **분류 결정 트리 — 매 tick 반드시 위에서 아래로 순회. 어느 분기에도 안 걸린 셀은 마지막에 `eval대기`로 떨어뜨림** (절대 `-` / `err` / 공란 금지):
+>
+> ```
+> 1. ckpt 측 _latest 부재 + flat epoch_* 부재
+>    → 학습전 [END]
+>
+> 2. 학습 프로세스 alive (pgrep "python.*tads.train.*<model>/<method>\.yaml")
+>    OR sealed_epoch_count < cfg.train_epochs
+>    → 학습중 [END]
+>
+> 3. eval 프로세스 alive (pgrep "python.*tads.eval.*<model>/<method>\.yaml")
+>    OR eval 로그 mtime < 5분 이내 (pgrep 사이 잠시 안 잡힌 케이스 보호)
+>    → eval중 [END]
+>
+> 4. eval _latest/_complete 존재
+>    AND eval _latest/<exp_label>-eval_summary.json 존재
+>    AND summary mtime > latest sealed epoch mtime
+>    → NN.NN% (정확도 % 둘째 자리 + %) [END]
+>
+> 5. eval 로그 마지막 50줄에 OOM / CUDA error / RuntimeError / Killed / Traceback 발견
+>    → eval대기 [END]  (.fail_count 증가, HISTORY.md `[eval]` 오류 엔트리 작성)
+>
+> 6. ← 위 5단계 모두 안 걸린 셀 = "학습 끝났는데 eval 결과 없는 셀"
+>    → eval대기 [END]  (fall-through 기본값. 사용자 액션 큐로 보고)
+> ```
+>
+> **`eval대기`로 떨어진 셀은 §0-4 "사용자 액션 필요 — eval 미실행 셀" 섹션에 자동 추가**. 사용자가 §4-1 명령으로 직접 launch한다 — **에이전트는 절대 자동 launch하지 않는다 (§0)**.
+>
+> 이전 tick의 분류 값을 캐싱하지 말 것. 사용자가 tick 사이에 eval을 launch하면 3번에서 잡히고, 끝나면 4번에서 잡힌다 — 매 tick 처음부터 6단계 다시 돌려야 정확.
 
 > **표기는 위 5종만 허용**. `-`는 본 가이드 문서 안의 placeholder일 뿐 `experiments.md`의 셀 값으로는 **절대 쓰지 말 것** — `experiments.md`를 최초 생성할 때부터 §5-4 분류를 돌려 5종 중 하나를 채운다. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 5종 중 하나로 매핑: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
 >
