@@ -5,6 +5,44 @@
 
 ---
 
+# 🚨🚨🚨 핵심 파이프라인 — 자주 끊김. 사용자 반복 지적 🚨🚨🚨
+
+**에이전트는 다음 3단계를 매 cron tick에서 끝까지 돌려야 한다.** 한 단계라도 끊어지면 사용자가 "또 안 되네"를 다시 외친다. 사용자 지적 빈도 매우 높음.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ [1] EVAL 명령 자동 실행                                                 │
+│     매 tick에서 eval대기 셀 × 빈 GPU 만큼:                              │
+│     CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval                │
+│         --config configs/.../<m>/<x>.yaml                               │
+│         --benchmarks <single_bench>                                     │
+│         --out_dir ${EVAL_RESULTS_ROOT}/<m>/<x>                          │
+│         >> logs/eval_<m>_<x>_<bench>.log 2>&1 &                         │
+│     (BBH 제외, 단일 bench, 1 GPU = 1 (cell, bench))                     │
+│           │                                                             │
+│           ▼                                                             │
+│ [2] 결과 파일 즉시 읽기                                                 │
+│     완료된 잡(=process 종료 OR log mtime > 5분 + sentinel)이 나오면     │
+│     §5-2.5 광역 스캔(_latest + runs/*/ + flat + bundled)으로 새 result  │
+│     JSON을 즉시 발견. summary mtime > sealed epoch면 NN.NN% 추출.       │
+│           │                                                             │
+│           ▼                                                             │
+│ [3] experiments.md 즉시 저장                                            │
+│     (6) Current / (7) Latest / (8) Best / (9) History 5개 섹션 atomic   │
+│     교체. 새 NN.NN% 가 들어가는 셀의 4개 표 + history 한 줄 append.     │
+│     다음 cron tick까지 기다리지 말고 이번 tick 안에서 즉시 반영.        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**자주 끊기는 지점**:
+- [1] 안 함 — log만 polling하고 dispatch는 건너뜀. PRE-FLIGHT CHECK 15.
+- [2] 안 함 — `_latest/` 만 보고 다른 위치 result file 못 찾음. PRE-FLIGHT CHECK 15a + §5-2.5.
+- [3] 안 함 — (6) Current만 갱신하고 (7)/(8)/(9) 누락 또는 다음 tick까지 미룸. PRE-FLIGHT CHECK 01-04 + 13.
+
+3단계를 한 tick 안에서 끝까지 — `[1] launch → [2] glob → [3] write` 가 atomic하게 흘러야 함. 이번 tick에 (3)까지 안 들어간 결과는 **다음 cron tick까지 사용자 눈에 안 보임 = 사용자 불만 폭주**.
+
+---
+
 # 🛑🛑🛑 EVAL IS THE AGENT'S JOB (BBH 제외) — LAUNCH, NOT JUST POLL 🛑🛑🛑
 
 **에이전트의 핵심 의무는 eval을 직접 launch하는 것이다 (BBH 제외).** log 추출 + 점수 표 갱신만 하고 끝내는 게 아니라:
@@ -2053,24 +2091,42 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 
 에이전트는 **무한 루프로 상주하지 않는다**. cron이 정해진 간격으로 호출하고 매번 idempotent하게 §7 의사코드를 수행한다.
 
-### 9-1. 권장 간격 (2026-05-17 정책)
+### 9-1. 권장 간격 (2026-05-17 강화 — GPU 절대 idle 금지)
 
-- **15분마다** (`*/15 * * * *`) — eval 셀 1개당 평균 5~15분이라 15분 폴링이면 빈 GPU가 생긴 직후 다음 (cell, bench) pair를 빠르게 dispatch. 매 tick continuous하게 진행하므로 16 cells × 4 benches = 64 pair가 빈 GPU 수에 따라 1~3일 안에 완료.
-- 사용자가 BBH를 수동 launch 중인 경우에도 별 영향 없음 — auto dispatch는 BBH 제외 4-bench만 처리하며, 학습/BBH 점유 GPU는 free_gpus 필터에서 자동 제외.
-- 학습이 동시에 안 돈다는 운영 가정 하에서 15분이 sweet spot. 만약 학습이 동시에 돈다면 30분으로 늦추면 학습 잡과의 메모리 경합 줄임.
+**사용자 지적**: "GPU가 멈추지 않고 계속 eval을 해야 되는데, 계속 멈추고 사용자 명령을 기다리지 않게 해."
+
+GPU 가 잠시도 idle해선 안 됨. cron 주기를 짧게 하고, 각 tick 안에서도 dispatch loop를 돌려 빈 GPU가 생기는 즉시 다음 (cell, bench)를 채운다.
+
+- **5분마다** (`*/5 * * * *`) — 이전 15분 → 5분으로 단축. eval 셀 1개당 평균 5~15분이라 5분 폴링이면 잡 1개 완료 직후 다음 tick이 빈 GPU를 잡을 수 있음. lock(`flock`)으로 중복 실행 방지.
+- **tick 안에서 dispatch loop** (§9-3 강화): 한 tick에서 free GPU를 발견한 즉시 launch만 하고 종료하지 말 것. lock을 잡고 있는 동안 **최대 N분 (예: 4분)** 까지 다음 패턴을 반복:
+  ```
+  poll free_gpus  →  drain pair_queue까지 launch  →  10초 sleep
+                                                       │
+                                          잡 종료 감지 (log mtime 정체 + sentinel)
+                                                       ▼
+                                          다시 poll free_gpus / pair_queue
+  ```
+  cron 다음 tick(5분 뒤)이 lock 잡으려 할 때까지 같은 프로세스가 계속 dispatch. 5분이 지나면 다음 cron tick이 자연스럽게 인계받음.
+- 결과: 16 cells × 4 benches = **64 pair** 가 사용 가능한 GPU 수 × 셀 평균 시간 만큼 걸려서 끝남. 빈 GPU 가 절대 idle하지 않음.
+- 학습이 동시에 안 돈다는 운영 가정 하에서 5분이 sweet spot. 학습이 동시에 돈다면 학습 잡 GPU는 free_gpus 필터에서 자동 제외.
 
 ### 9-2. crontab 예시
 
 서버에 `crontab -e`로 등록:
 
 ```cron
-# TADS auto-eval — 매 15분, eval대기 셀이 있으면 빈 GPU 만큼 자동 dispatch (4-bench, BBH 제외)
-*/15 * * * * /home/jieun/kms/tads/scripts/auto_eval_tick.sh >> /home/jieun/kms/tads/logs/auto_eval_cron.log 2>&1
+# TADS auto-eval — 매 5분, eval대기 셀이 있으면 빈 GPU 만큼 즉시 dispatch.
+# tick 안에서 dispatch loop 돌려 GPU idle 최소화.
+*/5 * * * * /home/jieun/kms/tads/scripts/auto_eval_tick.sh >> /home/jieun/kms/tads/logs/auto_eval_cron.log 2>&1
 ```
+
+> **continuous mode 대안** — cron 대신 단일 데몬으로 영구 실행하려면 nohup으로 한 번 띄우고 tick 스크립트 안에서 무한 loop (sleep 60). cron 보다 GPU idle 최소화에 유리하지만 process 죽으면 자동 재시작 안 됨. 운영 정책: cron + tick 내부 loop 조합이 권장.
 
 ### 9-3. tick 스크립트 (없으면 에이전트가 생성)
 
 `scripts/auto_eval_tick.sh` — 다음 골격으로 작성. cron은 비대화형 쉘이라 PATH/env가 사실상 비어있으므로 **반드시 setup_env.sh를 명시적으로 source**하고, 동시 실행 방지용 flock을 건다.
+
+**핵심 구조 (2026-05-17 강화 — GPU idle 금지)**: cron이 5분마다 호출하지만 tick 스크립트는 **lock을 잡고 있는 동안 최대 240초(=4분)까지 dispatch loop**를 돌려 빈 GPU가 생기는 즉시 다음 (cell, bench)를 채운다. 4분 지나면 자연 종료 → 다음 cron(5분 뒤)이 이어받음. 잡이 완료되는 즉시 같은 tick 안에서 다음 잡 dispatch되어 GPU idle 최소화.
 
 ```bash
 #!/usr/bin/env bash
@@ -2215,6 +2271,28 @@ for model in llama2 qwen25 mistral deepseek; do
   done
 done
 
+# ============================================================================
+# DISPATCH LOOP — lock 잡고 있는 동안 최대 TICK_BUDGET_SEC 까지 반복
+# ============================================================================
+# GPU 가 idle하지 않도록: 5분마다 cron이 호출되더라도 한 tick 안에서 4분 동안
+# poll → dispatch → sleep 10 → poll → dispatch ... 를 반복. 잡 1개 끝나는
+# 즉시 같은 tick 안에서 다음 잡을 빈 GPU에 즉시 launch.
+#
+# 4분 지나면 자연 종료 → 다음 cron(5분 뒤)이 lock을 이어받음.
+TICK_BUDGET_SEC=240    # 4분
+TICK_START=$(date +%s)
+LOOP_IT=0
+
+while : ; do
+  LOOP_IT=$(( LOOP_IT + 1 ))
+  NOW=$(date +%s)
+  ELAPSED=$(( NOW - TICK_START ))
+  if [ "$ELAPSED" -ge "$TICK_BUDGET_SEC" ]; then
+    echo "[tick $(date -Is)] dispatch loop budget ${TICK_BUDGET_SEC}s reached after $LOOP_IT iterations — exit, next cron picks up"
+    break
+  fi
+  echo "[tick $(date -Is)] === loop iter $LOOP_IT (elapsed ${ELAPSED}s / ${TICK_BUDGET_SEC}s) ==="
+
 # --------------------------------- §7-3 classify pass -------------------------
 need=()
 for model in llama2 qwen25 mistral deepseek; do
@@ -2325,17 +2403,32 @@ for gpu in "${free_gpus[@]}"; do
 done
 
 if [ ${#launched_pids[@]} -gt 0 ]; then
-  echo "[tick $(date -Is)] launched: ${launched_pids[*]}" | tee -a "$LAUNCH_LOG"
+  echo "[tick $(date -Is)] launched this iter: ${launched_pids[*]}" | tee -a "$LAUNCH_LOG"
 fi
 if [ ${#need[@]} -gt 0 ]; then
-  echo "[tick $(date -Is)] queue remaining (다음 tick에 자동 dispatch): ${need[*]}"
+  echo "[tick $(date -Is)] queue remaining this iter (다음 loop iter or 다음 tick에 dispatch): ${need[*]}"
 fi
 
+# 큐가 비어있고 추가로 launch한 게 없으면 잠시 잡 끝나길 기다림.
+# 잡이 끝나면 다음 iter에서 free_gpus가 다시 생기고 큐도 재분류돼 enqueue됨.
+if [ ${#launched_pids[@]} -eq 0 ] && [ ${#need[@]} -eq 0 ]; then
+  # 모든 dispatch 완료 / 빈 GPU 없음 / 큐 비었음 — 잡 완료 대기
+  echo "[tick $(date -Is)] no new dispatch this iter; sleep 30 then re-check"
+  sleep 30
+else
+  # 새로 launch한 잡이 있으면 짧게 sleep 후 다음 iter 재분류 (free_gpus,
+  # queue 모두 갱신).
+  sleep 10
+fi
+
+done    # ← DISPATCH LOOP 닫기
+
 # 직전 tick에 에이전트가 띄운 eval 잡들의 종료 회수: 별도 pidfile 관리 없이
-# §5-4 표 5단계로 매 tick 재판정해서 표 갱신한다. eval.py가 sentinel +
-# _latest를 자체 처리하므로 외부 마커 작성 불필요. exit !=0인 잡은 다음
-# 분류 pass에서 로그 tail에 OOM/Traceback이 잡혀 .fail_count 증가 (§10-3).
-# 16셀 전부 DONE되면 큐가 영구적으로 비어 dispatch pass는 no-op.
+# 매 tick 재분류로 표 갱신한다. eval.py가 sentinel + _latest를 자체 처리
+# 하므로 외부 마커 작성 불필요. exit !=0인 잡은 다음 분류 pass에서 로그
+# tail에 OOM/Traceback이 잡혀 .fail_count 증가 (§10-3).
+# 16셀 전부 DONE되면 큐가 영구적으로 비어 dispatch loop는 no-op (sleep 30
+# 만 반복하다 TICK_BUDGET_SEC 도달해 종료).
 ```
 
 ### 9-4. cron 디버깅 체크리스트
