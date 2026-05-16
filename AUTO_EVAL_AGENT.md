@@ -18,7 +18,8 @@
 │         --benchmarks <single_bench>                                     │
 │         --out_dir ${EVAL_RESULTS_ROOT}/<m>/<x>                          │
 │         >> logs/eval_<m>_<x>_<bench>.log 2>&1 &                         │
-│     (BBH 제외, 단일 bench, 1 GPU = 1 (cell, bench))                     │
+│     (5 벤치 전부 자동, 단일 bench, 1 GPU = 1 (cell, bench),             │
+│      bbh는 가장 마지막 순서 — mmlu→gsm8k→humaneval→tydiqa→bbh)          │
 │           │                                                             │
 │           ▼                                                             │
 │ [2] 결과 파일 즉시 읽기                                                 │
@@ -43,42 +44,48 @@
 
 ---
 
-# 🛑🛑🛑 EVAL IS THE AGENT'S JOB (BBH 제외) — LAUNCH, NOT JUST POLL 🛑🛑🛑
+# 🛑🛑🛑 EVAL IS THE AGENT'S JOB — LAUNCH, NOT JUST POLL 🛑🛑🛑
 
-**에이전트의 핵심 의무는 eval을 직접 launch하는 것이다 (BBH 제외).** log 추출 + 점수 표 갱신만 하고 끝내는 게 아니라:
+**에이전트의 핵심 의무는 eval을 직접 launch하는 것이다 (5 벤치 전부 자동).** log 추출 + 점수 표 갱신만 하고 끝내는 게 아니라:
 
 1. **반드시 매 tick에서 `eval대기` 셀과 빈 GPU를 매칭해 `python -m tads.eval`을 직접 실행한다.** 이게 안 되면 tick 실패. PRE-FLIGHT CHECK 15 참조.
 2. 로그 polling(§0-7)은 **dispatch의 입력 신호일 뿐, 그 자체가 deliverable이 아님**. 로그만 읽고 표만 그리는 건 임무 미완.
-3. "사용자가 직접 eval을 launch하길 기다린다"는 옛 정책(폐기됨). 2026-05-16 이후 eval은 **에이전트가 cron 주기마다 자동 dispatch**한다. 사용자 개입 0 (BBH 제외).
+3. "사용자가 직접 eval을 launch하길 기다린다"는 옛 정책(폐기됨). 2026-05-16 이후 eval은 **에이전트가 cron 주기마다 자동 dispatch**한다. 사용자 개입 0 (BBH 포함, 5 벤치 전부).
 
-## 🚫 BBH 만 사용자 영역 (시간 너무 길어서)
+## ✅ BBH 포함 5 벤치 전부 자동 (BBH는 가장 마지막 순서)
 
-**BBH는 셀당 ~15h+ 걸리는 무거운 benchmark라 에이전트가 자동 launch 하지 않는다** (2026-05-17 분리 정책). 4개만 자동 — mmlu / gsm8k / humaneval / tydiqa.
+**옛 정책(BBH는 사용자 직접 launch)은 2026-05-17 폐기됨.** BBH도 에이전트가 자동 dispatch — 단 시간이 오래 걸리므로 (~15h+) **순서상 가장 마지막**: `mmlu → gsm8k → humaneval → tydiqa → bbh`. 앞 4개가 모두 DONE 된 셀만 bbh 큐에 들어간다.
 
-## 📁 분류 기준 = 파일시스템 + 로그 파일 (pgrep 안 씀)
+## 📁 분류 기준 — `eval중` 만 프로세스, 나머지 4종은 정적 파일
 
-**80개 셀의 상태 분류는 디스크에 남은 영구 흔적만 본다** (2026-05-17 정책 강화). 사용자 지적: "프로세스 기준으로 표를 업데이트 하지 말 것. 저장된 ckpt와 저장된 로그 파일 기준으로 업데이트."
+**사용자 정책 (2026-05-17 정정)**: "프로세스로 보고 업데이트 하는 것 → `eval중`. 나머지 모든 것 → 정적 파일로 업데이트."
 
-분류 입력 = **3가지 디스크 신호만**:
+| 상태 | 분류 입력 |
+|---|---|
+| **학습전** | 정적 파일 only (ckpt 부재) |
+| **학습중** | 정적 파일 only (sealed_n < target) |
+| **`eval중`** | **process state (pgrep) + 로그 mtime** — 잡이 살아있는지 직접 확인이 정확 |
+| **eval대기** | 정적 파일 only (sealed==target + DONE 조건 미충족 + eval중 아님) |
+| **NN.NN%** | 정적 파일 only (sealed sentinel + summary mtime) |
+
+`eval중` 만 process-based로 둔 이유: 점수표가 "현재 잡이 살아있는지" 를 가장 정확하게 보는 신호는 `pgrep`. 로그 mtime 5분 임계는 1차 cross-check.
+
+정적 파일 신호 — 분류 입력 3가지 디스크 흔적:
 1. **체크포인트 파일** — `<ckpt_root>/_latest/epoch_last/_complete` (sealed sentinel + 내용 = epoch 번호).
-2. **학습 로그 파일 mtime + 내용** — `<ckpt_root>/_latest/logs/train_*_r0.log` 의 mtime / tail.
-3. **eval 결과 파일 + eval 로그 파일** — `<eval_base>/_latest/_complete`, `<eval_base>/_latest/<label>-<bench>.json`, `<eval_base>/_latest/logs/eval_*.log` mtime / tail.
+2. **학습 로그 파일 mtime** — `<ckpt_root>/_latest/logs/train_*_r0.log` (학습중 진행도 / HANG 감지).
+3. **eval 결과 파일** — `<eval_base>/_latest/_complete`, `<eval_base>/**/<label>-<bench>.json` (광역 스캔 §5-2.5).
 
-분류에 **pgrep을 쓰지 않는다**. pgrep은:
-- ✗ 분류 입력 ❌ (zombie/orphan 잡힐 수 있음, tick 사이 종료된 잡 놓침, 표가 cron tick보다 빠르게 흔들림).
-- ✓ §7 3.7 dispatch pass의 중복 launch 방지 dedup에만 사용 (동일 cell이 이미 alive면 새로 띄우지 말 것). 분류 결과(표 셀 값) 에는 영향 X.
-
-새 분류 규칙 (filesystem + log only):
+분류 규칙:
 
 | 상태 | 판정 신호 |
 |---|---|
-| **학습전** | `<ckpt_root>/_latest` 도 `_latest.txt` 도 legacy flat `epoch_*` 도 없음 |
-| **학습중** | sealed_n < cfg.train_epochs. (a) 학습 로그 mtime < 30분 = 진행 중. (b) mtime > 30분 = 학습 중단 의심이지만 표기는 `학습중` 유지, Status facet2 에 `HANG <sec>s` 부기 |
-| **eval중** | sealed == target AND `_latest/logs/eval_*.log` 파일이 있고 mtime < 5분 (= 잡이 활발히 로그 쓰는 중) |
-| **NN.NN%** (DONE) | sealed == target AND `_latest/_complete` 존재 AND `_latest/<label>-<bench>.json` 존재 AND summary mtime > sealed epoch mtime |
-| **eval대기** | sealed == target AND DONE 조건 미충족 AND eval 로그 mtime ≥ 5분 (또는 로그 없음) |
+| **학습전** | `<ckpt_root>/_latest` 도 `_latest.txt` 도 legacy flat `epoch_*` 도 없음 (정적 파일) |
+| **학습중** | sealed_n < cfg.train_epochs (정적 파일). (a) 학습 로그 mtime < 30분 = 진행 중. (b) mtime > 30분 = 학습 중단 의심이지만 표기는 `학습중` 유지, Status facet2에 `HANG <sec>s` 부기 |
+| **`eval중`** | **process-based**: `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 **또는** `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. 둘 중 하나만 만족해도 OK |
+| **NN.NN%** (DONE) | 정적 파일 only: sealed == target AND `_latest/_complete` 존재 AND `_latest/<label>-<bench>.json` (또는 §5-2.5 광역 스캔 결과 중 하나) 존재 AND summary mtime > sealed epoch mtime |
+| **eval대기** | 정적 파일 + 위 eval중 조건 NOT: sealed == target AND DONE 조건 미충족 AND (pgrep 0 AND log mtime ≥ 5분 또는 로그 없음) |
 
-**ckpt + log 가 영구 흔적이라 그것만 본다**. 프로세스가 죽었어도 ckpt 와 log 는 남고, 잡이 새로 시작되면 즉시 로그 mtime 이 갱신되어 자연스럽게 `eval중` 으로 잡힘. tick 사이 짧은 시간 동안에 잡이 시작-종료-실패하는 케이스도 로그 mtime 으로 잘 보임 (5분 임계).
+dispatch pass 에서 pgrep 은 **eval중 분류 + 중복 launch 방지** 둘 다 사용 (분류는 `eval중`에만, dedup은 모든 상태에).
 
 ## 🔁 벤치 하나씩 순차 dispatch (동시 묶기 금지)
 
@@ -89,33 +96,21 @@
 
 dispatch 큐는 **(cell, single_bench) pair** 단위. 같은 cell의 mmlu가 끝나야 그 cell의 gsm8k 가 큐에 enqueue. 벤치 순서는:
 ```
-mmlu  →  gsm8k  →  humaneval  →  tydiqa   (BBH는 별도 사용자 launch)
+mmlu  →  gsm8k  →  humaneval  →  tydiqa  →  bbh   (bbh는 가장 마지막)
 ```
 
-총 dispatch unit = 16 cells × 4 benches = **64개 (cell, bench) pair**.
+총 dispatch unit = 16 cells × 5 benches = **80개 (cell, bench) pair**.
 빈 GPU 만큼 동시에 launch하되, 각 launch는 단일 (cell, bench) — 한 GPU에 한 (cell, bench).
 
-
-- BBH 점수가 필요할 때 사용자가 별도 명령으로 직접 launch (수동, 1셀-1명령):
-  ```bash
-  CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
-      --config configs/experiments/main_7b/<model>/<method>.yaml \
-      --benchmarks bbh \
-      --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
-      >> logs/eval_<model>_<method>_bbh.log 2>&1 &
-  ```
-- 에이전트는 BBH 결과 JSON(`_latest/<label>-bbh.json`)이 떨어지면 점수 표 (6)/(7)/(8) BBH 컬럼에 자동 반영. launch는 안 하되 detect/표기는 함.
-- BBH 셀이 `eval대기` 상태로 남아있으면 → `experiments.md` 상단에 **별도 섹션 "사용자 액션 필요 — BBH 수동 launch"** 로 명시 보고. 사용자가 시간 있을 때 위 명령으로 처리.
-
-**한 tick 사이클** (4-bench auto, BBH 수동):
+**한 tick 사이클** (5-bench auto, 사용자 개입 0):
 ```
-[poll logs]  →  [classify 80 cells]  →  [3.7 DISPATCH PASS — mmlu/gsm8k/humaneval/tydiqa만]  →  [update tables]  →  [report (BBH eval대기는 사용자 액션 섹션)]
+[poll logs]  →  [classify 80 cells]  →  [3.7 DISPATCH PASS — 5 벤치 전부]  →  [update tables]
                                           ↑
-                                          --benchmarks mmlu,gsm8k,humaneval,tydiqa
+                                          --benchmarks <single bench>
                                           K개 빈 GPU = K번 launch (1 GPU = 1 cell, §4-1)
 ```
 
-dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (4-bench 대상). 다음 cron tick까지 `eval대기` 셀이 그대로 남아있고 사용자가 "또 그대로네"를 외친다.
+dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (5-bench 대상). 다음 cron tick까지 `eval대기` 셀이 그대로 남아있고 사용자가 "또 그대로네"를 외친다.
 
 ---
 
@@ -251,13 +246,13 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (4-bench 대
 2. 분류는 **2가지 신호의 합성**으로 한다:
    - **filesystem state** (sealed epoch / `_latest/_complete` / summary mtime)
    - **process state + log tail** (`pgrep` + §0-7 log polling) — 특히 `eval대기` vs `eval중` 구분은 반드시 이 두 신호로 확정
-3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch (BBH 제외 — 너무 길어 사용자 직접):
+3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch (5 벤치 전부 자동, bbh는 마지막 순서):
    - **운영 가정 (사용자 명시)**: 노드에 학습이 동시에 안 돈다. eval만 진행.
    - 1셀 = 1 GPU = 1명령 (§4-1). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지.
-   - `CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval --config ... --benchmarks mmlu,gsm8k,humaneval,tydiqa --out_dir ... &` — **BBH 빼고 4개만**.
-   - 빈 GPU가 K개면 매 tick K개 셀 launch (큐 나머지는 다음 tick — 매 tick continuous).
-   - 4개 benchmark 16셀 전부 DONE될 때까지 에이전트 혼자서 자동 진행. 사용자 개입 0.
-   - BBH는 셀당 ~15h+ 라 자동 dispatch 제외 — `eval대기` BBH 셀은 사용자 액션 큐("사용자 액션 필요 — BBH 수동 launch")에 명시 보고.
+   - `CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval --config ... --benchmarks <single_bench> --out_dir ... &` — 단일 벤치, 한 cell의 앞 벤치가 DONE되어야 다음 벤치 enqueue.
+   - 빈 GPU가 K개면 매 tick K개 (cell, bench) pair launch (큐 나머지는 다음 tick — 매 tick continuous).
+   - 5 benchmark 16셀 전부 DONE될 때까지 에이전트 혼자서 자동 진행. 사용자 개입 0.
+   - **벤치 순서**: `mmlu → gsm8k → humaneval → tydiqa → bbh`. bbh는 셀당 ~15h+ 라 마지막에 배치 (다른 4개 다 끝난 셀만 bbh enqueue).
 4. 결과를 `experiments.md` 점수 표 (§0-4) + status dashboard (§0-5) + per-cell HISTORY.md (§0-6)에 atomic으로 기록
 5. **체크포인트가 없는 셀(`학습전`)** 은 사용자에게 명시적으로 보고 — "이 셀은 사용자가 학습을 돌려야 한다"는 신호. **`eval대기` 는 보고 + 자동 launch 양쪽 다 수행**.
 
@@ -282,7 +277,7 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (4-bench 대
 
 → 4 × 4 × 5 = **80개** (모델, 메서드, 벤치마크) 결과 셀.
 
-에이전트 단위는 (모델, 메서드) = **16개 셀**. 각 셀의 자동 eval 호출은 4개 벤치를 한꺼번에 처리한다 (`--benchmarks mmlu,gsm8k,humaneval,tydiqa`). BBH는 셀당 ~15h+ 라 사용자가 별도 명령으로 직접 처리 (top banner / §4-1 참조).
+에이전트 단위는 (모델, 메서드) = **16개 셀**. 각 셀의 자동 eval 호출은 **단일 벤치 단위** 로 5번 dispatch — `mmlu → gsm8k → humaneval → tydiqa → bbh`. 16 cells × 5 benches = 80 (cell, bench) pair 가 매 tick 큐에 들어가 빈 GPU 만큼 launch.
 
 진행 상황은 "16개 중 N개 완료 / 80개 중 M개 점수 산출"로 보고할 것.
 
@@ -755,7 +750,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 | **NO-CKPT** | `학습전` | `_latest`도 `_latest.txt`도 legacy flat `epoch_*`도 없음. 행 전체 5컬럼 동일. 사용자에게 "학습이 필요한 셀 목록" 보고. |
 | **TRAINING** | `학습중` | sealed epoch < `cfg_target_epochs` (= `<latest_run>/cfg.json` 의 `train_epochs` snapshot). 행 전체 5컬럼 동일. train 로그 mtime < 30분이면 진행 중, > 30분이면 Status facet2 에 `HANG <sec>s` 부기하지만 표기는 학습중 유지. |
 | **NEED-EVAL** | `eval대기` | (a) sealed == `cfg_target_epochs` AND (b) `_latest/_complete` + `_latest/<label>-<bench>.json` 부재 또는 stale AND (c) **eval 로그 mtime ≥ 5분 (또는 로그 없음, = 잡 활성도 없음)**. 다음 dispatch pass에서 에이전트가 자동 launch (§4 / §7 3.7). |
-| **EVAL-RUNNING** | `eval중` | **`<eval_base>/_latest/logs/eval_*.log` 파일 mtime < 5분 이내** (잡이 활발히 로그 쓰는 중). pgrep 안 씀 — 로그 mtime이 영구적이고 신뢰 가능한 신호. |
+| **EVAL-RUNNING** | `eval중` | **process-based** (예외): `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 **또는** `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. 잡 활성도 직접 확인. (정책 §0: eval중만 process, 나머지는 정적 파일.) |
 | **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. **humaneval은 pass@10** (NAIT 논문 기준, n=20 sampled completions, T=0.8, p=0.95). 점수 JSON엔 `pass@1`도 같이 기록되지만 점수표는 `pass@10`만 본다. |
 
 > **분류 결정 트리 — 매 tick 반드시 위에서 아래로 순회. 어느 분기에도 안 걸린 셀은 마지막에 `eval대기`로 떨어뜨림** (절대 `-` / `err` / 공란 금지):
@@ -832,7 +827,7 @@ score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 �
 | `학습전` | 체크포인트 없음 | `<ckpt_root>/_latest`도 `_latest.txt`도 없고, legacy flat `epoch_*`도 없음. 행(=한 셀) 전체 5개 컬럼이 모두 이 표기. |
 | `학습중` | 학습 진행 중 | sealed_n (`_latest/epoch_last/_complete` sentinel 내용, 또는 legacy max epoch_N) < `<latest_run>/cfg.json`의 `train_epochs` snapshot. 행 전체 5개 컬럼 모두 이 표기. (보조 사항: train log mtime > 30분이면 Status facet2에 `HANG <sec>s` 부기, 셀 표기 자체는 학습중 유지.) |
 | `eval대기` | 학습 끝남, eval 잡 활성도 없음 | (a) sealed_n >= cfg_target_epochs AND (b) `<eval_base>/_latest/<exp_label>-<bench>.json` 없음 또는 mtime ≤ sealed epoch AND (c) **`<eval_base>/_latest/logs/eval_*.log` mtime ≥ 5분 (또는 로그 없음)**. 다음 §7 3.7 dispatch pass에서 에이전트가 자동 launch. |
-| `eval중` | eval log 활동 중 | **`<eval_base>/_latest/logs/eval_*.log` 가 있고 mtime < 5분 이내** (= 잡이 활발히 로그 쓰는 중). pgrep 안 씀 — log mtime 만으로 충분 + 영구 신호. |
+| `eval중` | eval 잡 활성 | **process-based**: `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 OR `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. (정책 §0: eval중만 pgrep 사용, 나머지는 정적 파일.) |
 | `47.56%` | 점수 산출 완료 | `<eval_base>/_latest/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. `_latest/_complete` sentinel도 있어야 함. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
 
 **판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 5×16에 투영):
@@ -873,7 +868,9 @@ def status_cell(model, method, bench):
         if exists(bench_json) and mtime(bench_json) > mtime(sealed_max):
             return f"{extract_score_pct(bench_json):.2f}%"   # DONE
     # 점수 JSON 아직 없음 또는 _latest unsealed.
-    # eval중 vs eval대기 구분 = 로그 파일 mtime 만 (pgrep 안 씀).
+    # eval중 = process (pgrep) OR log mtime < 5분 (정책 §0: eval중만 예외).
+    if pgrep_alive(f"python.*-m tads.eval.*{model}/{method}\\.yaml"):
+        return "eval중"
     eval_log = newest(f"{eval_base}/_latest/logs/eval_*.log")
     if eval_log and (now() - mtime(eval_log)) < 300:
         return "eval중"
@@ -1377,17 +1374,17 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/      ← 옛 학습이면 epoch_3 (legac
 - 학습은 사용자 영역. 에이전트는 `python -m tads.train` / `torchrun` / `run_main_7b.sh` 절대 실행 금지.
 - 매 tick에 에이전트가 하는 일: (1) 32 log polling (§0-7), (2) 80셀 분류, (3) eval대기 큐 만들기, (4) 빈 GPU 만큼 launch, (5) 표 atomic 갱신, (6) 사용자 보고.
 
-### 4-1. 정식 명령 형태 — 에이전트(자동, 1-bench 순차) vs 사용자(수동, BBH)
+### 4-1. 정식 명령 형태 — 에이전트(자동, 1-bench 순차, 5 벤치 전부)
 
 **에이전트 자동 dispatch — 단일 bench 하나씩만 (`mmlu` → `gsm8k` → `humaneval` → `tydiqa` 순서)**:
 
 ```bash
 # 매 cron tick에서 빈 GPU 만큼 자동 실행. 각 launch는 단일 (cell, bench).
-# ⚠️ 1 GPU = 1 (cell, bench). 4개를 한 명령에 묶지 말 것.
-# bench는 dispatch 큐 순서대로: mmlu 끝나면 같은 cell의 gsm8k, 그 다음...
+# ⚠️ 1 GPU = 1 (cell, bench). 여러 벤치를 한 명령에 묶지 말 것.
+# bench는 dispatch 큐 순서대로: mmlu 끝나면 같은 cell의 gsm8k, ..., 마지막 bbh.
 CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval \
     --config configs/experiments/main_7b/<model>/<method>.yaml \
-    --benchmarks <single_bench> \    # mmlu / gsm8k / humaneval / tydiqa 중 하나
+    --benchmarks <single_bench> \    # mmlu / gsm8k / humaneval / tydiqa / bbh 중 하나
     --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
     >> logs/eval_<model>_<method>_<single_bench>.log 2>&1 &
 ```
@@ -1399,19 +1396,9 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval --config .../llama2/random_10.y
 CUDA_VISIBLE_DEVICES=2 nohup python -m tads.eval --config .../llama2/data_agent_10.yaml --benchmarks mmlu --out_dir ... &
 CUDA_VISIBLE_DEVICES=3 nohup python -m tads.eval --config .../llama2/tads_10.yaml       --benchmarks mmlu --out_dir ... &
 ```
-이 4개 mmlu가 다 끝나면 다음 tick에서 같은 4 cells에 대해 `--benchmarks gsm8k` 로 dispatch.
+이 4개 mmlu가 다 끝나면 다음 tick에서 같은 4 cells에 대해 `--benchmarks gsm8k` → 그 다음 `humaneval` → `tydiqa` → 마지막 `bbh` 로 dispatch.
 
-**사용자 수동 dispatch — BBH 전용** (2026-05-17 분리 정책. 셀당 ~15h+):
-
-```bash
-# 사용자가 시간 있을 때 직접 launch. 에이전트는 자동 실행 안 함.
-# 결과 JSON(_latest/<label>-bbh.json)이 떨어지면 score-board가 자동 detect.
-CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
-    --config configs/experiments/main_7b/<model>/<method>.yaml \
-    --benchmarks bbh \
-    --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
-    >> logs/eval_<model>_<method>_bbh.log 2>&1 &
-```
+**bbh 자동 dispatch (2026-05-17 정책 갱신)**: 옛 "사용자 수동 launch" 정책은 폐기. bbh도 에이전트가 자동 dispatch — 단 셀당 ~15h+ 라 **순서상 가장 마지막** (mmlu/gsm8k/humaneval/tydiqa 4개 모두 DONE된 셀만 bbh 큐에 enqueue).
 
 빈 GPU가 K개일 때 에이전트는 매 tick에서 **위 명령을 K번 따로 실행**한다 (각각 다른 `<free_gpu>` + 다른 큐의 (model, method)). 절대 wrapper 한 번 호출로 K개 잡을 한꺼번에 띄우지 말 것 — wrapper 호출은 다음과 같은 운영 문제를 만든다:
 
@@ -1478,16 +1465,17 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 6. `eval대기` 셀이 launch 가능했지만 빈 GPU가 모자라 큐에 남았으면 §0-4 "사용자 액션 필요" 섹션 대신 "다음 tick 자동 dispatch 예정" 섹션에 그 목록 표기. 사용자가 직접 띄울 필요 없음 (단, 사용자가 수동으로 띄워도 §4-3 1번에서 잡혀 중복 launch 안 됨).
 7. 학습 중인 GPU는 절대 건드리지 말 것 — dispatch pass의 free_gpus 필터에서 `tads.train` 점유 GPU 제외.
 
-### 4-3. eval대기 vs eval중 — 매 tick 재판정 (파일시스템 + 로그만, 캐싱 금지)
+### 4-3. eval대기 vs eval중 — 매 tick 재판정 (eval중만 process, 나머지 정적)
 
-§5-4 표의 판정 신호를 그대로 사용 (**pgrep 안 씀, log mtime + ckpt + summary file 만**). 핵심 4단계 우선순위:
+§5-4 표 + §0 정책 (eval중만 pgrep, 나머지 정적 파일). 핵심 5단계 우선순위:
 
-1. **eval 로그 mtime < 5분** (`<eval_base>/_latest/logs/eval_*.log` 가장 최근 파일) → **`eval중`**. 잡이 활발히 로그 쓰는 중이라는 영구 신호.
-2. 로그 mtime ≥ 5분 + 로그 마지막 50줄에 OOM/CUDA/Traceback **있음** → **`eval대기`** + `.fail_count` 증가 + HISTORY.md `[eval]` 오류 엔트리.
-3. 로그 mtime ≥ 5분 + 오류 없음 + sealed `_complete` 있고 summary mtime > sealed epoch → **`NN.NN%`** (DONE).
-4. 위에 다 해당 안 되고 sealed_epoch < `cfg_target_epochs` (= 해당 run의 `cfg.json` snapshot 값, 라이브 YAML 아님)이면 → **`학습중`**, 그 외 학습 끝났는데 eval 결과 없음 → **`eval대기`**.
+1. **`pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1** → **`eval중`**. 잡이 살아있는 가장 직접적인 신호.
+2. pgrep 0 + **eval 로그 mtime < 5분** → **`eval중`** (pgrep이 잠시 놓친 케이스 보호).
+3. 로그 mtime ≥ 5분 + 로그 마지막 50줄에 OOM/CUDA/Traceback **있음** → **`eval대기`** + `.fail_count` 증가 + HISTORY.md `[eval]` 오류 엔트리.
+4. 로그 mtime ≥ 5분 + 오류 없음 + sealed `_complete` 있고 summary mtime > sealed epoch → **`NN.NN%`** (DONE) (정적 파일).
+5. 위에 다 해당 안 되고 sealed_epoch < `cfg_target_epochs` (= 해당 run의 `cfg.json` snapshot 값, 라이브 YAML 아님)이면 → **`학습중`** (정적 파일), 그 외 학습 끝났는데 eval 결과 없음 → **`eval대기`** (정적 파일, fall-through).
 
-이전 tick의 분류 값을 그대로 들고 오지 말 것 — 매 tick에서 위 4단계를 처음부터 다시 돌릴 것. 사용자가 tick 사이에 eval을 launch하면 1번 (로그 mtime < 5분)에서 잡혀 표가 정확해진다.
+이전 tick의 분류 값을 그대로 들고 오지 말 것 — 매 tick에서 위 5단계를 처음부터 다시 돌릴 것. 사용자가 tick 사이에 eval을 launch하면 1번 (pgrep)에서 잡혀 표가 정확해진다.
 
 ### 4-4. 필터 / 제한 (사용자 수동 실행 시 참고)
 
@@ -1626,7 +1614,7 @@ echo "  ..."
 광역 스캔 정책 덕분에:
 - 학습 측 `_latest` 갱신 → 새 ckpt sealed → 광역 스캔의 모든 후보 mtime이 sealed보다 옛날이면 자동으로 NEED-EVAL.
 - eval 측 어디에든 (= `_latest`든 `runs/<tag>` 든 flat이든) 새 결과 떨어지면 → mtime 비교로 즉시 DONE 전환.
-- 사용자가 수동 BBH launch로 `--flat` 결과 떨어뜨려도 광역 스캔이 잡아 점수표 자동 반영.
+- 과거 사용자 수동 dispatch로 `--flat` 결과가 남아있어도 광역 스캔이 잡아 점수표 자동 반영 (옛 dataset).
 
 **`runs/<tag>/`의 다른 과거 eval run들은 점수 표 갱신 대상이 아니다** (단, `--eval_tag <과거 tag>`로 사용자가 명시적으로 그걸 다시 promote할 수는 있음 → 그러면 `_latest`가 그쪽을 가리키고 자동으로 그 점수가 표에 반영). §0-6 HISTORY.md에는 모든 run의 점수 변동을 기록.
 
@@ -1932,16 +1920,23 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
              status[(model, method)] = "학습중"
              continue
 
-         # 2) eval 측 결정 — §4-3 4단계 우선순위 (filesystem + log only,
-         # pgrep 안 씀, §0 정책).
+         # 2) eval 측 결정 — §4-3 5단계 우선순위.
+         # eval중만 process (pgrep) 사용, 나머지 4종은 정적 파일 (§0 정책).
          eval_latest  = resolve_latest_run(eval_base)
          summary      = eval_latest + f"/{label}-eval_summary.json" if eval_latest else None
          sentinel_ok  = eval_latest and exists(eval_latest + "/_complete")
 
-         # eval중 = 가장 최근 eval log 파일 mtime < 5분 (영구 신호).
+         # eval중 우선순위 1: pgrep 살아있음 — 가장 직접적인 신호.
+         eval_alive = pgrep_alive(f"python.*-m tads.eval.*{model}/{method}\\.yaml")
+         if eval_alive:
+             status[(model, method)] = "eval중"
+             continue
+         # eval중 우선순위 2: pgrep 0이지만 eval log mtime < 5분 — pgrep
+         # 잠깐 놓친 경우 보호 (e.g. fork 직전, 자식 spawn 직후).
          if sig.eval_log_mtime_age is not None and sig.eval_log_mtime_age < 300:
              status[(model, method)] = "eval중"
              continue
+         # 나머지 (DONE / 실패 / 대기) 는 정적 파일 only.
          if sentinel_ok and exists(summary) and mtime(summary) > mtime(latest_epoch):
              status[(model, method)] = f"{parse_score(summary):.2f}%"     # DONE
              continue
@@ -1972,15 +1967,16 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
            f"reason={infer_reason(model, method, sig)}  source={pick_source(model, method, sig)}"
        )
 
-3.7 dispatch pass — 빈 GPU 만큼 eval 자동 launch (1 GPU = 1 (cell, bench), 단일 bench, BBH 제외)
+3.7 dispatch pass — 빈 GPU 만큼 eval 자동 launch (1 GPU = 1 (cell, bench), 단일 bench, 5 벤치 전부 자동)
    # 운영 가정 (사용자 명시): 학습은 모두 끝났고, 노드에는 eval만 돈다.
    # 에이전트가 (cell, bench) 큐를 매 tick continuous하게 dispatch — 사용자 개입 0.
-   # 정책: --benchmarks는 항상 단일 bench. mmlu → gsm8k → humaneval → tydiqa
-   # 순서대로 한 cell의 모든 bench가 끝나야 다음 단계로. BBH 제외 (사용자 직접).
-   AUTO_BENCHES = ("mmlu", "gsm8k", "humaneval", "tydiqa")  # 순서 그대로
+   # 정책: --benchmarks는 항상 단일 bench. mmlu → gsm8k → humaneval → tydiqa → bbh
+   # 순서대로 한 cell의 모든 bench가 끝나야 다음 단계로. bbh도 자동 (가장 마지막 순서).
+   AUTO_BENCHES = ("mmlu", "gsm8k", "humaneval", "tydiqa", "bbh")  # bbh는 가장 마지막
 
    def next_bench_for_cell(model, method):
-       """이 cell의 4-bench 큐에서 아직 DONE 안 된 가장 앞 bench를 반환.
+       """이 cell의 5-bench 큐에서 아직 DONE 안 된 가장 앞 bench를 반환.
+       AUTO_BENCHES 순서: mmlu → gsm8k → humaneval → tydiqa → bbh.
        모두 DONE이면 None."""
        eval_base = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
        eval_latest = resolve_latest_run(eval_base)
@@ -1991,7 +1987,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
                if exists(bj) and parse_score_pct(bj) is not None:
                    continue   # 이 bench는 이미 DONE
            return b
-       return None    # 4-bench 모두 DONE
+       return None    # 5-bench 모두 DONE
 
    # (cell, bench) pair 큐 — 셀당 다음으로 돌아야 할 bench 1개만.
    pair_queue = []
@@ -2037,8 +2033,8 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
            f"{now}  cell={m}/{x}  bench={b}  prev=eval대기  new=eval중  "
            f"reason=auto-dispatch (GPU {gpu})  source=logs/eval_{m}_{x}_{b}.log"
        )
-   # 매 tick continuous: 16 cells × 4 benches = 64 pairs 전부 DONE될 때까지
-   # 매 tick 빈 GPU 만큼 dispatch. 사용자 개입 0 (BBH 제외).
+   # 매 tick continuous: 16 cells × 5 benches = 80 pairs 전부 DONE될 때까지
+   # 매 tick 빈 GPU 만큼 dispatch. 사용자 개입 0 (bbh 포함, 5 벤치 전부).
 
 4. report pass — experiments.md + dashboard + 사용자 액션 섹션 atomic 갱신
    #  eval auto-launch는 위 3.7에서 처리됨 (§0 / §4). 학습 auto-launch는 절대 금지.
@@ -2107,7 +2103,7 @@ GPU 가 잠시도 idle해선 안 됨. cron 주기를 짧게 하고, 각 tick 안
                                           다시 poll free_gpus / pair_queue
   ```
   cron 다음 tick(5분 뒤)이 lock 잡으려 할 때까지 같은 프로세스가 계속 dispatch. 5분이 지나면 다음 cron tick이 자연스럽게 인계받음.
-- 결과: 16 cells × 4 benches = **64 pair** 가 사용 가능한 GPU 수 × 셀 평균 시간 만큼 걸려서 끝남. 빈 GPU 가 절대 idle하지 않음.
+- 결과: 16 cells × 5 benches = **80 pair** 가 사용 가능한 GPU 수 × 셀 평균 시간 만큼 걸려서 끝남. 빈 GPU 가 절대 idle하지 않음.
 - 학습이 동시에 안 돈다는 운영 가정 하에서 5분이 sweet spot. 학습이 동시에 돈다면 학습 잡 GPU는 free_gpus 필터에서 자동 제외.
 
 ### 9-2. crontab 예시
@@ -2383,8 +2379,8 @@ for gpu in "${free_gpus[@]}"; do
   log_path="${LOG_DIR}/eval_${model}_${method}.log"
   echo "[tick $(date -Is)] dispatch ${cell} -> GPU ${gpu}" | tee -a "$LAUNCH_LOG"
   # 2026-05-17 정책: bench 하나씩 순차 dispatch. --benchmarks에 단일
-  # bench만 (mmlu → gsm8k → humaneval → tydiqa 순). 4개를 한 명령에 묶지
-  # 말 것. BBH는 자동 dispatch 제외 (사용자 직접).
+  # bench만 (mmlu → gsm8k → humaneval → tydiqa → bbh 순). 여러 벤치를 한
+  # 명령에 묶지 말 것. bbh도 자동 dispatch (가장 마지막 순서).
   # $cell 큐 항목은 "<model>/<method>/<bench>" 형식 (single-bench pair).
   bench="${cell##*/}"          # 마지막 / 뒤 = bench 이름
   cellpath="${cell%/*}"         # 앞 부분 = <model>/<method>
