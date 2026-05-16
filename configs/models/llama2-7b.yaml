@@ -9,6 +9,8 @@ prompt_style: alpaca_default
 max_seq_len: 512
 # NAIT Table 8 / Stanford Alpaca SFT recipe.
 learning_rate: 2.0e-5
-# LLAMA-TUNE: ~30% forward speedup at identical numerics. The loader falls
-# back to sdpa if flash-attn isn't installed, so this is safe to ship.
-attn_implementation: flash_attention_2
+# LLAMA-TUNE 2차 조정: flash_attention_2 OOM 회피 — workspace 할당이 일부
+# 환경에서 SFT/eval 양쪽에서 OOM을 유발해 sdpa(transformers 기본)으로 환원.
+# 속도 손실 대비 안정성 우선. 다시 켜려면 flash-attn 버전을 torch와 맞춘 뒤
+# 아래 줄 주석 해제할 것.
+# attn_implementation: flash_attention_2

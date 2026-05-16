@@ -12,10 +12,13 @@ train_epochs: 4
 
 anchor:
   layer_idx: -1
-  # LLAMA-TUNE: 1024 → 2048 to reduce PCA estimator variance, anchor direction
-  # stability ↑, alignment noise ↓. PCA batch_size kept at 16 (memory).
-  max_samples_for_pca: 2048
-  pca_batch_size: 16
+  # LLAMA-TUNE 2차 조정: 2048 → 1024 (1차 시도가 OOM). PCA 통과 시 hidden
+  # state 누적이 sample 수에 비례해서 SFT 잡과 메모리 경합. estimator 분산
+  # 개선보다 OOM 회피가 우선. pca_batch_size는 16 유지(per-step 영향 동일).
+  max_samples_for_pca: 1024
+  # LLAMA-TUNE 2차 조정: 16 → 8. forward 1회당 hidden_states 캐시 양을 반감해
+  # PCA 단계 자체의 peak 메모리를 줄임 (수렴엔 영향 없음, 통계량만).
+  pca_batch_size: 8
 
 # LLAMA-TUNE: bump PPO actor entropy slightly (same as data_agent_10 — keep
 # the comparison fair).

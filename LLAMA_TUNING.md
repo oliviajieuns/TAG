@@ -53,7 +53,7 @@ random AVG가 alpaca를 약간 상회. 이건 벤치 부분집합 효과지 알�
 | 변경 | Before → After | 이유 |
 |---|---|---|
 | `prompt_style` | `llama_user_assistant` → `alpaca_default` | 논문 row 01은 **Stanford Alpaca template** (`### Instruction:` / `### Response:`). `<|user|>`/`<|assistant|>` 템플릿은 base Llama-2에 정의돼 있지 않은 special token이라 SFT 가치가 떨어짐 — 가장 큰 잠재 개선 포인트. |
-| `attn_implementation` | (none) → `flash_attention_2` | 동일 품질에 ~30% 속도 향상. flash-attn 미설치 시 loader가 sdpa로 자동 fallback. |
+| `attn_implementation` | (none) → ~~`flash_attention_2`~~ → (none) | **2차 조정: 비활성화**. 1차 시도에서 일부 환경의 flash-attn 워크스페이스 할당이 SFT/eval OOM을 유발 → 주석 처리하고 transformers 기본(sdpa)으로 환원. 속도 손실 < OOM 회복. flash-attn 버전을 torch와 정확히 맞춘 뒤 재활성화 가능. |
 | `learning_rate` | `2.0e-5` (그대로) | NAIT Table 8 spec — 변경 없음. |
 | `max_seq_len` | `512` (그대로) | NAIT Table 8 spec — 변경 없음. |
 
@@ -68,7 +68,8 @@ random AVG가 alpaca를 약간 상회. 이건 벤치 부분집합 효과지 알�
 
 | 변경 | Before → After | 이유 |
 |---|---|---|
-| `anchor.max_samples_for_pca` | `1024` → `2048` | PCA 추정 분산 ↓, anchor 방향 안정성 ↑ → alignment 노이즈 감소 |
+| `anchor.max_samples_for_pca` | `1024` → ~~`2048`~~ → `1024` (원복) | **2차 조정: 원복**. 1차 시도에서 OOM. 2048 sample 분 hidden state 누적이 SFT 잡과 메모리 경합. estimator 분산 개선보다 OOM 회피 우선. |
+| `anchor.pca_batch_size` | `16` → `8` | **2차 조정 추가**. forward 1회당 hidden_states 캐시 양 반감 → PCA 단계 peak 메모리 ↓ (통계량에만 영향, 수렴엔 무관). |
 | `agent.entropy_coef` | `0.01` → `0.02` | PPO actor의 탐색량 살짝 ↑ — 수렴 후 한 쪽으로 너무 collapsed되는 패턴 회피 |
 
 ### 2-4. `data_agent_10` 추가 변경
