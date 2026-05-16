@@ -87,32 +87,114 @@ def _language_of(qa_id: Optional[str]) -> str:
     return m.group(1) if m else "unknown"
 
 
+def _normalize_answers_field(ans: Any) -> List[str]:
+    """Return the list of gold answer strings from any of the layouts the
+    TyDiQA / SQuAD ecosystem uses for the ``answers`` field.
+
+    Handles:
+      - dict ``{"text": [...], "answer_start": [...]}`` (SQuAD / HF parquet)
+      - dict ``{"text": "single"}`` (some converters emit scalar)
+      - list of dicts ``[{"text": "...", "answer_start": N}, ...]`` (SQuAD 2.0)
+      - list of strings ``["a", "b"]`` (flat array converters)
+      - None / empty → []
+    """
+    if isinstance(ans, dict):
+        t = ans.get("text", [])
+        if isinstance(t, str):
+            return [t] if t else []
+        if t is None:
+            return []
+        return [str(x) for x in t]
+    if isinstance(ans, list):
+        if not ans:
+            return []
+        if isinstance(ans[0], str):
+            return [str(x) for x in ans]
+        return [str(a.get("text", "")) for a in ans if isinstance(a, dict)]
+    return []
+
+
 def _parse_squad_file(path: str) -> List[Dict[str, Any]]:
-    """Parse a SQuAD-style TyDiQA file (train or dev share the schema)."""
+    """Parse a TyDiQA JSON dev/train file.
+
+    Accepts three layouts, auto-detected from the top-level shape:
+
+    1. **Canonical SQuAD nested** — ``{"data": [{"paragraphs":
+       [{"context": "...", "qas": [{"id": ..., "question": ...,
+       "answers": ...}]}]}]}``. This is the v1.1 GCS layout.
+
+    2. **Flat JSON array** — ``[{"id": ..., "question": ..., "context":
+       ..., "answers": ...}, ...]``. Some converters (and a few re-hosts)
+       publish TyDiQA-GoldP this way. The previous parser called
+       ``raw.get("data", [])`` here and crashed with AttributeError
+       ("list has no attribute 'get'"); add explicit branch.
+
+    3. **JSONL** — one JSON object per line, same per-record schema as (2).
+       Detected by JSONDecodeError on the whole-file parse + a successful
+       line-by-line re-parse.
+    """
     with open(path) as f:
-        raw = json.load(f)
-    examples = []
-    for article in raw.get("data", []):
-        for para in article.get("paragraphs", []):
-            for qa in para.get("qas", []):
-                ans = qa.get("answers", {})
-                if isinstance(ans, dict):
-                    texts = ans.get("text", []) or []
-                elif isinstance(ans, list):
-                    if ans and isinstance(ans[0], str):
-                        texts = ans
-                    else:
-                        texts = [a.get("text") for a in ans if isinstance(a, dict)]
-                else:
-                    texts = []
-                examples.append({
-                    "id": qa.get("id"),
-                    "question": qa.get("question"),
-                    "context": para.get("context", ""),
-                    "answers": {"text": texts},
-                    "language": _language_of(qa.get("id")),
-                })
-    return examples
+        text = f.read()
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        # Try JSONL fallback before giving up.
+        records: List[Dict[str, Any]] = []
+        for ln, line in enumerate(text.splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"TyDiQA file {path!r} is neither valid JSON nor JSONL "
+                    f"(line {ln} failed: {exc}).",
+                ) from exc
+        raw = records  # falls through to the flat-array branch below
+
+    examples: List[Dict[str, Any]] = []
+
+    if isinstance(raw, dict) and "data" in raw:
+        # (1) Canonical SQuAD nested layout.
+        for article in raw.get("data", []) or []:
+            for para in article.get("paragraphs", []) or []:
+                for qa in para.get("qas", []) or []:
+                    examples.append({
+                        "id": qa.get("id"),
+                        "question": qa.get("question"),
+                        "context": para.get("context", ""),
+                        "answers": {"text": _normalize_answers_field(qa.get("answers"))},
+                        "language": _language_of(qa.get("id")),
+                    })
+        return examples
+
+    if isinstance(raw, list):
+        # (2) / (3) Flat array of per-QA records. Each record carries its own
+        # context (no paragraphs wrapper). Required keys are graceful — we
+        # default missing context/question to empty string rather than
+        # crashing so partial data still produces a metric (and per-record
+        # failures show up as wrong predictions, not a parse abort).
+        for rec in raw:
+            if not isinstance(rec, dict):
+                continue
+            qa_id = rec.get("id") or rec.get("qid") or rec.get("example_id")
+            examples.append({
+                "id": qa_id,
+                "question": str(rec.get("question", "")),
+                "context": str(rec.get("context") or rec.get("passage") or ""),
+                "answers": {"text": _normalize_answers_field(rec.get("answers"))},
+                "language": _language_of(qa_id),
+            })
+        return examples
+
+    raise ValueError(
+        f"TyDiQA file {path!r} has unrecognised top-level type "
+        f"{type(raw).__name__!r}. Expected:\n"
+        f"  - dict with `data` key (SQuAD v1.1 nested), or\n"
+        f"  - list of QA records (flat JSON array), or\n"
+        f"  - JSONL (one record per line)."
+    )
 
 
 def _parse_parquet_file(path: str) -> List[Dict[str, Any]]:
@@ -167,7 +249,12 @@ def _parse_parquet_file(path: str) -> List[Dict[str, Any]]:
 
 
 def _parse_tydiqa_file(path: str) -> List[Dict[str, Any]]:
-    """Dispatch to the SQuAD JSON or HF parquet parser based on extension."""
+    """Dispatch to the parquet or JSON / JSONL parser based on extension.
+
+    ``.parquet`` → HF parquet path. Anything else (``.json``, ``.jsonl``,
+    extension-less) → `_parse_squad_file` which auto-detects the SQuAD
+    nested vs flat-array vs JSONL layout.
+    """
     if path.endswith(".parquet"):
         return _parse_parquet_file(path)
     return _parse_squad_file(path)
@@ -188,11 +275,15 @@ def _resolve_split_paths(data_dir: str) -> Tuple[str, str, str]:
     a clear FileNotFoundError listing every checked location if nothing
     matches.
     """
-    if data_dir.endswith((".json", ".parquet")):
+    if data_dir.endswith((".json", ".jsonl", ".parquet")):
         dev_path = data_dir
         base_dir = os.path.dirname(data_dir) or "."
         if data_dir.endswith(".parquet"):
             train_path = os.path.join(base_dir, "train-00000-of-00001.parquet")
+        elif data_dir.endswith(".jsonl"):
+            # Mirror the dev basename for the train file when JSONL.
+            stem = os.path.basename(data_dir).replace("dev", "train", 1)
+            train_path = os.path.join(base_dir, stem)
         else:
             train_path = os.path.join(base_dir, "tydiqa-goldp-v1.1-train.json")
         return dev_path, train_path, base_dir
