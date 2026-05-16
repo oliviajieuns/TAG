@@ -353,8 +353,8 @@ tads_10         -          -          -          -
 | 상태 | 셀 표기 | 판정 신호 (정확히 이렇게) |
 |---|---|---|
 | **NO-CKPT** | `학습전` | `_latest`도 `_latest.txt`도 legacy flat `epoch_*`도 없음. 행 전체 5컬럼 동일. 사용자에게 "학습이 필요한 셀 목록" 보고. |
-| **TRAINING** | `학습중` | 학습 프로세스 alive **또는** sealed epoch < `train_epochs`. 행 전체 5컬럼 동일. |
-| **NEED-EVAL** | `eval대기` | (a) 학습 끝남 (sealed == train_epochs) AND (b) `_latest/_complete` + `_latest/<label>-eval_summary.json` 부재 또는 stale AND **(c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime > 5분 (= 진짜 idle)**. 사용자가 직접 실행할 셀. |
+| **TRAINING** | `학습중` | 학습 프로세스 alive **또는** sealed epoch < `cfg_target_epochs`. 행 전체 5컬럼 동일. |
+| **NEED-EVAL** | `eval대기` | (a) 학습 끝남 (sealed == `cfg_target_epochs`) AND (b) `_latest/_complete` + `_latest/<label>-eval_summary.json` 부재 또는 stale AND **(c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime > 5분 (= 진짜 idle)**. 사용자가 직접 실행할 셀. |
 | **EVAL-RUNNING** | `eval중` | `python -m tads.eval.*<model>/<method>` 프로세스 alive **또는** eval 로그 mtime < 5분 이내 활동 (pgrep이 잠시 놓쳤어도 로그가 움직이면 살아있는 것). |
 | **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. humaneval은 pass@1. |
 
@@ -365,7 +365,9 @@ tads_10         -          -          -          -
 >    → 학습전 [END]
 >
 > 2. 학습 프로세스 alive (pgrep "python.*tads.train.*<model>/<method>\.yaml")
->    OR sealed_epoch_count < cfg.train_epochs
+>    OR sealed_epoch_count < cfg_target_epochs
+>    (※ cfg_target_epochs = `<latest_run>/cfg.json`의 train_epochs.
+>     라이브 YAML이 아님 — 학습 launch 시점 snapshot. §5-4 참조.)
 >    → 학습중 [END]
 >
 > 3. eval 프로세스 alive (pgrep "python.*tads.eval.*<model>/<method>\.yaml")
@@ -949,7 +951,7 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 2. pgrep 0개 + eval 로그 mtime < 5분 → **`eval중`** (grep 사이 잠시 안 잡힌 케이스 대비).
 3. pgrep 0개 + 로그 mtime ≥ 5분 + 로그 마지막 50줄에 OOM/CUDA/Traceback **있음** → **`eval대기`** + `.fail_count` 증가 + HISTORY.md `[eval]` 오류 엔트리.
 4. pgrep 0개 + 로그 mtime ≥ 5분 + 오류 없음 + sealed `_complete` 있고 summary mtime > sealed epoch → **`NN.NN%`** (DONE).
-5. 위에 다 해당 안 되고 sealed_epoch < train_epochs면 → **`학습중`**, 그 외 학습 끝났는데 eval 결과 없음 → **`eval대기`**.
+5. 위에 다 해당 안 되고 sealed_epoch < `cfg_target_epochs` (= 해당 run의 `cfg.json` snapshot 값, 라이브 YAML 아님)이면 → **`학습중`**, 그 외 학습 끝났는데 eval 결과 없음 → **`eval대기`**.
 
 이전 tick의 분류 값을 그대로 들고 오지 말 것 — 매 tick에서 위 5단계를 처음부터 다시 돌릴 것. 사용자가 tick 사이에 eval을 launch하면 1번에서 잡혀야 표가 정확해진다.
 
@@ -1041,6 +1043,16 @@ ${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log
 ### 5-4. 셀 상태 분류 (4 파일-state + 1 process-state = 5 display state) — 매 tick 시작 시 모든 셀에 대해 판정
 
 매트릭스 16개 셀 각각을 다음 **4가지 file-state 중 하나**로 분류 (디스크 상태 기반). 그 위에 **process-state** 1종(eval 프로세스가 떠있는지)을 겹쳐 score board에는 항상 **5종 마커 (`학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%`) 중 하나**로만 표기.
+
+**🔑 핵심 규칙 — `cfg_target_epochs`의 정의**:
+
+`cfg_target_epochs`는 **그 run dir의 `cfg.json` snapshot에 저장된 `train_epochs`** (= 학습이 launch된 시점의 값)이지, **라이브 YAML 파일이 아니다**. 즉:
+
+- 사용자가 epoch=3으로 학습 launch → 그 run dir의 cfg.json엔 `train_epochs: 3` 박힘 → epoch_3 sealed = DONE (이후 라이브 YAML이 4로 바뀌어도 영향 없음).
+- 사용자가 그 셀을 **새로** launch (auto timestamp로 새 `runs/<tag>/` 생성) → 그때의 라이브 YAML이 4면 새 cfg.json엔 `train_epochs: 4` 박힘 → epoch_4 sealed = DONE.
+- `_latest` 포인터는 가장 최신의 sealed run을 가리키므로, 새 run이 완료되면 자동으로 그쪽 cfg.json이 기준이 됨.
+
+**이 규칙 때문에**: 라이브 YAML의 `train_epochs` 값을 올려도(예: qwen25/mistral/deepseek 3→4), **이미 sealed된 3-epoch runs는 재학습 대상이 아님**. 그 셀들은 자기 run dir의 cfg.json(=3)을 기준으로 DONE 유지. 사용자가 다시 학습 launch했을 때부터 새 값(4) 적용.
 
 | 상태 | 판정 조건 | 에이전트 행동 | Score board 마커 |
 |---|---|---|---|
