@@ -137,8 +137,8 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 **80-cell 표 관리 규약** (§0-4(6) 전용):
 - 위치: `experiments.md`의 **맨 아래** (다른 섹션 추가되더라도 항상 마지막에 위치). `## 80-cell Consolidated Score Table` 헤더로 둘러싸고, 그 안의 코드 펜스(```) 블록만 atomic 교체.
 - 갱신 단위: 셀 1개 (점수 1개). 한 셀이 DONE 되면 (1)-(5) 표와 (6) 표 양쪽을 같은 값으로 동시 갱신.
-- 상태 표기는 위 "채우는 규칙" 표를 그대로 사용 (`-` / `학습필요` / `eval대기` / `legacy(...)` / `42.13` / `…` / `실패`).
-- 80개 셀 전체가 숫자로 채워지면 = 실험 완료. 이 시점에 §0-2 발산 알람 최종 평가를 별도 섹션 `## 최종 발산 알람 요약`으로 (6) 표 바로 위에 추가.
+- 상태 표기는 아래 "채우는 규칙" 5종 + 초기 템플릿 `-`만 사용: `학습전` / `학습중` / `eval대기` / `eval중` / `47.56%` / `-`.
+- 80개 셀 전체가 `NN.NN%`로 채워지면 = 실험 완료. 이 시점에 §0-2 발산 알람 최종 평가를 별도 섹션 `## 최종 발산 알람 요약`으로 (6) 표 바로 위에 추가.
 
 값은 `<experiment_label>-eval_summary.json` 또는 벤치별 JSON에서 직접 파싱한 정확도 (%, 소수점 둘째자리까지). **아직 안 돌아간 셀은 `-` 그대로**. 표 형식은 monospace 가정. `experiments.md`에 쓸 때 코드 펜스(```) 안에 넣어 정렬 깨지지 않게.
 
@@ -197,66 +197,69 @@ data_agent_10   -          -          -          -
 tads_10         -          -          -          -
 ```
 
-#### (6) 80-cell consolidated score table (5 벤치 × 16 모델/메서드 = 80)
+#### (6) 80-cell consolidated score table (5 벤치 × 16 모델/메서드 = 80) + Status
 
 > **위치 = `experiments.md`의 맨 아래**. (1)-(5)는 모델별/요약별 뷰, (6)이 **80개 전체 셀의 single source of truth**. 매 tick 동기화 필수 (위 "80-cell 표 관리 규약" 참조).
+> **맨 우측 `Status` 컬럼** = 셀의 (1) 점수 이력, (2) 시스템 오류, (3) baseline 발산 알람을 한 줄로 요약 (§0-6 가이드 참조). 자세한 시계열 로그는 per-cell `HISTORY.md`.
 
 ```
-#   Model/Method               mmlu    gsm8k   humaneval  tydiqa   bbh
-=== ========================== ======= ======= ========== ======== =======
- 1  llama2 / full_100          -       -       -          -        -
- 2  llama2 / random_10         -       -       -          -        -
- 3  llama2 / data_agent_10     -       -       -          -        -
- 4  llama2 / tads_10           -       -       -          -        -
- 5  qwen25 / full_100          -       -       -          -        -
- 6  qwen25 / random_10         -       -       -          -        -
- 7  qwen25 / data_agent_10     -       -       -          -        -
- 8  qwen25 / tads_10           -       -       -          -        -
- 9  mistral / full_100         -       -       -          -        -
-10  mistral / random_10        -       -       -          -        -
-11  mistral / data_agent_10    -       -       -          -        -
-12  mistral / tads_10          -       -       -          -        -
-13  deepseek / full_100        -       -       -          -        -
-14  deepseek / random_10       -       -       -          -        -
-15  deepseek / data_agent_10   -       -       -          -        -
-16  deepseek / tads_10         -       -       -          -        -
+#   Model/Method               mmlu    gsm8k   humaneval  tydiqa   bbh      Status (이력 · 오류 · 발산 알람)
+=== ========================== ======= ======= ========== ======== ======== =====================================================
+ 1  llama2 / full_100          -       -       -          -        -        -
+ 2  llama2 / random_10         -       -       -          -        -        -
+ 3  llama2 / data_agent_10     -       -       -          -        -        -
+ 4  llama2 / tads_10           -       -       -          -        -        -
+ 5  qwen25 / full_100          -       -       -          -        -        -
+ 6  qwen25 / random_10         -       -       -          -        -        -
+ 7  qwen25 / data_agent_10     -       -       -          -        -        -
+ 8  qwen25 / tads_10           -       -       -          -        -        -
+ 9  mistral / full_100         -       -       -          -        -        -
+10  mistral / random_10        -       -       -          -        -        -
+11  mistral / data_agent_10    -       -       -          -        -        -
+12  mistral / tads_10          -       -       -          -        -        -
+13  deepseek / full_100        -       -       -          -        -        -
+14  deepseek / random_10       -       -       -          -        -        -
+15  deepseek / data_agent_10   -       -       -          -        -        -
+16  deepseek / tads_10         -       -       -          -        -        -
 ```
 
-채우는 규칙 (§5-4의 4-state 분류를 그대로 반영):
+채우는 규칙 (§5-4의 4-state 분류를 그대로 반영) — **모든 표 ((1)-(6))에 동일한 5가지 표기만 사용**:
 
 | 상태 | 셀 표기 | 비고 |
 |---|---|---|
-| **NEED-TRAIN** | `학습필요` | 한 행 전체를 이 마커로 채움 (벤치 컬럼 5개 + avg). 사용자에게 별도 "학습이 필요한 셀 목록" 보고. |
-| **NEED-EVAL** | `eval대기` | 체크포인트는 있음. 곧 자동 eval됨. |
-| **LEGACY** | `legacy(숫자)` 예: `legacy(41.20)` | 옛 포맷에서 추출. 다음 tick에 새 포맷으로 덮어써 DONE 전환. |
-| **DONE** | 정확도(%) 둘째 자리까지. 예: `42.13`. | humaneval은 pass@1. |
-| 진행 중 (eval 실행 중) | `…` 또는 `eval중` | 보고 본문에 "running" 라인 별도. |
-| 최근 실패 | `실패` | 보고 본문에 "failed: <원인>" 라인. fail_count(§10-3) 동시 갱신. |
+| **NO-CKPT** | `학습전` | 체크포인트 없음. 한 행 전체를 이 마커로 채움 (벤치 컬럼 5개 + avg). 사용자에게 별도 "학습이 필요한 셀 목록" 보고. |
+| **TRAINING** | `학습중` | 학습 잡이 살아있거나 sealed epoch 수 < `train_epochs`. 한 행 전체 5개 컬럼 모두 이 표기. |
+| **NEED-EVAL** | `eval대기` | 학습은 끝났는데 아직 eval 안 돌아간 셀. 곧 자동 eval 됨. |
+| **EVAL-RUNNING** | `eval중` | `python -m tads.eval` 프로세스가 떠 있음. |
+| **DONE** | `NN.NN%` 예: `47.56%` | 정확도(%) 소수점 둘째자리 + `%`. humaneval은 pass@1. |
+
+> **표기는 위 5종 + 초기 템플릿 `-`이 전부**. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 5종 중 하나로 매핑해서 쓸 것: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
 
 추가 규칙:
-- treatment 행이 DONE이면 옆에 §0-2의 발산 알람을 인라인으로 붙일 것. 예: `tads_10  proposed * 41.20 (RED < random_10)`
-- NEED-TRAIN 셀은 score board 갱신 외에 **별도 섹션 "필요한 학습 목록"을 `experiments.md` 상단에 자동 추가**해서 사용자가 한눈에 보게 할 것. 형식:
+- treatment 행이 DONE이면 옆에 §0-2의 발산 알람을 인라인으로 붙일 것. 예: `tads_10  41.20% (RED < random_10)`
+- `학습전` 셀은 score board 갱신 외에 **별도 섹션 "필요한 학습 목록"을 `experiments.md` 상단에 자동 추가**해서 사용자가 한눈에 보게 할 것. 형식:
   ```
-  ## 사용자 액션 필요 — 아직 학습되지 않은 셀 (NEED-TRAIN)
+  ## 사용자 액션 필요 — 아직 학습되지 않은 셀 (학습전)
   - llama2 / data_agent_10
   - llama2 / tads_10
   - mistral / random_10
   ...
   ```
-- 셀의 LEGACY 점수가 발산 알람을 트리거하더라도, 재실행으로 DONE이 될 때까지는 알람을 빨간/노란색이 아니라 회색(`(provisional)`)으로 표기.
+- 옛 포맷에서 추출한 점수도 그대로 `NN.NN%`로 표기하되, 발산 알람은 다음 tick 재평가로 DONE 전환될 때까지 회색(`(provisional)`)으로 표기.
 
 ### 0-5. Status Dashboard — **5×16 한눈 보기 표 (의무 출력)**
 
 매 tick 보고에 에이전트는 **다음 80-cell 표 한 개를 반드시 출력**한다. §0-4의
 score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 사용자가 한
-번에 진행 상태를 파악하는 dashboard. 셀 값은 정확히 4종 중 하나:
+번에 진행 상태를 파악하는 dashboard. 셀 값은 정확히 **5종 중 하나** (§0-4 채우는 규칙과 동일 어휘):
 
 | 상태 표기 | 의미 | 분류 조건 |
 |---|---|---|
 | `학습전` | 체크포인트 없음 | `<ckpt_root>/_latest`도 `_latest.txt`도 없고, legacy flat `epoch_*`도 없음. 행(=한 셀) 전체 5개 컬럼이 모두 이 표기. |
 | `학습중` | 학습 진행 중 | (a) `python -m tads.train.*<model>/<method>` 프로세스가 살아있음, **또는** (b) `<latest_run>/cfg.json`의 `train_epochs` 값보다 sealed (`_complete`) epoch 수가 적음. 행 전체 5개 컬럼 모두 이 표기. |
-| `Eval중` | 학습 끝남, 이 벤치 결과 미생성 | 학습은 완료(sealed epoch == `train_epochs`)지만 `<eval_dir>/<exp_label>-<bench>.json`이 없거나, mtime이 sealed epoch보다 옛날. **또는** `python -m tads.eval.*<model>/<method>` 프로세스가 떠 있음 (=대기든 진행이든). |
-| `47.98%` | 점수 산출 완료 | `<eval_dir>/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
+| `eval대기` | 학습 끝남, eval 프로세스도 아직 안 떴음 | 학습 완료(sealed == `train_epochs`)이고 `<eval_dir>/<exp_label>-<bench>.json` 없음 (또는 mtime이 sealed epoch보다 옛날), **그리고** `python -m tads.eval.*<model>/<method>` 프로세스 없음. |
+| `eval중` | eval 프로세스 떠있음 | `python -m tads.eval.*<model>/<method>` 프로세스가 떠 있음 (대기든 실행이든). |
+| `47.56%` | 점수 산출 완료 | `<eval_dir>/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
 
 **판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 5×16에 투영):
 
@@ -281,8 +284,10 @@ def status_cell(model, method, bench):
     sealed_max = max(sealed, key=lambda p: int(basename(p).replace("epoch_","")))
     if exists(bench_json) and mtime(bench_json) > mtime(sealed_max):
         return f"{extract_score_pct(bench_json):.2f}%"
-    # eval 진행 중인지 확인 (실행 중 OR 대기 중 모두 'Eval중')
-    return "Eval중"
+    # 점수 JSON 아직 없음 — eval 프로세스 떠있는지로 대기/진행 구분
+    if pgrep_alive(f"python.*-m tads.eval.*{model}/{method}"):
+        return "eval중"
+    return "eval대기"
 ```
 
 #### 80-cell 표 (16 행 × 5 벤치 컬럼) — 초기 상태 / 갱신 템플릿
@@ -314,25 +319,157 @@ def status_cell(model, method, bench):
 
 | # | 모델 / 메서드 | MMLU | GSM8K | HumanEval | TyDiQA | BBH |
 |---|---|---|---|---|---|---|
-| 1 | llama2 / full_100      | `47.98%` | `14.63%` | `27.87%` | `39.48%` | `39.94%` |
-| 2 | llama2 / random_10     | `47.14%` | `14.13%` | `Eval중` | `Eval중` | `Eval중` |
+| 1 | llama2 / full_100      | `47.56%` | `14.63%` | `27.87%` | `39.48%` | `39.94%` |
+| 2 | llama2 / random_10     | `47.14%` | `14.13%` | `eval중` | `eval대기` | `eval대기` |
 | 3 | llama2 / data_agent_10 | `학습중` | `학습중` | `학습중` | `학습중` | `학습중` |
 | 4 | llama2 / **tads_10**   | `학습중` | `학습중` | `학습중` | `학습중` | `학습중` |
-| 5 | qwen25 / full_100      | `Eval중` | `Eval중` | `Eval중` | `Eval중` | `Eval중` |
+| 5 | qwen25 / full_100      | `eval중` | `eval대기` | `eval대기` | `eval대기` | `eval대기` |
 | ... |
 | 16 | deepseek / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
 
 해석 가이드:
 - 행 전체가 `학습전`/`학습중`이면 학습 단계 → **에이전트는 자동 트리거 금지**, 사용자에게만 보고.
-- 행에 `Eval중`이 섞여 있으면 §4-3 dispatch 큐에 자동 enqueue → 빈 GPU 생기는 대로 launch.
-- 행 전체가 숫자이면 DONE → §0-4 score board에 점수 반영 + §0-2 발산 알람 평가.
-- 한 행 내에서 `47.98%`와 `Eval중`이 섞이는 건 정상 (eval은 5개 벤치 순차 처리, JSON 떨어진 순으로 셀이 갱신됨).
+- 행에 `eval대기`가 섞여 있으면 §4-3 dispatch 큐에 자동 enqueue → 빈 GPU 생기는 대로 launch (launch 직후 `eval대기` → `eval중`).
+- 행 전체가 `NN.NN%`이면 DONE → §0-4 score board에 점수 반영 + §0-2 발산 알람 평가.
+- 한 행 내에서 `47.56%`와 `eval중`/`eval대기`가 섞이는 건 정상 (eval은 5개 벤치 순차 처리, JSON 떨어진 순으로 셀이 갱신됨).
 
 #### 갱신 빈도 / 출력 위치
 
 - 매 tick (cron 30분 주기)마다 dispatch pass 직전 1회, dispatch 직후 1회 = tick당 2회 출력.
 - 출력은 `experiments.md` **상단**에 fenced markdown 표로 갱신 (전체 파일을 매번 다시 쓰지 말고, "STATUS DASHBOARD" 섹션 사이의 영역만 atomic 교체).
-- 채팅/슬랙 보고에는 변경된 셀만 `diff` 형태로 인용 ("[#4 llama2/tads_10] 학습중 → Eval중", "[#1 llama2/full_100, MMLU] Eval중 → 47.98%" 등). 표 전체 매번 복붙 금지.
+- 채팅/슬랙 보고에는 변경된 셀만 `diff` 형태로 인용 ("[#4 llama2/tads_10] 학습중 → eval대기", "[#1 llama2/full_100, MMLU] eval중 → 47.56%" 등). 표 전체 매번 복붙 금지.
+
+### 0-6. History Tracking Guide — Status 컬럼 + per-cell `HISTORY.md`
+
+§0-4(6) 80-cell 표의 맨 우측 `Status` 컬럼이 잡아야 하는 정보는 3종:
+
+1. **history** — 이 셀의 점수가 시간에 따라 어떻게 움직였나 (튜닝, 재학습으로 인한 +/− delta)
+2. **시스템 오류/상황** — eval 실행 중 OOM, crash, timeout, dataset 다운로드 실패 등
+3. **baseline 발산** — §0-2 규칙 기반 RED/YELLOW/BLUE 알람 (BASE-FULL 대비 너무 낮음, BASE-NAIT보다 낮음 등)
+
+전체 시계열은 `Status` 한 줄에 담을 수 없으므로 **2-tier 저장**:
+- `Status` 컬럼 (표 안) — **최근 이벤트 1개 + 현재 발산 알람**의 한 줄 요약 (≤ 60자, 넘으면 `...` 잘라쓰기)
+- `${EVAL_RESULTS_ROOT}/<model>/<method>/HISTORY.md` — append-only 시계열 로그 (최신이 위)
+
+#### (a) Status 컬럼 표기 규칙
+
+형식: `<facet 1> [· <facet 2> [· <facet 3>]]` — 빈 facet은 생략. 점(`·`)으로 구분.
+
+| facet | 표기 | 의미 |
+|---|---|---|
+| **history** | `init 47.56%` | 첫 eval 결과 |
+| | `46.98% ↑ +2.20 (lr↑)` | 점수 상승 (이전 점수, +delta, 원인 태그) |
+| | `44.78% ↓ -2.78 (seed)` | 점수 하락 |
+| | `47.56% stable ×5` | 5회 연속 동일 |
+| **시스템 오류** | `OOM ×2 retry pending` | OOM 2회, 재시도 대기 |
+| | `crash(CUDA) ×1` | CUDA 크래시 1회 |
+| | `dataset DL fail ×3 BLOCKED` | 3회 연속 실패, 자동 retry 중단 (§10) |
+| **발산 알람** | `🔴 < random_10` | RED — BASE-NAIT보다 낮음 |
+| | `🟡 -5.2p vs full_100` | YELLOW — BASE-FULL 대비 5%p 이상 처짐 |
+| | `🔵 < data_agent_10` | BLUE — 경쟁 method가 더 잘함 |
+| | `OK` | 모든 비교 정상 |
+| | (baseline 행은 알람 없음) | full_100 / random_10 행은 발산 alarm 표기 안 함 |
+
+조합 예시:
+- `-` — 이벤트 없음 (초기 템플릿)
+- `init 47.56% · OK` — 첫 eval, 발산 정상
+- `46.98% ↑ +2.20 (lr↑) · 🟡 -5.2p vs full_100` — lr 튜닝으로 상승했지만 여전히 BASE-FULL 대비 처짐
+- `OOM ×2 retry pending · last 47.56%` — 오류 진행 중, 직전 점수 참고
+- `47.56% · 🔴 < random_10` — 점수는 나왔지만 RED 알람
+- `learn complete 2026-05-17 · eval큐` — 학습 막 끝남
+
+원인 태그 (괄호 안):
+- `lr↑` / `lr↓` — 학습률 변경
+- `seed` — 시드 변경
+- `재학습` — 같은 cfg로 재학습
+- `cfg변경` — yaml 변경 (자세한 diff는 HISTORY.md)
+- `param` — 기타 파라미터 변경
+
+#### (b) per-cell `HISTORY.md` 포맷
+
+위치: `${EVAL_RESULTS_ROOT}/<model>/<method>/HISTORY.md`
+- append-only markdown, **최신이 위** (역시간순)
+- 새 이벤트마다 한 섹션 추가, atomic write (`.tmp` → `mv`)
+
+템플릿:
+```
+# History — <model> / <method>
+(experiment_label: <model>_<method>)
+
+## 2026-05-18 14:32  [eval]  OOM at MMLU loader
+- GPU: 3, batch_size: 4, model: 7B fp16
+- last successful eval: 2026-05-17 (47.56%)
+- log tail: ${EVAL_RESULTS_ROOT}/<model>/<method>/logs/mmlu-2026-05-18.log:120-145
+- action: retry queued for next tick (fail_count=2)
+
+## 2026-05-17 09:15  [eval]  done — 47.56% (avg of 5 bench)
+- mmlu 47.56, gsm8k 14.63, humaneval 27.87, tydiqa 39.48, bbh 39.94
+- delta vs prev avg (44.78%): +2.78
+- 발산: 🟡 -5.20p vs full_100 (52.76%)
+- summary: ${EVAL_RESULTS_ROOT}/<model>/<method>/<label>-eval_summary.json
+
+## 2026-05-16 22:00  [param]  lr 5e-5 → 1e-4, warmup 200 → 500
+- cfg: configs/experiments/main_7b/llama2/tads_10.yaml
+- git: <commit hash>
+- 이유: 직전 평균 44.78%가 BASE-FULL 대비 -8%p (YELLOW)
+
+## 2026-05-16 18:00  [train]  학습 완료 (3 epochs)
+- ckpt: <ckpt_root>/_latest/epoch_3
+- duration: 4h 12m
+- cfg snapshot: <ckpt_root>/_latest/cfg.json
+```
+
+이벤트 태그 종류 (대괄호):
+- `[train]` — 학습 완료 / 실패
+- `[eval]` — eval 완료 / 실패 (OOM, crash, timeout)
+- `[param]` — 파라미터 변경 (cfg diff 첨부)
+- `[note]` — 사용자/에이전트 메모
+
+#### (c) 시스템 오류 (OOM 등) 기록 의무
+
+eval이 0 아닌 exit code로 종료되면 에이전트는 **반드시**:
+
+1. `Status` 컬럼 → `<오류종류> ×N retry pending · last <직전 점수>` 갱신
+2. `HISTORY.md`에 `[eval] <오류종류>` 엔트리 append:
+   - 오류 종류 (OOM / crash / timeout / dataset / unknown)
+   - GPU 번호, 모델 크기, batch_size
+   - log tail (마지막 ~25줄 또는 stack trace)
+   - 직전 성공 eval 점수와 날짜
+3. `${EVAL_RESULTS_ROOT}/<model>/<method>/.fail_count` 1 증가 (없으면 생성)
+4. **3회 연속 동일 셀 실패** 시:
+   - `Status` 컬럼에 `BLOCKED ×3` 표기
+   - 자동 retry 중단 (다음 tick에 큐잉 안 함)
+   - §10 cleanup 트리거 + 사용자에게 채팅으로 알림
+   - 사용자가 `${EVAL_RESULTS_ROOT}/<model>/<method>/.fail_count`를 직접 reset해야 재시도 재개
+5. 성공한 eval이 한 번이라도 발생하면 `.fail_count` = 0으로 리셋
+
+OOM 특화 처리:
+- `Status`에 `OOM` 명시 → 사용자가 메모리 튜닝 후보 (batch_size↓, grad accumulation↑) 즉시 인지
+- HISTORY.md에 GPU 번호 + 다른 잡 점유 상태 기록 (메모리 경합 가능성 진단용)
+
+#### (d) 발산 알람 (3번 facet) 갱신 시점
+
+- 점수 셀이 `eval중`/`eval대기` → `NN.NN%`로 전환되는 매 tick
+- 해당 행이 treatment (data_agent_10 / tads_10)일 때만 평가. baseline 행은 알람 없음.
+- 비교 대상 셀(예: tads_10이면 같은 모델의 random_10 / data_agent_10 / full_100)이 아직 `NN.NN%`가 아니면 알람 보류 (`pending baseline`).
+- 알람 규칙은 §0-2 그대로:
+  - `🔴 RED` — `tads_10 < random_10`
+  - `🟡 YELLOW` — `tads_10 < full_100 − 5%p`
+  - `🔵 BLUE` — `data_agent_10 > tads_10 + 1%p`
+  - 모두 통과 → `OK`
+
+#### (e) Status 업데이트 트리거 (요약)
+
+| 트리거 | Status 갱신 |
+|---|---|
+| 첫 eval JSON 등장 | `init NN.NN%` |
+| 후속 eval JSON 등장 (점수 변화) | `<new>% ↑/↓ ±Δ (원인태그)` |
+| eval 프로세스 비정상 종료 | `<오류> ×N retry pending` |
+| `.fail_count` ≥ 3 | `BLOCKED ×N` |
+| baseline 행 점수 갱신 → 발산 재계산 | 해당 모델의 모든 treatment 행 facet3 재평가 |
+| 학습 새로 끝남 (sealed epoch 증가) | `learn complete <date> · eval큐` |
+
+원인 태그는 `HISTORY.md`의 가장 최근 `[param]` 또는 `[train]` 엔트리에서 유추 (없으면 `재학습`).
 
 ---
 
@@ -551,16 +688,16 @@ run 들은 평가 대상이 아니다** (그것들은 사용자가 명시적으�
 
 (Legacy 스크립트 `auto_eval_7b_fullft.sh`는 `.eval_done` 센티넬을 쓰지만, main 스크립트는 그걸 안 만든다. 일관성 유지하려면 에이전트가 평가 성공 후 `${EVAL_RESULTS_ROOT}/<model>/<method>/.eval_done`를 직접 `touch`해줘도 된다. 단, eval **실패 시 절대 touch 금지** — 옛날 버그가 이거였다.)
 
-### 5-4. 셀 상태 분류 (4-state) — 매 tick 시작 시 모든 셀에 대해 판정
+### 5-4. 셀 상태 분류 (4 파일-state + 1 process-state = 5 display state) — 매 tick 시작 시 모든 셀에 대해 판정
 
-매트릭스 16개 셀 각각을 다음 **4가지 중 하나**로 분류한다. score board의 마커, 에이전트의 행동, 사용자 보고가 모두 이 분류에 따라 갈린다.
+매트릭스 16개 셀 각각을 다음 **4가지 file-state 중 하나**로 분류 (디스크 상태 기반). 그 위에 **process-state** 1종(eval 프로세스가 떠있는지)을 겹쳐 score board에는 항상 **5종 마커 (`학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%`) 중 하나**로만 표기.
 
 | 상태 | 판정 조건 | 에이전트 행동 | Score board 마커 |
 |---|---|---|---|
-| **NEED-TRAIN** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/`이 없거나, `_latest` 포인터(또는 `_latest.txt`)가 없고 평탄 layout의 `epoch_*`도 없음 | **아무것도 자동 실행하지 말 것**. 사용자에게 "이 셀은 학습이 아직 안 됐다" 보고만. | `학습필요` |
-| **NEED-EVAL** | sealed epoch이 존재하지만, 결과 디렉터리에 §5-5의 최신 포맷 파일(`<experiment_label>-eval_summary.json`)이 없거나, 있어도 mtime ≤ latest sealed epoch mtime | 다음 tick에 eval 실행 (단일 셀에 `MODELS=<m> METHODS=<x>` 필터로 호출) | `eval대기` |
-| **LEGACY** | 결과 디렉터리에 옛 포맷 파일만 있음 (예: 접두어 없는 `eval_summary.json`, 또는 벤치별 `mmlu.json` / `gsm8k.json` 만 있고 `*-eval_summary.json` 없음) | 점수는 옛 파일에서 추출해 표에 잠정 기재하되, **재실행 권장 (NEED-EVAL과 동일하게 큐잉)**. 새 포맷으로 덮어쓰면 LEGACY → DONE 자동 전환. | `legacy(점수)` 예: `legacy(41.20)` |
-| **DONE** | 결과 디렉터리에 `<experiment_label>-eval_summary.json`이 있고, mtime > latest sealed epoch mtime | 건너뜀. 점수 표에 숫자 반영. | 실제 숫자 (예: `42.13`) |
+| **NEED-TRAIN** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/`이 없거나, `_latest` 포인터(또는 `_latest.txt`)가 없고 평탄 layout의 `epoch_*`도 없음 | **아무것도 자동 실행하지 말 것**. 사용자에게 "이 셀은 학습이 아직 안 됐다" 보고만. | `학습전` (학습 프로세스가 살아있으면 `학습중`) |
+| **NEED-EVAL** | sealed epoch이 존재하지만, 결과 디렉터리에 §5-5의 최신 포맷 파일(`<experiment_label>-eval_summary.json`)이 없거나, 있어도 mtime ≤ latest sealed epoch mtime | 다음 tick에 eval 실행 (단일 셀에 `MODELS=<m> METHODS=<x>` 필터로 호출) | `eval대기` (eval 프로세스가 떠있으면 `eval중`) |
+| **LEGACY** | 결과 디렉터리에 옛 포맷 파일만 있음 (예: 접두어 없는 `eval_summary.json`, 또는 벤치별 `mmlu.json` / `gsm8k.json` 만 있고 `*-eval_summary.json` 없음) | 점수는 옛 파일에서 추출해 표에 잠정 기재하되, **재실행 권장 (NEED-EVAL과 동일하게 큐잉)**. 새 포맷으로 덮어쓰면 자동으로 DONE으로 갱신. | `NN.NN%` (옛 점수 그대로, `(provisional)` 주석 별도 라인) |
+| **DONE** | 결과 디렉터리에 `<experiment_label>-eval_summary.json`이 있고, mtime > latest sealed epoch mtime | 건너뜀. 점수 표에 숫자 반영. | `NN.NN%` 예: `47.56%` |
 
 판정 의사 코드 (run-layout + flat-layout fallback):
 
