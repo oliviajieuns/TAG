@@ -72,8 +72,54 @@ def parse_args() -> argparse.Namespace:
         "--benchmarks", default="mmlu",
         help=f"Comma-separated. Registered: {list_evaluators()}",
     )
-    p.add_argument("--out_dir", required=False, default=None,
-                   help="Output dir for JSON summaries. Default: <ckpt>/eval/.")
+    p.add_argument(
+        "--out_dir", required=False, default=None,
+        help=(
+            "BASE output dir for JSON summaries. Default: <ckpt>/eval/. "
+            "Results land under <out_dir>/runs/<eval_tag>/ and <out_dir>/_latest "
+            "is updated to point at this run. Pass --flat to disable the "
+            "history layout and write directly into <out_dir>/."
+        ),
+    )
+    p.add_argument(
+        "--eval_tag",
+        default=None,
+        help=(
+            "Folder name for this eval run under <out_dir>/runs/. Defaults to "
+            "an auto timestamp YYYYMMDD_HHMMSS so a re-eval never overwrites "
+            "prior results. Pass --eval_tag=latest to reuse whatever the "
+            "<out_dir>/_latest pointer currently selects (useful for adding "
+            "a benchmark to a recent run without spawning a new dated dir)."
+        ),
+    )
+    p.add_argument(
+        "--eval_suffix",
+        default="",
+        help=(
+            "Optional suffix appended to the auto timestamp eval_tag, e.g. "
+            "--eval_suffix=retry produces runs/20260516_180000_retry/. Ignored "
+            "if --eval_tag is also given."
+        ),
+    )
+    p.add_argument(
+        "--list_eval_runs",
+        action="store_true",
+        help=(
+            "Print the eval runs/ history under <out_dir> (resolved from "
+            "--ckpt / --run_tag / _latest as usual) and exit without running "
+            "any benchmark. Analogous to --list_runs for the train side."
+        ),
+    )
+    p.add_argument(
+        "--flat",
+        action="store_true",
+        help=(
+            "Disable the runs/<tag>/ + _latest history layout. Writes results "
+            "directly into <out_dir>/, overwriting any prior eval there. Use "
+            "only for one-off ad-hoc evals; the score-board agent assumes the "
+            "history layout."
+        ),
+    )
     p.add_argument("--limit", type=int, default=None, help="Per-benchmark sample cap.")
     p.add_argument(
         "--training_mode", default=None, choices=[None, "full", "lora"],
@@ -228,15 +274,81 @@ def main() -> None:
 
     args.ckpt = str(ckpt_path)
 
-    # Default out_dir lands NEXT TO the checkpoint so eval results stay
-    # bundled with the run that produced them. Caller can still override.
+    # ---------- output layout: history-preserving runs/<eval_tag>/ + _latest ----------
+    # Mirrors the train-side layout (see tads/core/run_layout.py). Every eval
+    # invocation gets its own dated subdir so re-evaluating the same epoch (or
+    # the same eval pass with different `--limit`/data-dir overrides) NEVER
+    # overwrites prior results. The _latest pointer is what every downstream
+    # consumer reads — the auto-eval score-board agent, the user's own
+    # `cat <out_dir>/_latest/<exp_label>-eval_summary.json` quick-check, etc.
+    #
+    # BASE out_dir resolution priority:
+    #   1. --out_dir explicit
+    #   2. <ckpt>/eval/   (default — keeps results bundled with the ckpt)
     if args.out_dir:
-        out_dir = Path(args.out_dir)
+        base_out_dir = Path(args.out_dir)
     else:
-        out_dir = ckpt_path / "eval"
-    out_dir.mkdir(parents=True, exist_ok=True)
+        base_out_dir = ckpt_path / "eval"
+    base_out_dir.mkdir(parents=True, exist_ok=True)
+
+    # `--list_eval_runs` operates on the BASE dir and exits before any model
+    # load. Place after base_out_dir resolution so it inherits the same
+    # --out_dir / --ckpt fall-through.
+    if args.list_eval_runs:
+        from tads.core.run_layout import list_runs as _list_runs
+        from tads.core.run_layout import resolve_latest as _resolve_latest
+        runs = _list_runs(base_out_dir)
+        if not runs:
+            print(f"No eval runs/ directory under {base_out_dir}.")
+        else:
+            latest = _resolve_latest(base_out_dir)
+            latest_name = latest.name if latest is not None else "(unset)"
+            print(f"Eval runs under {base_out_dir}:")
+            for tag, _ in runs:
+                marker = "  <- _latest" if (latest and tag == latest.name) else ""
+                print(f"  {tag}{marker}")
+            print(f"_latest -> {latest_name}")
+        return
+
+    # Resolve the per-run output dir.
+    from tads.core.run_layout import (
+        make_run_tag,
+        resolve_latest as _resolve_latest_eval,
+        run_dir_for,
+        update_latest,
+    )
+    if args.flat:
+        # Legacy mode — write directly into base_out_dir. No history, no
+        # _latest pointer. Reserved for one-off ad-hoc evals.
+        out_dir = base_out_dir
+        eval_tag: Optional[str] = None
+    else:
+        if args.eval_tag == "latest":
+            latest_run = _resolve_latest_eval(base_out_dir)
+            if latest_run is None:
+                raise SystemExit(
+                    f"--eval_tag=latest requested but no _latest pointer under "
+                    f"{base_out_dir}. Run eval without --eval_tag first.",
+                )
+            eval_tag = latest_run.name
+        elif args.eval_tag:
+            eval_tag = args.eval_tag
+        else:
+            eval_tag = make_run_tag(args.eval_suffix)
+        out_dir = run_dir_for(base_out_dir, eval_tag)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
     log_dir = out_dir / "logs"
     logger = setup_logger(str(log_dir), name="eval")
+    if eval_tag is not None:
+        logger.info(
+            "Eval run layout | base=%s | eval_tag=%s | out_dir=%s",
+            base_out_dir, eval_tag, out_dir,
+        )
+    else:
+        logger.info(
+            "Eval run layout | flat mode (no history) | out_dir=%s", out_dir,
+        )
 
     # Output files used to be plain `mmlu.json` / `eval_summary.json` —
     # opaque once you copied a few of them into a shared results folder
@@ -343,8 +455,50 @@ def main() -> None:
         "failures": failures,
     }
     summary_path = out_dir / f"{experiment_label}-eval_summary.json"
-    with open(summary_path, "w") as f:
+    # Atomic write so a crash mid-dump doesn't leave a half-written JSON
+    # behind that the score-board agent would then try to parse.
+    summary_tmp = summary_path.with_suffix(summary_path.suffix + ".tmp")
+    with open(summary_tmp, "w") as f:
         json.dump(payload, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(summary_tmp, summary_path)
+
+    # ---------- seal the run + update _latest ----------
+    # `_complete` sentinel is written only AFTER eval_summary.json lands on
+    # disk atomically. If we crash before this point, the run dir survives
+    # without a sentinel and the score-board agent's "is this eval done?"
+    # check (sentinel + summary mtime) fails closed — no false "done" claim.
+    # Partial bench failures are recorded inside payload["failures"] but
+    # still count as a sealed run (the convention matches §0-5 / §0-6 of
+    # AUTO_EVAL_AGENT.md, which treats per-bench failure as a Status-column
+    # event, not an unsealed run).
+    if eval_tag is not None:
+        sentinel = out_dir / "_complete"
+        sentinel_tmp = out_dir / "_complete.tmp"
+        try:
+            with open(sentinel_tmp, "w") as f:
+                f.write(eval_tag)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(sentinel_tmp, sentinel)
+            logger.info("Eval run sealed: %s", sentinel)
+        except Exception as exc:
+            logger.warning(
+                "Could not write _complete sentinel (%s); _latest will not "
+                "be updated and the next eval will land in a fresh run dir.",
+                exc,
+            )
+        else:
+            try:
+                mech = update_latest(base_out_dir, eval_tag)
+                logger.info(
+                    "_latest -> runs/%s (%s) under %s",
+                    eval_tag, mech, base_out_dir,
+                )
+            except Exception as exc:
+                logger.warning("Failed to update _latest pointer: %s", exc)
+
     if failures:
         logger.warning(
             "Eval finished with %d/%d benchmark failure(s): %s",

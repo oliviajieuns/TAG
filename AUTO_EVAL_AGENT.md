@@ -64,55 +64,81 @@ treatment (data_agent_10, tads_10)  ← 위 둘 사이 어디쯤이어야 정상
 
 | # | 모델 | 메서드 | Config (학습/eval 공용) | 체크포인트 루트 | 결과 디렉터리 | `experiment_label` | 비교 대상 / 발산 알람 |
 |---|---|---|---|---|---|---|---|
-| 1 | llama2 | full_100 | `configs/experiments/main_7b/llama2/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/full_100/` | `llama2_full_100` | 기준선 (천장). 절대값 자체가 sanity 체크 — 평균 정확도가 동급 reference 대비 5%p 이상 낮으면 학습 자체 의심 |
-| 2 | llama2 | random_10 | `configs/experiments/main_7b/llama2/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/random_10/` | `llama2_random_10` | 기준선 (바닥). 보통 BASE-FULL 대비 3~8%p 처짐이 정상 |
-| 3 | llama2 | data_agent_10 | `configs/experiments/main_7b/llama2/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/data_agent_10/` | `llama2_data_agent_10` | vs `llama2_random_10` (반드시 ≥), vs `llama2_full_100` (≤이지만 -2%p 이내 권장) |
-| 4 | llama2 | tads_10 | `configs/experiments/main_7b/llama2/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/tads_10/` | `llama2_tads_10` | vs `llama2_random_10` (반드시 ≥, -1%p 처지면 **빨간불**), vs `llama2_data_agent_10` (≥ 권장), vs `llama2_full_100` (-5%p 이상 처지면 **노란불**) |
-| 5 | qwen25 | full_100 | `configs/experiments/main_7b/qwen25/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/full_100/` | `qwen25_full_100` | 기준선 (천장) |
-| 6 | qwen25 | random_10 | `configs/experiments/main_7b/qwen25/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/random_10/` | `qwen25_random_10` | 기준선 (바닥) |
-| 7 | qwen25 | data_agent_10 | `configs/experiments/main_7b/qwen25/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/` | `qwen25_data_agent_10` | vs `qwen25_random_10` / `qwen25_full_100` (위 #3 규칙) |
-| 8 | qwen25 | tads_10 | `configs/experiments/main_7b/qwen25/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/tads_10/` | `qwen25_tads_10` | vs `qwen25_random_10` / `qwen25_data_agent_10` / `qwen25_full_100` (위 #4 규칙) |
-| 9 | mistral | full_100 | `configs/experiments/main_7b/mistral/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/full_100/` | `mistral_full_100` | 기준선 (천장) |
-| 10 | mistral | random_10 | `configs/experiments/main_7b/mistral/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/random_10/` | `mistral_random_10` | 기준선 (바닥) |
-| 11 | mistral | data_agent_10 | `configs/experiments/main_7b/mistral/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/data_agent_10/` | `mistral_data_agent_10` | vs `mistral_random_10` / `mistral_full_100` (위 #3 규칙) |
-| 12 | mistral | tads_10 | `configs/experiments/main_7b/mistral/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/tads_10/` | `mistral_tads_10` | vs `mistral_random_10` / `mistral_data_agent_10` / `mistral_full_100` (위 #4 규칙) |
-| 13 | deepseek | full_100 | `configs/experiments/main_7b/deepseek/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/full_100/` | `deepseek_full_100` | 기준선 (천장) |
-| 14 | deepseek | random_10 | `configs/experiments/main_7b/deepseek/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/random_10/` | `deepseek_random_10` | 기준선 (바닥) |
-| 15 | deepseek | data_agent_10 | `configs/experiments/main_7b/deepseek/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/data_agent_10/` | `deepseek_data_agent_10` | vs `deepseek_random_10` / `deepseek_full_100` (위 #3 규칙) |
-| 16 | deepseek | tads_10 | `configs/experiments/main_7b/deepseek/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/tads_10/` | `deepseek_tads_10` | vs `deepseek_random_10` / `deepseek_data_agent_10` / `deepseek_full_100` (위 #4 규칙) |
+| 1 | llama2 | full_100 | `configs/experiments/main_7b/llama2/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/full_100/_latest/` | `llama2_full_100` | 기준선 (천장). 절대값 자체가 sanity 체크 — 평균 정확도가 동급 reference 대비 5%p 이상 낮으면 학습 자체 의심 |
+| 2 | llama2 | random_10 | `configs/experiments/main_7b/llama2/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/random_10/_latest/` | `llama2_random_10` | 기준선 (바닥). 보통 BASE-FULL 대비 3~8%p 처짐이 정상 |
+| 3 | llama2 | data_agent_10 | `configs/experiments/main_7b/llama2/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/data_agent_10/_latest/` | `llama2_data_agent_10` | vs `llama2_random_10` (반드시 ≥), vs `llama2_full_100` (≤이지만 -2%p 이내 권장) |
+| 4 | llama2 | tads_10 | `configs/experiments/main_7b/llama2/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/` | `llama2_tads_10` | vs `llama2_random_10` (반드시 ≥, -1%p 처지면 **빨간불**), vs `llama2_data_agent_10` (≥ 권장), vs `llama2_full_100` (-5%p 이상 처지면 **노란불**) |
+| 5 | qwen25 | full_100 | `configs/experiments/main_7b/qwen25/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/full_100/_latest/` | `qwen25_full_100` | 기준선 (천장) |
+| 6 | qwen25 | random_10 | `configs/experiments/main_7b/qwen25/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/random_10/_latest/` | `qwen25_random_10` | 기준선 (바닥) |
+| 7 | qwen25 | data_agent_10 | `configs/experiments/main_7b/qwen25/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/_latest/` | `qwen25_data_agent_10` | vs `qwen25_random_10` / `qwen25_full_100` (위 #3 규칙) |
+| 8 | qwen25 | tads_10 | `configs/experiments/main_7b/qwen25/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/tads_10/_latest/` | `qwen25_tads_10` | vs `qwen25_random_10` / `qwen25_data_agent_10` / `qwen25_full_100` (위 #4 규칙) |
+| 9 | mistral | full_100 | `configs/experiments/main_7b/mistral/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/full_100/_latest/` | `mistral_full_100` | 기준선 (천장) |
+| 10 | mistral | random_10 | `configs/experiments/main_7b/mistral/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/random_10/_latest/` | `mistral_random_10` | 기준선 (바닥) |
+| 11 | mistral | data_agent_10 | `configs/experiments/main_7b/mistral/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/data_agent_10/_latest/` | `mistral_data_agent_10` | vs `mistral_random_10` / `mistral_full_100` (위 #3 규칙) |
+| 12 | mistral | tads_10 | `configs/experiments/main_7b/mistral/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/tads_10/_latest/` | `mistral_tads_10` | vs `mistral_random_10` / `mistral_data_agent_10` / `mistral_full_100` (위 #4 규칙) |
+| 13 | deepseek | full_100 | `configs/experiments/main_7b/deepseek/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/full_100/_latest/` | `deepseek_full_100` | 기준선 (천장) |
+| 14 | deepseek | random_10 | `configs/experiments/main_7b/deepseek/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/random_10/_latest/` | `deepseek_random_10` | 기준선 (바닥) |
+| 15 | deepseek | data_agent_10 | `configs/experiments/main_7b/deepseek/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/data_agent_10/_latest/` | `deepseek_data_agent_10` | vs `deepseek_random_10` / `deepseek_full_100` (위 #3 규칙) |
+| 16 | deepseek | tads_10 | `configs/experiments/main_7b/deepseek/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/tads_10/_latest/` | `deepseek_tads_10` | vs `deepseek_random_10` / `deepseek_data_agent_10` / `deepseek_full_100` (위 #4 규칙) |
 
 > 모든 config 파일은 로컬에 실제로 존재함을 확인함. `random_50 / data_agent_50 / tads_50`도 디스크엔 있지만 **이번 매트릭스 범위 밖**이므로 자동 eval에서 제외.
 
 #### (b) 셀 하나당 떨어지는 결과 JSON (16개 셀 × 5 벤치 = 80개 점수 파일 + 16개 summary)
 
-`tads/eval.py`는 셀 `${EVAL_RESULTS_ROOT}/<model>/<method>/` 안에 다음 파일들을 만든다:
+**eval도 train과 동일한 history-preserving 레이아웃**을 따른다 (2026-05-16 변경). 셀의 BASE eval 디렉터리는 `${EVAL_RESULTS_ROOT}/<model>/<method>/`이고, 그 안에:
 
 ```
-<experiment_label>-mmlu.json
-<experiment_label>-gsm8k.json
-<experiment_label>-humaneval.json
-<experiment_label>-tydiqa.json
-<experiment_label>-bbh.json
-<experiment_label>-eval_summary.json    # 5개 벤치 합산 요약
-logs/                                    # 벤치별 로그
+${EVAL_RESULTS_ROOT}/<model>/<method>/
+├── runs/
+│   ├── 20260516_120000/                    ← eval_tag (auto YYYYMMDD_HHMMSS)
+│   │   ├── <experiment_label>-mmlu.json
+│   │   ├── <experiment_label>-gsm8k.json
+│   │   ├── <experiment_label>-humaneval.json
+│   │   ├── <experiment_label>-tydiqa.json
+│   │   ├── <experiment_label>-bbh.json
+│   │   ├── <experiment_label>-eval_summary.json
+│   │   ├── logs/
+│   │   └── _complete                       ← sentinel: summary 작성 완료
+│   ├── 20260516_180000_retry/              ← 같은 셀 재평가 시 새 dir로
+│   │   └── ...
+│   └── 20260517_090000/
+│       └── ...
+├── _latest -> runs/20260517_090000         ← symlink (또는 _latest.txt fallback)
+├── HISTORY.md                              ← per-cell 시계열 로그 (§0-6)
+└── .fail_count                             ← (실패 누적 카운터, §10)
 ```
 
-예시 (llama2 + tads_10 셀):
+요점:
+- **`_latest`**가 항상 **가장 최신의 sealed eval run**을 가리킨다. 점수 파싱은 무조건 `_latest/<exp_label>-...json`을 통해 한다.
+- 새 eval 호출은 자동으로 새 timestamp `runs/<eval_tag>/` 디렉터리에 들어간다 → **이전 점수가 절대 덮어쓰이지 않는다** (튜닝/재학습 후 재평가 시 점수 이력이 그대로 보존됨, §0-6 history 입력 소스).
+- **`_complete` sentinel**이 없는 run dir = 평가 도중 죽음. 점수 판정 시 무시 (sentinel 있는 가장 최신 run만 `_latest`로 promote됨).
+- 같은 run에 추가 벤치만 돌리려면 `--eval_tag=latest`로 호출 → 새 dir을 안 만들고 기존 `_latest/`에 추가 점수 JSON을 끼워 넣는다.
+- legacy flat 레이아웃이 필요하면 `--flat` 플래그 (one-off ad-hoc 평가용, 점수표 에이전트는 이걸 안 읽음).
+
+예시 (llama2 + tads_10 셀, 가장 최신 평가):
 
 ```
-${EVAL_RESULTS_ROOT}/llama2/tads_10/llama2_tads_10-mmlu.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/llama2_tads_10-gsm8k.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/llama2_tads_10-humaneval.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/llama2_tads_10-tydiqa.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/llama2_tads_10-bbh.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/llama2_tads_10-eval_summary.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-mmlu.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-gsm8k.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-humaneval.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-tydiqa.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-bbh.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-eval_summary.json
 ```
 
-전체 16개 셀에 대해 같은 파일 6종이 만들어지면 **점수 파일 80개 + summary 16개 = 96개** 산출물이 최종 상태다.
+> **모든 점수 파싱은 `<셀 BASE>/_latest/<exp_label>-…json` 경로를 사용**한다. `_latest`를 거치지 않은 flat 경로(`<셀 BASE>/<exp_label>-…json`)는 `--flat`으로 만든 legacy / ad-hoc 결과로 간주하여 LEGACY 분류(§5-5)로 떨어진다.
+
+전체 16개 셀에 대해 같은 파일 6종이 `_latest` 안에 만들어지면 **점수 파일 80개 + summary 16개 = 96개** 산출물이 최종 상태다. 이전 run들은 `runs/<eval_tag>/` 아래에 그대로 살아있어 점수 변동의 audit trail 역할.
 
 #### (c) "셀이 완료됐다"의 정의
 
-한 셀 `(model, method)`가 완료됐다고 보려면 해당 디렉터리 안에 **`<experiment_label>-eval_summary.json`이 존재**하고, 그 mtime이 가장 큰 `epoch_*`의 mtime보다 나중이어야 한다. 이게 §5-3의 판정 규칙이다.
+한 셀 `(model, method)`가 완료됐다고 보려면:
+1. `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest`가 존재 (symlink 또는 `_latest.txt`)
+2. 해당 `_latest/<experiment_label>-eval_summary.json`이 존재
+3. **그 summary의 mtime이 가장 큰 `epoch_*`의 mtime보다 나중**
+4. **그리고 `_latest/_complete` sentinel이 있어야 한다** (eval이 sealing까지 정상 종료했다는 증거)
+
+위 4개를 모두 만족할 때만 DONE. 한 조건이라도 빠지면 NEED-EVAL (재평가 큐). 이게 §5-3의 판정 규칙이다.
 
 ### 0-4. Score Board — 단일 진실 공급원은 `experiments.md`
 
@@ -270,9 +296,9 @@ score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 �
 |---|---|---|
 | `학습전` | 체크포인트 없음 | `<ckpt_root>/_latest`도 `_latest.txt`도 없고, legacy flat `epoch_*`도 없음. 행(=한 셀) 전체 5개 컬럼이 모두 이 표기. |
 | `학습중` | 학습 진행 중 | (a) `python -m tads.train.*<model>/<method>` 프로세스가 살아있음, **또는** (b) `<latest_run>/cfg.json`의 `train_epochs` 값보다 sealed (`_complete`) epoch 수가 적음. 행 전체 5개 컬럼 모두 이 표기. |
-| `eval대기` | 학습 끝남, eval 프로세스도 아직 안 떴음 | 학습 완료(sealed == `train_epochs`)이고 `<eval_dir>/<exp_label>-<bench>.json` 없음 (또는 mtime이 sealed epoch보다 옛날), **그리고** `python -m tads.eval.*<model>/<method>` 프로세스 없음. |
+| `eval대기` | 학습 끝남, eval 프로세스도 아직 안 떴음 | 학습 완료(sealed == `train_epochs`)이고 `<eval_base>/_latest/<exp_label>-<bench>.json` 없음 (또는 mtime이 sealed epoch보다 옛날), **그리고** `python -m tads.eval.*<model>/<method>` 프로세스 없음. |
 | `eval중` | eval 프로세스 떠있음 | `python -m tads.eval.*<model>/<method>` 프로세스가 떠 있음 (대기든 실행이든). |
-| `47.56%` | 점수 산출 완료 | `<eval_dir>/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
+| `47.56%` | 점수 산출 완료 | `<eval_base>/_latest/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
 
 **판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 5×16에 투영):
 
@@ -290,14 +316,17 @@ def status_cell(model, method, bench):
     sealed = [p for p in glob(f"{latest_run}/epoch_*") if exists(f"{p}/_complete")]
     if len(sealed) < target:
         return "학습중"
-    # 학습 완료. 이 벤치 평가 상태 확인.
-    out_dir = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
+    # 학습 완료. 이 벤치 평가 상태 확인 — eval 측 _latest를 거쳐 본다.
+    eval_base = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
+    eval_latest = resolve_latest_run(eval_base)
     label   = f"{model}_{method}"
-    bench_json = f"{out_dir}/{label}-{bench}.json"
     sealed_max = max(sealed, key=lambda p: int(basename(p).replace("epoch_","")))
-    if exists(bench_json) and mtime(bench_json) > mtime(sealed_max):
-        return f"{extract_score_pct(bench_json):.2f}%"
-    # 점수 JSON 아직 없음 — eval 프로세스 떠있는지로 대기/진행 구분
+    if eval_latest is not None and exists(f"{eval_latest}/_complete"):
+        bench_json = f"{eval_latest}/{label}-{bench}.json"
+        if exists(bench_json) and mtime(bench_json) > mtime(sealed_max):
+            return f"{extract_score_pct(bench_json):.2f}%"
+    # 점수 JSON 아직 없음 또는 _latest unsealed — eval 프로세스 떠있는지로
+    # 대기/진행 구분.
     if pgrep_alive(f"python.*-m tads.eval.*{model}/{method}"):
         return "eval중"
     return "eval대기"
@@ -427,7 +456,8 @@ def status_cell(model, method, bench):
 - mmlu 47.56, gsm8k 14.63, humaneval 27.87, tydiqa 39.48, bbh 39.94
 - delta vs prev avg (44.78%): +2.78
 - 발산: 🟡 -5.20p vs full_100 (52.76%)
-- summary: ${EVAL_RESULTS_ROOT}/<model>/<method>/<label>-eval_summary.json
+- summary: ${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/<label>-eval_summary.json
+- eval run dir: ${EVAL_RESULTS_ROOT}/<model>/<method>/runs/<eval_tag>/  (snapshot)
 
 ## 2026-05-16 22:00  [param]  lr 5e-5 → 1e-4, warmup 200 → 500
 - cfg: configs/experiments/main_7b/llama2/tads_10.yaml
@@ -678,7 +708,9 @@ CUDA_VISIBLE_DEVICES=0 python -m tads.eval \
 
 ## 5. 결과 / "이미 평가됨" 판정 규칙
 
-### 5-1. 결과 저장 위치
+### 5-1. 결과 저장 위치 (history-preserving, 2026-05-16~)
+
+학습(train)과 동일한 `runs/<tag>/` + `_latest` 레이아웃. 셀의 BASE는
 
 ```
 ${EVAL_RESULTS_ROOT}/<model>/<method>/
@@ -686,28 +718,56 @@ ${EVAL_RESULTS_ROOT}/<model>/<method>/
 
 (주의: `main_7b/` 접두어 **없음**. `OUTPUT_ROOT`와 레이아웃이 다름.)
 
+그 안에:
+```
+runs/<eval_tag>/         ← eval_tag = YYYYMMDD_HHMMSS (또는 사용자가 --eval_tag로 지정)
+  ├── <experiment_label>-mmlu.json
+  ├── <experiment_label>-gsm8k.json
+  ├── <experiment_label>-humaneval.json
+  ├── <experiment_label>-tydiqa.json
+  ├── <experiment_label>-bbh.json
+  ├── <experiment_label>-eval_summary.json
+  ├── logs/
+  └── _complete           ← summary 작성 후 atomic 마킹 (sentinel)
+_latest -> runs/<eval_tag>  ← symlink (또는 _latest.txt fallback)
+HISTORY.md                ← §0-6 시계열 로그
+.fail_count               ← §10 실패 카운터
+```
+
+요약:
+- 모든 점수 파싱은 `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/<exp_label>-…json` 경로만 사용. flat 경로(`<base>/<label>-….json`)에 점수가 있으면 LEGACY (§5-5 (3)) — `--flat` 호출로 생긴 ad-hoc 결과로 간주.
+- 같은 셀을 재평가할 때마다 새 `runs/<eval_tag>/`가 생기고 `_latest`가 그쪽으로 atomic 이동. 이전 평가는 `runs/`에 그대로 보존되어 §0-6 history의 입력.
+- 기존 `_latest`에 벤치만 추가하고 싶을 때(예: 처음 4개 벤치만 끝났고 BBH만 마저 돌리려는 경우): `python -m tads.eval ... --eval_tag=latest --benchmarks bbh` — 새 dir을 안 만들고 같은 run에 JSON만 끼워 넣음.
+
 ### 5-2. 로그
 
 ```
-logs/eval_main_7b_<model>_<method>.log
+${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log
 ```
+
+(과거 run의 로그는 `${EVAL_RESULTS_ROOT}/<model>/<method>/runs/<eval_tag>/logs/`에 그대로 있음.)
 
 ### 5-3. 중복 평가 방지 로직 (에이전트가 직접 판정해야 함)
 
 `python -m tads.eval`은 자체적인 "이미 함" 체크가 **없다** (기존 bash wrapper도 마찬가지였음). 호출 전에 에이전트가 판단해야 한다.
 
-새 run-layout (§3-1) 기준 — 셀 한 개에 대해 **다음이 모두 만족**되면 eval 재실행 불필요:
+새 run-layout (§3-1) + eval history layout (§5-1) 기준 — 셀 한 개에 대해 **다음이 모두 만족**되면 eval 재실행 불필요:
 
 1. `${OUTPUT_ROOT}/main_7b/<model>/<method>/_latest`가 가리키는 run의 가장 큰
    sealed `epoch_N/`(= `_complete` 파일이 있는 것)을 찾는다.
-2. `${EVAL_RESULTS_ROOT}/<model>/<method>/<experiment_label>-eval_summary.json`가 있고,
-   그 mtime이 위 sealed epoch 의 mtime보다 **나중**.
+2. `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest`가 존재하고, 그 안에
+   `_complete` sentinel과 `<experiment_label>-eval_summary.json`이 둘 다 있음.
+3. 그 summary의 mtime이 위 sealed epoch의 mtime보다 **나중**.
 
-`_latest` 포인터가 갱신됐다는 건 사용자가 새 학습을 마쳤다는 뜻이므로,
-포인터 변경 후 mtime이 새 → 자동으로 재평가 대상이 된다. **`runs/<tag>/`의 다른 과거
-run 들은 평가 대상이 아니다** (그것들은 사용자가 명시적으로 `--run_tag`로 평가).
+세 가지 모두 만족하지 않으면 NEED-EVAL → 다음 tick에 재평가 큐잉.
 
-(Legacy 스크립트 `auto_eval_7b_fullft.sh`는 `.eval_done` 센티넬을 쓰지만, main 스크립트는 그걸 안 만든다. 일관성 유지하려면 에이전트가 평가 성공 후 `${EVAL_RESULTS_ROOT}/<model>/<method>/.eval_done`를 직접 `touch`해줘도 된다. 단, eval **실패 시 절대 touch 금지** — 옛날 버그가 이거였다.)
+`_latest` 포인터가 갱신됐다는 건:
+- 학습 측 `_latest` 갱신 → 새 ckpt가 sealed됐다 → eval 측 `_latest`의 summary mtime이 sealed보다 옛날이면 자동으로 NEED-EVAL.
+- eval 측 `_latest` 갱신 → 새 평가가 완료됐다 → DONE으로 전환, 점수는 새 `_latest/`에서 다시 읽기.
+
+**`runs/<tag>/`의 다른 과거 eval run들은 점수 표 갱신 대상이 아니다** (단, `--eval_tag <과거 tag>`로 사용자가 명시적으로 그걸 다시 promote할 수는 있음 → 그러면 `_latest`가 그쪽을 가리키고 자동으로 그 점수가 표에 반영). §0-6 HISTORY.md에는 모든 run의 점수 변동을 기록.
+
+(Legacy 스크립트 `auto_eval_7b_fullft.sh`의 `.eval_done` 센티넬은 더 이상 권장 형식이 아니다 — 새 layout에서는 `_latest/_complete`가 그 역할을 한다. 새 에이전트는 `.eval_done`을 만들지 말 것. 이미 있는 건 무시하고 §5-3 의 3-조건 판정만 사용.)
 
 ### 5-4. 셀 상태 분류 (4 파일-state + 1 process-state = 5 display state) — 매 tick 시작 시 모든 셀에 대해 판정
 
@@ -716,9 +776,9 @@ run 들은 평가 대상이 아니다** (그것들은 사용자가 명시적으�
 | 상태 | 판정 조건 | 에이전트 행동 | Score board 마커 |
 |---|---|---|---|
 | **NEED-TRAIN** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/`이 없거나, `_latest` 포인터(또는 `_latest.txt`)가 없고 평탄 layout의 `epoch_*`도 없음 | **아무것도 자동 실행하지 말 것**. 사용자에게 "이 셀은 학습이 아직 안 됐다" 보고만. | `학습전` (학습 프로세스가 살아있으면 `학습중`) |
-| **NEED-EVAL** | sealed epoch이 존재하지만, 결과 디렉터리에 §5-5의 최신 포맷 파일(`<experiment_label>-eval_summary.json`)이 없거나, 있어도 mtime ≤ latest sealed epoch mtime | 다음 tick에 eval 실행 (단일 셀에 `MODELS=<m> METHODS=<x>` 필터로 호출) | `eval대기` (eval 프로세스가 떠있으면 `eval중`) |
-| **LEGACY** | 결과 디렉터리에 옛 포맷 파일만 있음 (예: 접두어 없는 `eval_summary.json`, 또는 벤치별 `mmlu.json` / `gsm8k.json` 만 있고 `*-eval_summary.json` 없음) | 점수는 옛 파일에서 추출해 표에 잠정 기재하되, **재실행 권장 (NEED-EVAL과 동일하게 큐잉)**. 새 포맷으로 덮어쓰면 자동으로 DONE으로 갱신. | `NN.NN%` (옛 점수 그대로, `(provisional)` 주석 별도 라인) |
-| **DONE** | 결과 디렉터리에 `<experiment_label>-eval_summary.json`이 있고, mtime > latest sealed epoch mtime | 건너뜀. 점수 표에 숫자 반영. | `NN.NN%` 예: `47.56%` |
+| **NEED-EVAL** | sealed epoch이 존재하지만, `_latest/<exp_label>-eval_summary.json` + `_latest/_complete` 조합이 없거나 mtime ≤ latest sealed epoch mtime | 다음 tick에 eval 실행 (단일 셀에 `MODELS=<m> METHODS=<x>` 필터로 호출) | `eval대기` (eval 프로세스가 떠있으면 `eval중`) |
+| **LEGACY** | `_latest`가 없고 BASE eval dir에 flat 포맷 파일만 있음 (예: `<base>/<exp_label>-eval_summary.json`, `<base>/eval_summary.json` 접두어 없음, 또는 벤치별 `<base>/mmlu.json` 류) | 점수는 flat 파일에서 추출해 표에 잠정 기재하되, **재실행 권장 (NEED-EVAL과 동일하게 큐잉)**. 새 history layout으로 다시 평가하면 자동으로 DONE으로 갱신. | `NN.NN%` (옛 점수 그대로, `(provisional)` 주석 별도 라인) |
+| **DONE** | `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/` 안에 `_complete` sentinel과 `<exp_label>-eval_summary.json`이 모두 있고, summary mtime > latest sealed epoch mtime | 건너뜀. 점수 표에 숫자 반영. | `NN.NN%` 예: `47.56%` |
 
 판정 의사 코드 (run-layout + flat-layout fallback):
 
@@ -751,30 +811,40 @@ def _largest_sealed_epoch(run_dir):
 
 def classify_cell(model, method):
     ckpt_root = f"{OUTPUT_ROOT}/main_7b/{model}/{method}"
-    # 1) 새 run-layout 우선
+    # 1) 학습 ckpt 최신성 확인 (새 run-layout 우선, legacy flat fallback)
     latest_run = _resolve_latest_run(ckpt_root)
     if latest_run:
         latest_epoch = _largest_sealed_epoch(latest_run)
     else:
-        # 2) Legacy flat layout fallback
+        # Legacy flat layout fallback (옛날 학습 결과용)
         flat = sorted(glob(f"{ckpt_root}/epoch_*"))
         latest_epoch = flat[-1] if flat else None
     if latest_epoch is None:
         return "NEED-TRAIN", None
-    out_dir = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
+
+    # 2) eval 결과 최신성 확인 — 새 history layout (_latest 경유) 우선
+    eval_base = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
     label = f"{model}_{method}"     # experiment_label 규칙 (parent_stem)
-    new_summary = f"{out_dir}/{label}-eval_summary.json"
-    if exists(new_summary) and mtime(new_summary) > mtime(latest_epoch):
-        return "DONE", new_summary
-    # 최신 포맷이 없거나 stale — 옛 포맷이라도 있는지 확인
+    eval_latest = _resolve_latest_run(eval_base)   # 같은 helper 재사용
+    if eval_latest is not None and exists(f"{eval_latest}/_complete"):
+        new_summary = f"{eval_latest}/{label}-eval_summary.json"
+        if exists(new_summary) and mtime(new_summary) > mtime(latest_epoch):
+            return "DONE", new_summary
+
+    # 3) 새 layout이 미완성 / 없음 → flat layout(legacy, `--flat` ad-hoc 결과
+    #    또는 history layout 도입 전 결과)도 후보로 검사
+    flat_summary = f"{eval_base}/{label}-eval_summary.json"
+    if exists(flat_summary) and mtime(flat_summary) > mtime(latest_epoch):
+        return "LEGACY", flat_summary   # 점수는 잠정 사용, 새 eval로 갱신 필요
+
     legacy_candidates = (
-        glob(f"{out_dir}/eval_summary.json")              # 옛 접두어 없는 이름
-        + glob(f"{out_dir}/{label}-*.json")               # 새 포맷 벤치별
-        + glob(f"{out_dir}/mmlu.json")                     # 옛 벤치별
-        + glob(f"{out_dir}/gsm8k.json")
-        + glob(f"{out_dir}/humaneval.json")
-        + glob(f"{out_dir}/tydiqa.json")
-        + glob(f"{out_dir}/bbh.json")
+        glob(f"{eval_base}/eval_summary.json")        # 옛 접두어 없는 이름
+        + glob(f"{eval_base}/{label}-*.json")         # flat 벤치별 (새 포맷이지만 history layout 밖)
+        + glob(f"{eval_base}/mmlu.json")              # 옛 벤치별 (접두어 없음)
+        + glob(f"{eval_base}/gsm8k.json")
+        + glob(f"{eval_base}/humaneval.json")
+        + glob(f"{eval_base}/tydiqa.json")
+        + glob(f"{eval_base}/bbh.json")
     )
     if legacy_candidates:
         return "LEGACY", legacy_candidates
@@ -795,10 +865,11 @@ def classify_cell(model, method):
 
 | 우선 | 파일 패턴 | 비고 |
 |---|---|---|
-| 1 (최신) | `<experiment_label>-eval_summary.json` <br/> 예: `llama2_tads_10-eval_summary.json` | 현재 `tads/eval.py`가 만드는 표준. 모든 벤치 점수와 메타데이터를 포함. 이 파일이 있으면 무조건 이걸 먼저 본다. |
-| 2 (최신, 벤치별) | `<experiment_label>-<bench>.json` <br/> 예: `llama2_tads_10-mmlu.json` | 벤치별 상세. summary가 없으면 이것들로 합산 (단, 5개 벤치 다 있을 때만 DONE 처리). |
-| 3 (legacy) | `eval_summary.json` (접두어 없음) | 옛 코드 산출물. label 충돌 위험(다른 셀의 결과를 덮어썼을 수 있음). LEGACY로 분류. |
-| 4 (legacy) | `mmlu.json` / `gsm8k.json` / `humaneval.json` / `tydiqa.json` / `bbh.json` (접두어 없음) | 옛 벤치별. LEGACY로 분류. |
+| 1 (최신) | `_latest/<experiment_label>-eval_summary.json` <br/> 예: `_latest/llama2_tads_10-eval_summary.json` | history layout (§5-1)의 표준. `_latest` 안에 `_complete` sentinel과 같이 있을 때만 DONE. 모든 벤치 점수와 메타데이터 포함. |
+| 2 (최신, 벤치별) | `_latest/<experiment_label>-<bench>.json` <br/> 예: `_latest/llama2_tads_10-mmlu.json` | 벤치별 상세. summary가 없으면 이것들로 합산 (단, 5개 벤치 다 있을 때만 DONE 처리). |
+| 3 (legacy, flat) | `<exp_label>-eval_summary.json` (BASE 디렉터리 직속) | `--flat` 호출이나 history layout 도입 전 산출물. `_latest`가 없을 때만 본다. LEGACY로 분류. |
+| 4 (legacy, 접두어 없음) | `eval_summary.json` (BASE 디렉터리 직속, 접두어 없음) | 옛 코드 산출물. label 충돌 위험(다른 셀의 결과를 덮어썼을 수 있음). LEGACY로 분류. |
+| 5 (legacy, 벤치별 접두어 없음) | `mmlu.json` / `gsm8k.json` / `humaneval.json` / `tydiqa.json` / `bbh.json` (BASE 디렉터리 직속, 접두어 없음) | 옛 벤치별. LEGACY로 분류. |
 
 #### (2) 파싱 절차 (스키마 가정 금지)
 
@@ -829,15 +900,27 @@ print(list(data.keys()))
 
 #### (3) 새 포맷으로 통일 정책
 
-LEGACY로 분류된 셀은 가능하면 **다음 tick에 새 eval을 돌려 최신 포맷으로 덮어쓴다**. 단, 덮어쓰기 전에 옛 파일을 같은 디렉터리 안 `legacy/` 하위로 옮겨 백업할 것:
+LEGACY로 분류된 셀은 가능하면 **다음 tick에 새 eval을 history layout으로 돌려 `_latest`를 새로 만든다**. eval.py가 자동으로 `runs/<eval_tag>/`에 결과를 떨구고 `_latest`를 atomic 갱신하므로, BASE dir의 flat 파일은 그대로 둬도 LEGACY → DONE 전환에 방해되지 않는다 (점수 우선순위 표 §5-5 (1)에 따라 `_latest`가 항상 이긴다).
+
+선택적으로 BASE의 flat 잔재를 정리하려면 (필수 아님 — `_latest`만 보고 동작하기 때문에 정리 안 해도 무해, 단지 `ls`로 봤을 때 깔끔해짐):
 
 ```bash
-mkdir -p "${out_dir}/legacy"
-mv "${out_dir}/eval_summary.json"   "${out_dir}/legacy/" 2>/dev/null || true
-mv "${out_dir}"/{mmlu,gsm8k,humaneval,tydiqa,bbh}.json "${out_dir}/legacy/" 2>/dev/null || true
+mkdir -p "${eval_base}/legacy"
+# BASE 직속의 옛 flat 결과만 옮긴다. runs/ 디렉터리와 _latest, HISTORY.md,
+# .fail_count는 절대 건드리지 말 것.
+for f in "${eval_base}"/eval_summary.json \
+         "${eval_base}"/mmlu.json "${eval_base}"/gsm8k.json \
+         "${eval_base}"/humaneval.json "${eval_base}"/tydiqa.json \
+         "${eval_base}"/bbh.json \
+         "${eval_base}"/*-eval_summary.json \
+         "${eval_base}"/*-mmlu.json "${eval_base}"/*-gsm8k.json \
+         "${eval_base}"/*-humaneval.json "${eval_base}"/*-tydiqa.json \
+         "${eval_base}"/*-bbh.json; do
+    [ -f "$f" ] && mv "$f" "${eval_base}/legacy/" 2>/dev/null || true
+done
 ```
 
-(`<experiment_label>-*.json`는 새 포맷이므로 옮기지 말 것 — 그건 새 eval이 자체적으로 덮어쓴다.)
+(`runs/<eval_tag>/` 안의 파일은 새 포맷이므로 절대 옮기지 말 것 — `_latest`가 그쪽을 가리킨다.)
 
 ---
 
@@ -867,13 +950,19 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
    for model in {llama2, qwen25, mistral, deepseek}:
      for method in {full_100, random_10, data_agent_10, tads_10}:
          ckpt_root = ${OUTPUT_ROOT}/main_7b/${model}/${method}
-         latest_run = resolve_latest_run(ckpt_root)        # §4-2의 함수
-         if not latest_run: continue                       # NEED-TRAIN
-         latest = largest_sealed_epoch(latest_run)         # _complete 있는 max N
+         latest_run = resolve_latest_run(ckpt_root)         # §4-2의 함수
+         if not latest_run: continue                        # NEED-TRAIN
+         latest = largest_sealed_epoch(latest_run)          # _complete 있는 max N
          if not latest: continue
-         out_dir = ${EVAL_RESULTS_ROOT}/${model}/${method}
-         done_marker = ${out_dir}/.eval_done
-         if done_marker exists AND mtime(done_marker) > mtime(latest): continue
+         eval_base = ${EVAL_RESULTS_ROOT}/${model}/${method}
+         # eval 측 _latest 안의 sealed run + summary 검사 (§5-3의 3-조건)
+         eval_latest = resolve_latest_run(eval_base)        # 같은 helper 재사용
+         label = "${model}_${method}"
+         if eval_latest \
+            AND exists(${eval_latest}/_complete) \
+            AND exists(${eval_latest}/${label}-eval_summary.json) \
+            AND mtime(${eval_latest}/${label}-eval_summary.json) > mtime(latest):
+             continue                                       # DONE — skip
          # 같은 (model, method)가 이미 어디 GPU에서 돌고 있으면 skip
          if pgrep -af "python -m tads.eval.*${model}/${method}\.yaml" > /dev/null: continue
          queue.append((model, method))
@@ -887,14 +976,26 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
        CUDA_VISIBLE_DEVICES=${gpu} nohup python -m tads.eval \
          --config configs/experiments/main_7b/${cell.model}/${cell.method}.yaml \
          --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+         --out_dir ${EVAL_RESULTS_ROOT}/${cell.model}/${cell.method} \
          >> logs/eval_${cell.model}_${cell.method}.log 2>&1 &
      log "launched ${cell} on GPU ${gpu} (pid=$!)"
      sleep 0.5   # CUDA init race buffer
 
-5. monitor pass — 끝난 잡 회수
+   # --out_dir 명시 이유: 기본값은 <ckpt>/eval/ (OUTPUT_ROOT 아래)인데, 점수 표
+   # 에이전트는 EVAL_RESULTS_ROOT/<model>/<method>/_latest/ 만 본다. 두 경로를
+   # 일치시키지 않으면 eval은 돌지만 표는 NEED-EVAL로 남는다.
+   # eval.py가 자동으로 ${out_dir}/runs/<eval_tag>/에 결과를 떨구고 _latest를
+   # atomic 갱신한다. eval_tag는 호출 시각의 YYYYMMDD_HHMMSS.
+
+5. monitor pass — 끝난 잡 회수 (sentinel은 eval.py가 자체 작성)
    for proc in 우리가 launch한 프로세스들 (pidfile / pgrep로 추적):
-     if exited 0:  touch ${EVAL_RESULTS_ROOT}/${model}/${method}/.eval_done
-     if exited !=0: log 끝 30줄 캡처 → 보고; .fail_count 증가
+     if exited 0:
+        # eval.py가 ${eval_base}/runs/<eval_tag>/_complete를 이미 atomic으로
+        # 작성하고 _latest를 거기로 갱신했음. 에이전트가 별도 touch 필요 없음.
+        log "done: ${cell.model}/${cell.method}"
+     if exited !=0:
+        log 끝 30줄 캡처 → 보고
+        ${eval_base}/.fail_count 증가 (§10-3)
 
 6. 큐가 비지 않았으면 다음 tick에서 4번 부터 재시도 (epoch당 한 번 dispatch가 정상)
 ```
@@ -991,10 +1092,20 @@ for model in llama2 qwen25 mistral deepseek; do
     [ -z "$latest_run" ] && continue
     latest=$(largest_sealed_epoch "$latest_run")
     [ -z "$latest" ] && continue
-    out_dir="${EVAL_RESULTS_ROOT}/${model}/${method}"
-    done_marker="${out_dir}/.eval_done"
-    if [ -f "$done_marker" ] && [ "$done_marker" -nt "$latest" ]; then
-      continue
+    eval_base="${EVAL_RESULTS_ROOT}/${model}/${method}"
+    # eval 측도 같은 helper로 _latest 해석 (BASE 구조가 train과 동일).
+    eval_latest=$(resolve_latest_run "$eval_base")
+    label="${model}_${method}"
+    summary="${eval_latest:+${eval_latest}/${label}-eval_summary.json}"
+    sentinel="${eval_latest:+${eval_latest}/_complete}"
+    # DONE 조건 (§5-3 의 3-조건):
+    #   eval _latest 가 있고, _complete sentinel과 summary 둘 다 있으며,
+    #   summary mtime > latest sealed epoch mtime.
+    if [ -n "$eval_latest" ] \
+       && [ -f "$sentinel" ] \
+       && [ -f "$summary" ] \
+       && [ "$summary" -nt "$latest" ]; then
+      continue   # DONE
     fi
     need+=("${model}/${method}")
   done
@@ -1055,21 +1166,23 @@ for gpu in "${free_gpus[@]}"; do
   CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tads.eval \
       --config "$cfg" \
       --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+      --out_dir "${EVAL_RESULTS_ROOT}/${model}/${method}" \
       >> "$log" 2>&1 &
   launched_pids+=("$!:${cell}")
   sleep 0.5
 done
 
 # 이 tick에서 launch만 하고 종료 — 잡들은 백그라운드에서 계속 돈다.
-# 다음 tick에서 (a) 끝난 잡은 .eval_done 자동 갱신 되어있을 것 (eval 본체가
-# 마지막 atomic write), (b) 새 done_marker로 큐가 자동 줄어듦.
+# 다음 tick에서 (a) 끝난 잡은 ${eval_base}/runs/<eval_tag>/_complete를 eval.py가
+# atomic으로 작성하고 _latest를 거기로 갱신해 둘 것, (b) §5-3의 3-조건이 만족돼
+# DONE 분류되어 큐가 자동으로 줄어든다. 별도 .eval_done 같은 외부 마커는 만들지 말 것.
 echo "[tick $(date -Is)] launched: ${launched_pids[*]}"
 
-# OPTIONAL: 직전 tick에서 launch했던 잡의 종료 회수 — exit code 0이면 done_marker
-# touch, 0 아니면 .fail_count 증가. 이걸 모니터링하려면 tick 자체가 길게 살아야
-# 해서 cron 모델과 안 맞음. 권장: launch만 하고 .eval_done은 eval 자체에서 마지막
-# 단계로 atomic touch (이미 tads.eval이 출력 디렉토리에 결과 JSON 쓰는 시점이
-# 자연스러운 sentinel — 별도 .eval_done 없이도 §5-3의 mtime 비교로 판단 가능).
+# OPTIONAL: 직전 tick에서 launch했던 잡의 종료 회수 — exit code 0이면 그냥 두면
+# 되고(eval.py가 sentinel과 _latest까지 다 처리함), 0이 아니면 .fail_count 증가.
+# 이걸 모니터링하려면 tick 자체가 길게 살아야 해서 cron 모델과 안 맞음 — 권장은
+# launch만 하고 다음 tick에 결과 확인하는 것. eval.py의 _latest/_complete가
+# 충분한 sentinel이라 별도 .eval_done은 필요 없다.
 ```
 
 ### 9-4. cron 디버깅 체크리스트
