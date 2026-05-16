@@ -234,14 +234,29 @@ class TrajectoryAnchor:
             del hidden_states, outputs
 
         # Per-layer PCA + sign calibration.
+        # Each per_layer_deltas[li] holds a list of (B, H) fp32 CPU tensors
+        # totalling N_probe × H ≈ 540 MB at N_probe=1024, H=4096. Across 32
+        # decoder layers ("all" mode) the dict alone occupies ~17 GB CPU
+        # before this loop starts. Both the original list AND the cat'd
+        # tensor are alive simultaneously during _pca_top1 — peak would
+        # briefly double for the layer being processed. Drop each layer's
+        # raw list as soon as it's been PCA'd (and the cat'd tensor as soon
+        # as PCA returns) so the CPU footprint trends DOWN through the loop
+        # instead of staying pinned at ~17 GB. Critical for tads under DDP
+        # where rank 0's PCA peak races with workers' grad buffers.
         new_v_by_layer: Dict[int, torch.Tensor] = {}
         new_l1: Dict[int, float] = {}
         new_l2: Dict[int, float] = {}
         n_used = 0
         for li in resolved_indices or []:
             delta_l = torch.cat(per_layer_deltas[li], dim=0)  # (N, H)
+            # Release the per-batch chunks the moment we have the cat'd
+            # matrix. Without this, every chunk for `li` stays referenced
+            # by the dict until the function returns.
+            per_layer_deltas[li] = []
             n_used = delta_l.shape[0]
             pca = self._pca_top1(delta_l)
+            del delta_l  # ~540 MB freed before next layer's cat allocates.
             v_l = pca["v"]
             # Sign calibration: ⟨v_l, μ_l⟩ > 0.
             if torch.dot(v_l, pca["mu"]) < 0:
@@ -249,6 +264,8 @@ class TrajectoryAnchor:
             new_v_by_layer[li] = v_l
             new_l1[li] = pca["lambda_1"]
             new_l2[li] = pca["lambda_2"]
+        # Drop the now-empty dict before downstream code allocates more.
+        del per_layer_deltas
 
         # Stability: mean L2 distance between old and new v per layer.
         if self.is_fitted and set(new_v_by_layer.keys()) == set(self.v_by_layer.keys()):

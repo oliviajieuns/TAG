@@ -488,20 +488,47 @@ def main() -> None:
     total_steps = approx_steps_per_epoch * train_epochs
     # 8-bit AdamW cuts optimizer state from ~56GB to ~14GB per GPU on 7B
     # full fine-tuning. Matches the NAIT paper's recipe (bnb.optim.AdamW8bit).
+    #
+    # bnb's import path is the most common CUDA-lib failure surface in this
+    # codebase: the package compiles against a specific libcudart minor
+    # version and routinely fails to import with OSError ("libcudart.so.X.Y:
+    # cannot open shared object file"), RuntimeError ("CUDA Setup failed
+    # despite GPU being available"), or AttributeError on nodes where the
+    # CUDA driver is older than the wheel. When that happens we'd rather
+    # train with fp32 AdamW (slower / more VRAM but functionally correct)
+    # than crash the run — fall back with a loud warning so the user can
+    # pin a working bnb build at their leisure.
     wd = float(cfg.get("weight_decay", 0.1))
-    if bool(cfg.get("use_8bit_optimizer", False)):
-        import bitsandbytes as bnb
-        optimizer = bnb.optim.AdamW8bit(
-            model.parameters(), lr=lr, weight_decay=wd,
-        )
-        if is_main_process():
-            logger.info("Optimizer: bitsandbytes.AdamW8bit | wd=%s", wd)
-    else:
+    want_8bit = bool(cfg.get("use_8bit_optimizer", False))
+    optimizer = None
+    if want_8bit:
+        try:
+            import bitsandbytes as bnb
+            optimizer = bnb.optim.AdamW8bit(
+                model.parameters(), lr=lr, weight_decay=wd,
+            )
+            if is_main_process():
+                logger.info("Optimizer: bitsandbytes.AdamW8bit | wd=%s", wd)
+        except (ImportError, OSError, RuntimeError, AttributeError) as e:
+            if is_main_process():
+                logger.warning(
+                    "use_8bit_optimizer=True but bitsandbytes import failed "
+                    "(%s: %s). Falling back to torch.optim.AdamW (fp32). "
+                    "Expect ~4× higher optimizer-state VRAM; if rank 0 OOMs "
+                    "during the first SFT step, either enable gradient_check"
+                    "pointing or fix bnb (typically: install a wheel built "
+                    "against your CUDA minor version).",
+                    type(e).__name__, e,
+                )
+    if optimizer is None:
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=lr, weight_decay=wd,
         )
         if is_main_process():
-            logger.info("Optimizer: torch.AdamW (fp32) | wd=%s", wd)
+            logger.info(
+                "Optimizer: torch.AdamW (fp32) | wd=%s | want_8bit=%s",
+                wd, want_8bit,
+            )
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=max(1, int(total_steps * warmup_ratio)),

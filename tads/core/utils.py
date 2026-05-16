@@ -74,11 +74,39 @@ def quiet_repeated_warnings(
 
 
 # ------------------------------------------------------------------ caches
+def _cuda_smoke_test() -> Optional[str]:
+    """Run a single 1-element allocation + sync on cuda:0 to flush out CUDA
+    library loading failures at process start.
+
+    `torch.cuda.is_available()` only checks for a probe-friendly driver;
+    it returns True even when later kernel launches fail (e.g. mismatched
+    libcudart, missing nvJitLink for newer PTX, broken libcuda symlink).
+    Those failures otherwise surface several minutes in, inside the first
+    SFT forward, with a confusing traceback that points at the model code
+    instead of the underlying lib mismatch.
+
+    Returns None on success, or a short error string describing the failure.
+    The caller decides whether to log a warning or hard-fail.
+    """
+    if not torch.cuda.is_available():
+        return None
+    try:
+        t = torch.zeros(1, device="cuda")
+        t.add_(1.0)
+        torch.cuda.synchronize()
+        del t
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
 def clear_runtime_caches() -> None:
     """Reset every process-local cache so the run starts from a clean slate.
 
     Called at the top of train / eval / nait/train entry points alongside
-    :func:`disable_coredumps`. Three caches are reset:
+    :func:`disable_coredumps`. Three caches are reset, plus a CUDA-functionality
+    smoke test surfaces lib-loading failures at the entry point rather than
+    minutes into the first SFT forward.
 
     1. **Python GC arena** — `gc.collect()`. A stale `tads.train` worker
        (e.g., a re-attached tmux session that previously imported but
@@ -101,9 +129,24 @@ def clear_runtime_caches() -> None:
        is set, `build_alpaca_dataset` passes `load_from_cache_file=False`
        and re-tokenises from scratch (see tads/data/alpaca.py).
 
+    Additionally, ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` is
+    set as a fallback if the caller didn't source ``scripts/setup_env.sh``.
+    Expandable segments materially reduce allocator fragmentation after
+    the 32-layer PCA pass in trajectory_anchor.py, and a missing setting
+    was a recurring cause of "OOM at step ~50" on long Alpaca-52K runs.
+
     Output: a single info-level log line so a missing call is obvious in
     the logs.
     """
+    # PYTORCH_CUDA_ALLOC_CONF must be read by PyTorch BEFORE the first CUDA
+    # context init. Setting it here is only effective if no CUDA op has run
+    # yet — which is the case at entry-point top. Use setdefault so an
+    # explicit user override (e.g. expandable_segments:False, or a
+    # max_split_size_mb tuning) wins.
+    os.environ.setdefault(
+        "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True",
+    )
+
     gc.collect()
     if torch.cuda.is_available():
         try:
@@ -117,10 +160,32 @@ def clear_runtime_caches() -> None:
             torch.cuda.ipc_collect()
         except Exception:
             pass
+
+    smoke = _cuda_smoke_test()
+    if smoke is not None:
+        # Surface as ERROR so the failure isn't lost in the WARNING noise
+        # HF / peft generate at import time. Don't raise — let the caller's
+        # training-mode-specific code path decide whether CPU fallback is
+        # viable (eval often is, train almost never is).
+        logger.error(
+            "CUDA smoke test FAILED: %s. torch.cuda.is_available()=%s but a "
+            "1-element allocation + sync did not work. Common causes: "
+            "libcudart minor-version mismatch with the installed PyTorch "
+            "wheel, broken /usr/local/cuda symlink, or driver too old for "
+            "the wheel's compute capability. Run `python -c \"import torch; "
+            "print(torch.version.cuda); print(torch.zeros(1, device='cuda'))\"` "
+            "to confirm before launching training.",
+            smoke, torch.cuda.is_available(),
+        )
+
     fresh_data = os.environ.get("TADS_FRESH_DATA_CACHE", "0") == "1"
     logger.info(
-        "clear_runtime_caches done | cuda_avail=%s | fresh_data_cache=%s",
-        torch.cuda.is_available(), fresh_data,
+        "clear_runtime_caches done | cuda_avail=%s | cuda_smoke=%s | "
+        "alloc_conf=%s | fresh_data_cache=%s",
+        torch.cuda.is_available(),
+        "ok" if smoke is None else "FAIL",
+        os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "(unset)"),
+        fresh_data,
     )
 
 

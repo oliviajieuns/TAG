@@ -107,10 +107,21 @@ def load_model(
 
     try:
         base = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
-    except (ValueError, ImportError) as e:
+    except Exception as e:
+        # flash-attn surfaces failure modes far beyond (ValueError, ImportError):
+        #   - RuntimeError: "FlashAttention only supports Ampere GPUs or newer"
+        #   - OSError: undefined symbol from a torch / cuda version mismatch
+        #     ("undefined symbol: _ZN3c10...") when the prebuilt wheel was
+        #     compiled against a different libtorch_cuda
+        #   - AttributeError: missing kernel symbol when the wheel is partial
+        # Without catching these the loader raises in the middle of from_pretrained,
+        # leaving a partially-constructed model behind and a misleading traceback.
+        # Only intercept when flash_attention_2 was explicitly requested — for
+        # any other attn_implementation we still re-raise so real bugs surface.
         if attn_implementation == "flash_attention_2":
             logger.warning(
-                "flash_attention_2 unavailable (%s); falling back to sdpa.", e,
+                "flash_attention_2 unavailable (%s: %s); falling back to sdpa.",
+                type(e).__name__, e,
             )
             kwargs["attn_implementation"] = "sdpa"
             base = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
