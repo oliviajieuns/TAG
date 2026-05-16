@@ -128,10 +128,17 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 1. 셀의 `<experiment_label>-eval_summary.json`을 읽어 정확도(%) 둘째 자리까지 추출
 2. `experiments.md`의 해당 셀을 `-`에서 실제 숫자로 교체 (또는 새 숫자로 갱신)
 3. treatment 행이면 §0-2 규칙으로 발산 알람(`RED` / `YELLOW` / `BLUE`)을 inline으로 표기
-4. 파일을 atomic하게 저장 (`experiments.md.tmp` 작성 후 `mv`)
-5. 채팅/로그 보고에는 **요약만**. 표 전체를 매번 복붙하지 말 것 — 변경된 행만 인용
+4. **§0-4(6) 80-cell consolidated 표를 `experiments.md` 맨 아래에 항상 유지**하고, 80개 셀 전체를 매 tick 동기화 (per-model 표 (1)-(5) 갱신 후 동일 점수로 (6)도 함께 갱신)
+5. 파일을 atomic하게 저장 (`experiments.md.tmp` 작성 후 `mv`)
+6. 채팅/로그 보고에는 **요약만**. 표 전체를 매번 복붙하지 말 것 — 변경된 행만 인용
 
-아래 표들은 **이 파일의 초기 템플릿**이다. `experiments.md`가 존재하지 않으면 에이전트가 이 템플릿을 그대로 복사해서 생성하고, 이후 셀 단위로 갱신만 한다. **이 가이드 문서(AUTO_EVAL_AGENT.md) 자체는 절대 수정하지 말 것** — 가이드는 spec이고, `experiments.md`가 live document.
+아래 표들은 **이 파일의 초기 템플릿**이다. `experiments.md`가 존재하지 않으면 에이전트가 이 템플릿을 그대로 복사해서 생성하고 (특히 (6) 80-cell 표는 **파일 맨 아래**에 배치), 이후 셀 단위로 갱신만 한다. **이 가이드 문서(AUTO_EVAL_AGENT.md) 자체는 절대 수정하지 말 것** — 가이드는 spec이고, `experiments.md`가 live document.
+
+**80-cell 표 관리 규약** (§0-4(6) 전용):
+- 위치: `experiments.md`의 **맨 아래** (다른 섹션 추가되더라도 항상 마지막에 위치). `## 80-cell Consolidated Score Table` 헤더로 둘러싸고, 그 안의 코드 펜스(```) 블록만 atomic 교체.
+- 갱신 단위: 셀 1개 (점수 1개). 한 셀이 DONE 되면 (1)-(5) 표와 (6) 표 양쪽을 같은 값으로 동시 갱신.
+- 상태 표기는 위 "채우는 규칙" 표를 그대로 사용 (`-` / `학습필요` / `eval대기` / `legacy(...)` / `42.13` / `…` / `실패`).
+- 80개 셀 전체가 숫자로 채워지면 = 실험 완료. 이 시점에 §0-2 발산 알람 최종 평가를 별도 섹션 `## 최종 발산 알람 요약`으로 (6) 표 바로 위에 추가.
 
 값은 `<experiment_label>-eval_summary.json` 또는 벤치별 JSON에서 직접 파싱한 정확도 (%, 소수점 둘째자리까지). **아직 안 돌아간 셀은 `-` 그대로**. 표 형식은 monospace 가정. `experiments.md`에 쓸 때 코드 펜스(```) 안에 넣어 정렬 깨지지 않게.
 
@@ -191,6 +198,8 @@ tads_10         -          -          -          -
 ```
 
 #### (6) 80-cell consolidated score table (5 벤치 × 16 모델/메서드 = 80)
+
+> **위치 = `experiments.md`의 맨 아래**. (1)-(5)는 모델별/요약별 뷰, (6)이 **80개 전체 셀의 single source of truth**. 매 tick 동기화 필수 (위 "80-cell 표 관리 규약" 참조).
 
 ```
 #   Model/Method               mmlu    gsm8k   humaneval  tydiqa   bbh
