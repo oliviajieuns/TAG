@@ -166,11 +166,16 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 5. 파일을 atomic하게 저장 (`experiments.md.tmp` 작성 후 `mv`)
 6. 채팅/로그 보고에는 **요약만**. 표 전체를 매번 복붙하지 말 것 — 변경된 행만 인용
 
-아래 표들은 **이 파일의 초기 템플릿**이다. `experiments.md`가 존재하지 않으면 에이전트가 이 템플릿을 그대로 복사해서 생성하고 (특히 (6) 80-cell 표는 **파일 맨 아래**에 배치), 이후 셀 단위로 갱신만 한다. **이 가이드 문서(AUTO_EVAL_AGENT.md) 자체는 절대 수정하지 말 것** — 가이드는 spec이고, `experiments.md`가 live document.
+아래 표들은 **이 파일의 초기 템플릿**이다. `experiments.md`가 존재하지 않으면 에이전트가 이 템플릿을 그대로 복사해서 생성하고 (특히 (6)–(9) 80-cell 표 4종은 **파일 맨 아래**에 (6) Current → (7) Latest → (8) Best → (9) History 순서로 배치), 이후 셀 단위로 갱신만 한다. **이 가이드 문서(AUTO_EVAL_AGENT.md) 자체는 절대 수정하지 말 것** — 가이드는 spec이고, `experiments.md`가 live document.
 
-**80-cell 표 관리 규약** (§0-4(6) 전용):
-- 위치: `experiments.md`의 **맨 아래** (다른 섹션 추가되더라도 항상 마지막에 위치). `## 80-cell Consolidated Score Table` 헤더로 둘러싸고, 그 안의 코드 펜스(```) 블록만 atomic 교체.
-- 갱신 단위: 셀 1개 (점수 1개). 한 셀이 DONE 되면 (1)-(5) 표와 (6) 표 양쪽을 같은 값으로 동시 갱신.
+**80-cell 4종 표 관리 규약** (§0-4 (6)/(7)/(8)/(9) 전용):
+- 위치: `experiments.md`의 **맨 아래**. 항상 (6) Current → (7) Latest → (8) Best → (9) History 순서. 각 표는 자신의 `## (N) ...` 헤더로 둘러싸고, 그 안의 코드 펜스(```) 블록만 atomic 교체. (9) History는 append-only라 마지막 한 줄만 추가.
+- 갱신 단위: 셀 1개 / 벤치 1개 (점수 1개). 셀 값 1개가 바뀌면 (6) Current는 무조건 갱신, (7)/(8)/(9)는 §0-4 (10) 의 흐름표대로:
+    * `학습중` → `학습중`: (6)만 갱신 (이미 그 상태였을 수 있음 — no-op이지만 그래도 atomic 교체).
+    * `학습중` → `NN.NN%` (재학습 완료): (6)/(7) 갱신, (8)은 max 비교, (9) append.
+    * `NN.NN%` → `학습중` (재학습 시작): (6)만 학습중으로, (7)/(8) 그대로, (9) append.
+    * 그 외 5종 어휘 전환 (eval대기 → eval중 등): (6)만 갱신, (9) append.
+- 셀의 가장 최근 학습 run의 cfg.json snapshot이 바뀌면 (6) Params 컬럼만 갱신. (7) Params는 마지막 DONE 시점 cfg 그대로, (8) Params는 best run cfg 그대로.
 
 **🚨 셀 값 어휘 — 매우 엄격 (자주 위반되니 주의):**
 
@@ -322,31 +327,132 @@ data_agent_10   -          -          -          -
 tads_10         -          -          -          -
 ```
 
-#### (6) 80-cell consolidated score table (5 벤치 × 16 모델/메서드 = 80) + Status
+#### (6) Current — 80-cell real-time status table + Status + Params
 
-> **위치 = `experiments.md`의 맨 아래**. (1)-(5)는 모델별/요약별 뷰, (6)이 **80개 전체 셀의 single source of truth**. 매 tick 동기화 필수 (위 "80-cell 표 관리 규약" 참조).
-> **맨 우측 `Status` 컬럼** = 셀의 (1) 점수 이력, (2) 시스템 오류, (3) baseline 발산 알람을 한 줄로 요약 (§0-6 가이드 참조). 자세한 시계열 로그는 per-cell `HISTORY.md`.
+> **위치 = `experiments.md`의 맨 아래 (이 표 + 아래 (7) Latest + (8) Best + (9) History 4종이 항상 마지막)**. (1)-(5)는 모델별/요약별 뷰, (6)이 **현재 시점 80개 전체 셀의 single source of truth**. 매 tick 동기화 필수.
+> **5종 어휘(`학습전 / 학습중 / eval대기 / eval중 / NN.NN%`) 그대로 채움 (§5-4).** 새로 학습이 시작되면 이전에 DONE이었던 셀도 즉시 `학습중`으로 돌아옴 (§0-4 (10) "재학습 → 표 갱신" 규약 참조). 이전 점수는 (7) Latest 표와 (9) History 로그에 보존.
+> **`Status` 컬럼** = 셀의 (1) 점수 이력, (2) 시스템 오류, (3) baseline 발산 알람을 한 줄로 요약 (§0-6 가이드 참조).
+> **`Params` 컬럼** = 그 셀의 가장 최근 학습 run(`<ckpt_root>/_latest/cfg.json`)에서 추출한 주요 하이퍼파라미터 한 줄 요약 (아래 §0-4 (10) "Params 한 줄 형식" 참조). 사용자가 셀 점수와 학습 설정을 한 화면에 같이 보기 위한 컬럼.
 
 ```
-#   Model/Method               mmlu    gsm8k   humaneval  tydiqa   bbh      Status (이력 · 오류 · 발산 알람)
-=== ========================== ======= ======= ========== ======== ======== =====================================================
- 1  llama2 / full_100          -       -       -          -        -        -
- 2  llama2 / random_10         -       -       -          -        -        -
- 3  llama2 / data_agent_10     -       -       -          -        -        -
- 4  llama2 / tads_10           -       -       -          -        -        -
- 5  qwen25 / full_100          -       -       -          -        -        -
- 6  qwen25 / random_10         -       -       -          -        -        -
- 7  qwen25 / data_agent_10     -       -       -          -        -        -
- 8  qwen25 / tads_10           -       -       -          -        -        -
- 9  mistral / full_100         -       -       -          -        -        -
-10  mistral / random_10        -       -       -          -        -        -
-11  mistral / data_agent_10    -       -       -          -        -        -
-12  mistral / tads_10          -       -       -          -        -        -
-13  deepseek / full_100        -       -       -          -        -        -
-14  deepseek / random_10       -       -       -          -        -        -
-15  deepseek / data_agent_10   -       -       -          -        -        -
-16  deepseek / tads_10         -       -       -          -        -        -
+#   Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh       Status                                            Params
+=== ========================== ========= ========= ========= ========= ========= ================================================= ================================================================
+ 1  llama2 / full_100          학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 9  mistral / full_100         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+10  mistral / random_10        학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 ```
+
+#### (7) Latest — 가장 최근의 DONE 점수만 모은 표 (`NN.NN%` 또는 `-` only)
+
+> **`(6) Current`가 in-progress 상태도 보여주는 표라면, `(7) Latest`는 점수 산출이 완료된 가장 마지막 값만 보여주는 표**다. 학습이 재시작돼서 Current가 `학습중`으로 돌아가도, Latest는 이전 DONE 점수를 **유지**한다 (새 DONE이 나올 때까지). 사용자가 "지금까지 가장 최근에 측정된 점수가 얼마였지?"를 빠르게 확인할 때 쓰는 표.
+>
+> 형식: (6)과 동일한 16행 × 5벤치 + Status + Params 컬럼. 단 셀 값은 **`NN.NN%` 또는 `-` (아직 한 번도 DONE된 적 없음)** 두 종류만. 학습중 / eval중 / eval대기는 이 표에 안 나타남. Status 컬럼은 마지막 DONE 시점(`done 2026-05-17 09:15`) 및 발산 알람을 1줄로. Params는 그 점수를 만든 run의 cfg.json 기준.
+
+```
+#   Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh       Status                                            Params
+=== ========================== ========= ========= ========= ========= ========= ================================================= ================================================================
+ 1  llama2 / full_100          -         -         -         -         -         -                                                 (no DONE yet)
+ ... (16행)
+```
+
+#### (8) Best — 셀당 역대 최고 점수 표
+
+> **모든 `runs/<eval_tag>/<exp_label>-<bench>.json` 중 가장 높은 점수**를 셀 × 벤치마다 따로 골라 채운 표. (7)이 "최신 시점" 점수라면 (8)은 "역대 최고". 튜닝으로 떨어진 케이스를 한 눈에 보기 위한 표.
+>
+> 같은 셀 × 벤치에서 best가 갱신되면 그 점수를 만든 `eval_tag` 와 그 시점의 `<run>/cfg.json` 도 함께 기록. Params 컬럼은 **각 행 = 그 셀의 가장 높은 평균 점수를 만든 학습 run의 cfg**.
+
+```
+#   Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh       Best AVG  Best run                                Params (best avg run의 cfg.json)
+=== ========================== ========= ========= ========= ========= ========= ========= ======================================= ================================================================
+ 1  llama2 / full_100          -         -         -         -         -         -         -                                       (no DONE yet)
+ ... (16행)
+```
+
+> Best 표는 (7) Latest와 동일 컬럼 폭이 아니므로 헤더가 살짝 다름 — "Best AVG" + "Best run" 컬럼 추가. 80개 셀의 best는 셀 × 벤치 단위 (행 단위 best가 아님)이므로 한 행의 mmlu/gsm8k/humaneval/tydiqa/bbh 5점이 서로 다른 run에서 나올 수 있음. Params 컬럼은 그 셀의 **avg 최고 run** 기준으로 1개만 표기.
+
+#### (9) History — append-only 변경 로그
+
+> Current / Latest / Best 어느 표든 셀 값이 바뀌면 그 변경을 **(9) History 섹션에 한 줄로 append**한다 (newest at bottom). 사용자가 "이 셀 점수가 언제 어떻게 움직였나"를 시계열로 따라가는 view.
+
+```
+## (9) History (append-only — newest at bottom)
+
+# 형식: YYYY-MM-DD HH:MM  cell=<model>/<method>  bench=<bench>  prev=<old>  new=<new>  reason=<태그>  source=<file>
+2026-05-16 18:30  cell=llama2/full_100      bench=mmlu       prev=-       new=46.87%   reason=initial      source=runs/20260516_180000/eval/.../llama2_full_100-mmlu.json
+2026-05-16 18:32  cell=llama2/full_100      bench=gsm8k      prev=-       new=14.32%   reason=initial      source=runs/20260516_180000/eval/.../llama2_full_100-gsm8k.json
+2026-05-17 09:15  cell=llama2/random_10     bench=mmlu       prev=-       new=47.14%   reason=initial      source=runs/20260517_091500/eval/.../llama2_random_10-mmlu.json
+2026-05-17 22:00  cell=llama2/tads_10       bench=mmlu       prev=47.20%  new=학습중   reason=재학습 시작  source=runs/20260517_220000/ (train launched)
+2026-05-18 02:30  cell=llama2/tads_10       bench=mmlu       prev=학습중  new=48.05%   reason=재학습 완료  source=runs/20260517_220000/eval/.../llama2_tads_10-mmlu.json
+...
+```
+
+규칙:
+- newest at bottom (append-only). 절대 이전 줄을 수정/삭제하지 말 것.
+- 셀 값이 (a) 5종 어휘 사이 전환 (예: `eval대기` → `eval중` → `NN.NN%`)이거나 (b) `NN.NN%` 값이 변경되거나 (c) `NN.NN%`가 `학습중`으로 돌아갈 때 모두 한 줄씩 추가.
+- 컬럼 폭은 §0-4의 표 작성 규칙(`MD 파일 표 작성 규칙 6항`)을 따름. monospace 정렬, CJK는 visual width 2 cell로 패딩.
+- `reason` 태그는 §0-6 (a)의 원인 태그(`lr↑`, `seed`, `재학습`, `cfg변경`, `param`, `initial`, `재학습 시작`, `재학습 완료` 등) 또는 사용자가 cell에 명시한 자유 텍스트.
+- 매 tick 종료 시 그 tick에서 발생한 변경만 추가. 변경 없으면 줄 추가 안 함.
+- per-cell 상세 시계열은 `${EVAL_RESULTS_ROOT}/<model>/<method>/HISTORY.md` (§0-6) — (9)는 그 요약 view.
+
+#### (10) 재학습 ↔ 표 갱신 규약 + Params 한 줄 형식
+
+**재학습 감지 시 표 흐름:**
+1. 사용자가 어떤 셀에 새 학습 launch (예: `python -m tads.train --config configs/.../llama2/tads_10.yaml`)
+   → `<ckpt_root>/runs/<new_tag>/` 생성 + `_latest` 포인터가 그쪽으로 이동.
+2. 다음 tick에서 §5-4 분류기가 `학습 프로세스 alive` (pgrep) 신호를 잡음 → (6) Current 표의 그 셀 5개 컬럼 모두 `학습중`으로 전환.
+3. (7) Latest 표는 **건드리지 않음** — 이전 DONE 값(예: `47.20%`)이 그대로 남아있음. 사용자는 "현재 학습중이지만 직전 마지막 점수는 47.20%였다"를 두 표를 동시에 보고 확인.
+4. (8) Best 표도 건드리지 않음 — 새 학습이 끝나서 새 점수가 나올 때 비교.
+5. (9) History에 `prev=47.20% new=학습중 reason=재학습 시작` 한 줄 append.
+6. 학습 → eval 완료되어 새 NN.NN% 나오면:
+   - (6) Current = 새 NN.NN%
+   - (7) Latest = 새 NN.NN%로 갱신 (직전 47.20% 덮어씀, 단 (9) History엔 한 줄 더 append)
+   - (8) Best = max(이전 best, 새 NN.NN%)로 갱신. 새 값이 best면 Best run 컬럼도 새 `<eval_tag>`로 갱신.
+   - (9) History에 `prev=학습중 new=<new>% reason=재학습 완료` append.
+
+**핵심 차이 요약:**
+
+| 표 | 셀이 학습중일 때 | 새 NN.NN% 나오면 |
+|---|---|---|
+| (6) Current | `학습중` 표기 (덮어씀) | `NN.NN%`로 덮어씀 |
+| (7) Latest  | **이전 NN.NN% 유지** | 새 NN.NN%로 덮어씀 |
+| (8) Best    | **이전 Best 유지** | max(이전, 새)로 갱신 (낮으면 그대로) |
+| (9) History | 한 줄 append      | 한 줄 더 append |
+
+**Params 한 줄 형식 (rightmost column, ≤ 100자):**
+
+해당 셀의 가장 최근 학습 run의 `cfg.json`에서 다음 키만 골라 1줄로 표기. 길어지면 `_50` 등 method 변형명을 따로 표시.
+
+```
+lr=<learning_rate> ep=<train_epochs> bs=<batch_size>/ga=<grad_accum> wd=<weight_decay>
+ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
+[attn=<attn_implementation>] [opt=AdamW(fp32|8bit)] [prompt=<prompt_style>]
+[lam=<tads.lam>] [anchor=<anchor.layer_indices>] [ent=<agent.entropy_coef>]
+```
+
+값이 base.yaml 기본값과 같으면 생략 가능 (간결성). method-specific 키는 method가 `tads`/`data_agent`일 때만 표기.
+
+예시:
+- llama2/full_100: `lr=2e-5 ep=3 bs=8/ga=4 ratio=1.0 mode=full opt=AdamW8bit prompt=alpaca_default`
+- llama2/tads_10:  `lr=2e-5 ep=3 bs=8/ga=4 ratio=0.1 mode=full opt=AdamW8bit prompt=alpaca_default lam=1.0 anchor=all ent=0.02`
+- qwen25/random_10: `lr=2e-5 ep=3 bs=8/ga=4 ratio=0.1 mode=full opt=AdamW8bit`
+
+**Params 컬럼 갱신 시점:**
+- 새 학습 launch 시 (6) Current의 그 행 Params를 새 run의 cfg.json 기준으로 갱신.
+- (7) Latest의 Params는 마지막 DONE이 나온 run의 cfg.json 기준 — 학습중이어도 안 바뀜.
+- (8) Best의 Params는 best avg를 낸 run의 cfg.json 기준.
 
 채우는 규칙 (§5-4의 4-state 분류를 그대로 반영) — **모든 표 ((1)-(6))에 동일한 5가지 표기만 사용**:
 
@@ -389,6 +495,8 @@ tads_10         -          -          -          -
 > **`eval대기`로 떨어진 셀은 §0-4 "사용자 액션 필요 — eval 미실행 셀" 섹션에 자동 추가**. 사용자가 §4-1 명령으로 직접 launch한다 — **에이전트는 절대 자동 launch하지 않는다 (§0)**.
 >
 > 이전 tick의 분류 값을 캐싱하지 말 것. 사용자가 tick 사이에 eval을 launch하면 3번에서 잡히고, 끝나면 4번에서 잡힌다 — 매 tick 처음부터 6단계 다시 돌려야 정확.
+>
+> **재학습 감지** (§0-4 (10)): 셀이 이전 tick에 DONE(`NN.NN%`)이었어도, 현재 tick에서 위 결정 트리 #2 (학습 프로세스 alive 또는 새 run의 sealed < cfg_target)가 만족되면 **즉시 `학습중`으로 되돌린다**. 이전 NN.NN%는 (7) Latest 표에 유지되고 (9) History에 prev=NN.NN% new=학습중 한 줄 append. (6) Current만 학습중으로 덮어씀. DONE → 학습중 → 새 NN.NN% 흐름이 매 tick 동기화됨.
 
 > **표기는 위 5종만 허용**. `-`는 본 가이드 문서 안의 placeholder일 뿐 `experiments.md`의 셀 값으로는 **절대 쓰지 말 것** — `experiments.md`를 최초 생성할 때부터 §5-4 분류를 돌려 5종 중 하나를 채운다. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 5종 중 하나로 매핑: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
 >
