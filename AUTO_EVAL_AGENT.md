@@ -583,7 +583,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 | **TRAINING** | `학습중` | 학습 프로세스 alive **또는** sealed epoch < `cfg_target_epochs`. 행 전체 5컬럼 동일. |
 | **NEED-EVAL** | `eval대기` | (a) 학습 끝남 (sealed == `cfg_target_epochs`) AND (b) `_latest/_complete` + `_latest/<label>-eval_summary.json` 부재 또는 stale AND **(c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime > 5분 (= 진짜 idle)**. 다음 dispatch pass에서 에이전트가 자동 launch (§4 / §7 3.7). |
 | **EVAL-RUNNING** | `eval중` | `python -m tads.eval.*<model>/<method>` 프로세스 alive **또는** eval 로그 mtime < 5분 이내 활동 (pgrep이 잠시 놓쳤어도 로그가 움직이면 살아있는 것). |
-| **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. humaneval은 pass@1. |
+| **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. **humaneval은 pass@10** (NAIT 논문 기준, n=20 sampled completions, T=0.8, p=0.95). 점수 JSON엔 `pass@1`도 같이 기록되지만 점수표는 `pass@10`만 본다. |
 
 > **분류 결정 트리 — 매 tick 반드시 위에서 아래로 순회. 어느 분기에도 안 걸린 셀은 마지막에 `eval대기`로 떨어뜨림** (절대 `-` / `err` / 공란 금지):
 >

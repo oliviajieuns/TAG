@@ -285,12 +285,22 @@ def tydiqa_generation_prefix(
 
     ``demos`` is an iterable of ``(context, question, answer)`` triples — when
     provided the evaluator becomes paper-faithful 5-shot (NAIT Appendix D).
+
+    For ``mistral_instruct`` we intentionally OMIT the leading `<s>` BOS
+    token from the returned string. Eval-side `tokenizer(prefix, ...)` runs
+    with `add_special_tokens=True` (default) which auto-prepends a single
+    BOS. If we returned `<s>[INST]...` here, the tokenizer would prepend
+    ANOTHER BOS → double-BOS sequence the model never saw at train time
+    (tokenize_alpaca for mistral_instruct uses add_special_tokens=False
+    precisely to preserve the single-BOS template). Same single-BOS shape
+    is achieved here by relying on the tokenizer's auto-BOS.
     """
     user = tydiqa_user_block(context, question, demos=demos)
     if prompt_style == "qwen_chatml":
         return f"{IM_START}user\n{user}\n{IM_END}\n{IM_START}assistant\n"
     if prompt_style == "mistral_instruct":
-        return f"<s>[INST] {user} [/INST] "
+        # Manual <s> omitted on purpose — tokenizer auto-adds BOS at eval time.
+        return f"[INST] {user} [/INST] "
     if prompt_style in ("llama_user_assistant", "deepseek_user_assistant"):
         return f"<|user|>\n{user}\n<|assistant|>\n"
     if prompt_style == "alpaca_default":
@@ -313,7 +323,11 @@ def humaneval_generation_prefix(
     code_prompt: str, *, prompt_style: str = "alpaca_default",
 ) -> str:
     """Build the generation prefix for HumanEval — raw code prompt for the
-    code-completion task. For chat-style prompts we wrap minimally."""
+    code-completion task. For chat-style prompts we wrap minimally.
+
+    See ``tydiqa_generation_prefix`` for the rationale on why
+    ``mistral_instruct`` omits a manual leading `<s>` token.
+    """
     if prompt_style == "alpaca_default":
         # Most code-completion benches expect the raw function signature
         # as the prefix, so return it as-is.
@@ -322,7 +336,10 @@ def humaneval_generation_prefix(
     if prompt_style == "qwen_chatml":
         return f"{IM_START}user\n{user}\n{IM_END}\n{IM_START}assistant\n"
     if prompt_style == "mistral_instruct":
-        return f"<s>[INST] {user} [/INST] "
+        # Manual <s> omitted — tokenizer auto-adds BOS at eval time (single
+        # BOS, matching training distribution; see tydiqa_generation_prefix
+        # for the full rationale).
+        return f"[INST] {user} [/INST] "
     if prompt_style in ("llama_user_assistant", "deepseek_user_assistant"):
         return f"<|user|>\n{user}\n<|assistant|>\n"
     raise ValueError(f"Unknown prompt_style={prompt_style!r} for HumanEval")

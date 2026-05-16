@@ -352,9 +352,17 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
                 max_new_tokens, max_new_tokens,
             )
 
+        # NAIT paper Table 2 reports HumanEval as pass@10 (n=20 sampled
+        # completions at T=0.8, p=0.95 — see Appendix D). pass@10 is therefore
+        # the canonical primary metric for paper-comparable score-board
+        # parsing. `accuracy` field aliases pass@10 so the §5-5 score reader
+        # picks it without bench-specific branching ("accuracy" 후보 키 사용).
+        # pass@1 is still recorded for diagnostic / debugging only.
         summary = {
-            "pass@1": pass_at_k.get("pass@1", 0.0),
+            "accuracy": pass_at_k.get("pass@10", 0.0),    # primary = pass@10 (NAIT)
             "pass@10": pass_at_k.get("pass@10", 0.0),
+            "pass@1":  pass_at_k.get("pass@1", 0.0),      # diagnostic, not primary
+            "primary_metric": "pass@10",
             "num_problems": len(problems),
             "benchmark": "humaneval",
             # Diagnostics — surface in JSON so a low score's cause is visible
