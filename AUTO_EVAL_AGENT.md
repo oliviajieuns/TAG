@@ -138,7 +138,7 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (5-bench 대
 
 # 🚨🚨🚨 PRE-FLIGHT CHECKLIST — 매 tick 출력 전 반드시 통과 🚨🚨🚨
 
-**아래 12개 항목을 통과 못 한 출력은 사용자에게 보고하지 말 것. 한 항목이라도 fail이면 해당 tick은 실패로 처리하고 처음부터 재생성한다.** 사용자가 반복해서 지적하는 위반 사항을 여기 모아둠.
+**아래 14개 항목(01-12 + 15a + 15)을 통과 못 한 출력은 사용자에게 보고하지 말 것. 한 항목이라도 fail이면 해당 tick은 실패로 처리하고 처음부터 재생성한다.** 사용자가 반복해서 지적하는 위반 사항을 여기 모아둠.
 
 ```
 [CHECK 01] experiments.md에 "## (6) Current" 헤더가 존재한다.
@@ -243,9 +243,9 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (5-bench 대
 에이전트가 해야 할 일:
 
 1. 매 tick (§9 cron) 마다 16 × 5 = 80개 셀 전체의 상태를 분류 (§5-4 / §0-5)
-2. 분류는 **2가지 신호의 합성**으로 한다:
-   - **filesystem state** (sealed epoch / `_latest/_complete` / summary mtime)
-   - **process state + log tail** (`pgrep` + §0-7 log polling) — 특히 `eval대기` vs `eval중` 구분은 반드시 이 두 신호로 확정
+2. 분류는 **상태별 신호 분리** (§0 정책):
+   - **학습전 / 학습중 / eval대기 / NN.NN%** (4종) — filesystem only (sealed epoch / `_latest/_complete` / summary mtime).
+   - **eval중만** process state (`pgrep`) + log mtime — 잡이 살아있는지 가장 직접적으로 확인하기 위한 예외.
 3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch (5 벤치 전부 자동, bbh는 마지막 순서):
    - **운영 가정 (사용자 명시)**: 노드에 학습이 동시에 안 돈다. eval만 진행.
    - 1셀 = 1 GPU = 1명령 (§4-1). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지.
@@ -755,7 +755,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 
 > **분류 결정 트리 — 매 tick 반드시 위에서 아래로 순회. 어느 분기에도 안 걸린 셀은 마지막에 `eval대기`로 떨어뜨림** (절대 `-` / `err` / 공란 금지):
 >
-> 분류 입력 = **filesystem + log 파일만**. pgrep 안 씀 (top banner "📁 분류 기준" 참조).
+> 분류 입력 = **eval중만 pgrep + 로그 mtime, 나머지 4종(학습전/학습중/eval대기/NN.NN%)은 filesystem + 로그 파일 mtime only** (top banner "📁 분류 기준" 참조).
 >
 > ```
 > 1. ckpt 측 _latest 부재 + flat epoch_* 부재
@@ -768,7 +768,10 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 >    (보조: train log mtime > 30분이면 Status facet2에 `HANG <sec>s` 부기,
 >     셀 자체 표기는 학습중 유지)
 >
-> 3. eval 로그 파일 mtime < 5분 이내 (= 잡이 활발히 로그 쓰는 중)
+> 3a. `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 (잡이 살아있음, 가장 직접적 신호)
+>    → eval중 [END]
+>
+> 3b. pgrep 0 + eval 로그 파일 mtime < 5분 이내 (잡이 활발히 로그 쓰는 중, pgrep 보호망)
 >    (`<eval_base>/_latest/logs/eval_*.log` 가장 최근 파일 기준)
 >    → eval중 [END]
 >
@@ -780,13 +783,13 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 > 5. eval 로그 마지막 50줄에 OOM / CUDA error / RuntimeError / Killed / Traceback 발견
 >    → eval대기 [END]  (.fail_count 증가, HISTORY.md `[eval]` 오류 엔트리 작성)
 >
-> 6. ← 위 5단계 모두 안 걸린 셀 = "학습 끝났는데 eval 결과 없는 셀"
+> 6. ← 위 단계 모두 안 걸린 셀 = "학습 끝났는데 eval 결과 없는 셀"
 >    → eval대기 [END]  (fall-through 기본값. 다음 dispatch pass에서 auto-launch)
 > ```
 >
 > **`eval대기`로 떨어진 셀은 §7 의사 코드의 `3.7 dispatch pass`에서 빈 GPU 만큼 자동 launch된다** (§0 / §4 — 학습 동시 실행 없는 운영 가정). 사용자 입력 불필요. launch 직후 §0-4 (6) Current 표에서 즉시 `eval대기` → `eval중`으로 갱신.
 >
-> 이전 tick의 분류 값을 캐싱하지 말 것. 에이전트가 매 tick dispatch한 잡은 #3 (log mtime < 5분)에서 잡혀 `eval중`, 끝나면 #4에서 잡혀 `NN.NN%` — 매 tick 처음부터 6단계 다시 돌려야 정확.
+> 이전 tick의 분류 값을 캐싱하지 말 것. 에이전트가 매 tick dispatch한 잡은 #3a (pgrep alive) 에서 잡혀 `eval중`, 끝나면 #4에서 잡혀 `NN.NN%` — 매 tick 처음부터 전체 단계를 다시 돌려야 정확.
 >
 > **재학습 감지** (§0-4 (10)): 셀이 이전 tick에 DONE(`NN.NN%`)이었어도, 현재 tick에서 위 결정 트리 #2 (sealed_n < cfg_target_epochs — 즉 사용자가 새 run을 launch해서 새 cfg.json snapshot이 더 큰 target을 가짐, 또는 새 run이 아직 epoch 안 채움) 가 만족되면 **즉시 `학습중`으로 되돌린다**. 이전 NN.NN%는 (7) Latest 표에 유지되고 (9) History에 prev=NN.NN% new=학습중 한 줄 append. (6) Current만 학습중으로 덮어씀. DONE → 학습중 → 새 NN.NN% 흐름이 매 tick 동기화됨.
 
@@ -822,7 +825,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 사용자가 한
 번에 진행 상태를 파악하는 dashboard. 셀 값은 정확히 **상태 토큰 중 하나** (§0-4 채우는 규칙과 동일 어휘):
 
-| 상태 표기 | 의미 | 분류 조건 (filesystem + log only — pgrep 안 씀, §0 정책) |
+| 상태 표기 | 의미 | 분류 조건 (eval중만 pgrep + 로그 mtime, 나머지 4종은 정적 파일 only — §0 정책) |
 |---|---|---|
 | `학습전` | 체크포인트 없음 | `<ckpt_root>/_latest`도 `_latest.txt`도 없고, legacy flat `epoch_*`도 없음. 행(=한 셀) 전체 5개 컬럼이 모두 이 표기. |
 | `학습중` | 학습 진행 중 | sealed_n (`_latest/epoch_last/_complete` sentinel 내용, 또는 legacy max epoch_N) < `<latest_run>/cfg.json`의 `train_epochs` snapshot. 행 전체 5개 컬럼 모두 이 표기. (보조 사항: train log mtime > 30분이면 Status facet2에 `HANG <sec>s` 부기, 셀 표기 자체는 학습중 유지.) |
@@ -834,7 +837,7 @@ score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 �
 
 ```python
 def status_cell(model, method, bench):
-    """파일시스템 + 로그 파일 mtime 만으로 분류 (pgrep 안 씀, §0 정책)."""
+    """eval중만 pgrep + 로그 mtime, 나머지 4종은 정적 파일 only (§0 정책)."""
     ckpt_root = f"{OUTPUT_ROOT}/main_7b/{model}/{method}"
     latest_run = resolve_latest_run(ckpt_root)
     if latest_run is None:
@@ -1451,7 +1454,7 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 
 매 tick 시작 시 (자세한 의사 코드는 §7 / §9-3):
 1. §0-7 (b) log-tail polling으로 각 셀의 train + eval 로그 상태 확인.
-2. §5-4 표의 판정 신호로 셀별 상태 결정 (filesystem + log mtime only, **pgrep 분류 금지** — §0 정책). `eval대기` vs `eval중` 구분은 §4-3 4단계 우선순위.
+2. §5-4 표의 판정 신호로 셀별 상태 결정 (eval중만 pgrep + log mtime, 나머지 4종은 정적 파일 only — §0 정책). `eval대기` vs `eval중` 구분은 §4-3 5단계 우선순위.
 3. **빈 GPU 목록 ↔ `eval대기` 큐 매칭 (dispatch pass)**:
    - free_gpus = `nvidia-smi`에서 `memory.used < 2GB` AND `pgrep tads.train` 없는 GPU.
    - eval_queue = §5-4 분류에서 `eval대기`인 셀 목록 — 단, 이미 다른 GPU에서 같은 셀이 running(`pgrep tads.eval.*<model>/<method>\.yaml`)이면 큐에서 제외.
@@ -1852,7 +1855,7 @@ CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
 bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하고, 큐에 남은 셀은
 다음 tick에서 또 빈 GPU가 생기면 launch.
 
-> # 🚨 RE-CONFIRM — 출력 직전 PRE-FLIGHT CHECKLIST 12항목 다 통과했나? (문서 최상단 참조)
+> # 🚨 RE-CONFIRM — 출력 직전 PRE-FLIGHT CHECKLIST 14항목 다 통과했나? (문서 최상단 참조)
 > 
 > ```
 > [ ] 01 ## (6) Current 헤더 존재
@@ -1867,9 +1870,12 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 > [ ] 12 코드 펜스 + monospace + CJK width 2 + pipe table 금지 + bold 금지
 > [ ] 13 (6) Status 컬럼 = 3-facet (`<history> · <오류> · <발산알람>`) ←
 >       자주 facet 1만 적고 끝내는 위반. placeholder로라도 facet 3개 유지.
+> [ ] 15a 결과 파일 광역 스캔 (4 위치) — `_latest/`만 보지 말 것 (§5-2.5).
+> [ ] 15 DISPATCH 실행 — eval대기 + 빈 GPU 존재 시 `python -m tads.eval`
+>       background launch 1회 이상 (5 벤치 전부, bbh는 마지막 순서).
 > ```
 > 
-> 하나라도 미통과 → atomic 교체 중단 → 누락 부분 §0-4 (6)/(7)/(8)/(9) 템플릿으로 재생성 → 다시 13개 체크 → 통과해야 사용자에게 보고.
+> 하나라도 미통과 → atomic 교체 중단 → 누락 부분 §0-4 (6)/(7)/(8)/(9) 템플릿으로 재생성 → 다시 14개 체크 → 통과해야 사용자에게 보고.
 
 ```
 1. cd /home/jieun/kms/tads
