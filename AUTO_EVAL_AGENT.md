@@ -69,8 +69,8 @@
 
 ## 0. Mission
 
-**학습도, eval도 사용자가 직접 돌린다. 에이전트는 어떤 명령도 자동 실행하지 않는다** (2026-05-16 정책 변경 — 이전엔 eval만은 에이전트가 auto-launch했었음).
-에이전트의 역할은 **상태 모니터링 + 점수 보드 갱신 + 보고**다.
+**학습은 사용자가 직접 돌린다. eval은 에이전트가 자동으로 돌린다** (2026-05-16 재정의 — auto-launch 복원).
+에이전트의 역할은 **상태 모니터링 + eval 자동 dispatch + 점수 보드 갱신 + 보고**다.
 
 에이전트가 해야 할 일:
 
@@ -78,14 +78,23 @@
 2. 분류는 **2가지 신호의 합성**으로 한다:
    - **filesystem state** (sealed epoch / `_latest/_complete` / summary mtime)
    - **process state + log tail** (`pgrep` + §0-7 log polling) — 특히 `eval대기` vs `eval중` 구분은 반드시 이 두 신호로 확정
-3. 결과를 `experiments.md` 점수 표 (§0-4) + status dashboard (§0-5) + per-cell HISTORY.md (§0-6)에 atomic으로 기록
-4. **체크포인트가 없는 셀(`학습전`) + eval 안 돌아간 셀(`eval대기`)** 양쪽 다 사용자에게 명시적으로 보고 — "이 셀은 사용자가 (학습 or eval) 직접 실행해야 한다"는 신호.
+3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch:
+   - **운영 가정 (사용자 명시)**: 노드에 학습이 동시에 안 돈다. eval만 진행.
+   - 1셀 = 1 GPU = 1명령 (§4-1). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지.
+   - `CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval --config ... --benchmarks ... --out_dir ... &` 형태로 백그라운드 launch.
+   - 빈 GPU가 K개면 매 tick K개 셀 launch (큐 나머지는 다음 tick — 매 tick continuous).
+   - 16셀 전부 DONE될 때까지 에이전트 혼자서 자동 진행. 사용자 개입 0.
+4. 결과를 `experiments.md` 점수 표 (§0-4) + status dashboard (§0-5) + per-cell HISTORY.md (§0-6)에 atomic으로 기록
+5. **체크포인트가 없는 셀(`학습전`)** 은 사용자에게 명시적으로 보고 — "이 셀은 사용자가 학습을 돌려야 한다"는 신호. **`eval대기` 는 보고 + 자동 launch 양쪽 다 수행**.
+
+에이전트가 **자동 실행해도 되는** 명령:
+- `python -m tads.eval --config <main_7b config> ...` (1셀 = 1명령 형식만, §4-1).
 
 에이전트가 **절대 실행하지 않는** 명령:
-- 학습 (`run_main_7b.sh`, `python -m tads.train`, `torchrun ... -m tads.train` 등)
-- eval (`python -m tads.eval`, `run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh` 등) — 새 정책
-- 가중치 / 캐시 / 결과 삭제 (`rm`, `git clean`, `mv runs/*`, `truncate` 등)
-- 환경 수정 (`pip install`, `apt`, `git config`, `crontab -e` 등)
+- 학습 (`run_main_7b.sh`, `python -m tads.train`, `torchrun ... -m tads.train` 등) — 사용자 영역.
+- batch wrapper (`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) — cascade fail / log race / _latest race 문제. 단일 셀 명령으로 분해할 것.
+- 가중치 / 캐시 / 결과 삭제 (`rm`, `git clean`, `mv runs/*`, `truncate` 등).
+- 환경 수정 (`pip install`, `apt`, `git config`, `crontab -e` 등).
 
 이미 평가된 체크포인트는 건너뛴다 (DONE 판정 후 점수만 표에 반영, 재실행 안 함).
 
@@ -1107,31 +1116,33 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/      ← 옛 학습이면 epoch_3 (legac
 
 ---
 
-## 4. Eval 실행 — **셀 1개씩 사용자가 직접 실행** (2026-05-16 정책 강화)
+## 4. Eval 실행 — **에이전트 auto-launch, 1 GPU = 1 cell** (2026-05-16 재정의)
 
-**원칙 — strict one-at-a-time**:
-- 에이전트는 **eval을 자동으로 launch하지 않는다**. NEED-EVAL 셀이 발견되면 §0-4의 "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 명시적으로 보고하고, 사용자가 직접 launch할 때까지 그대로 둔다.
-- **batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 사용 금지** — 사용자도, 에이전트도 안 씀. 이 스크립트들은 한 번에 여러 셀을 sequential/parallel로 dispatch하는데, 우리는 **셀 1개 → 직접 명령 1개**로 진행한다. wrapper의 `--parallel` 모드는 GPU 충돌 + log 파일 race + 모니터링 어려움 등 운영 문제가 있어 금지.
-- 매 tick에 에이전트가 하는 일: (1) 진행 중인 잡 상태 추적, (2) 새로 sealed된 결과 흡수, (3) eval대기 목록 갱신.
+**원칙**:
+- **에이전트가 `eval대기` 셀을 자동 launch한다.** 빈 GPU가 K개 있으면 큐에서 K개를 골라 동시에 launch — **GPU 1장당 cell 1개**, 1셀 = 1 `python -m tads.eval` 명령 = 1 백그라운드 프로세스.
+- **batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지** — 사용자도, 에이전트도. wrapper는 한 호출로 여러 셀을 sequential/parallel dispatch하는데, 우리는 셀별로 별개 PID + 별개 log + 별개 dispatch line이 필요. wrapper의 cascade fail / log race / `_latest` symlink race 문제는 1셀-1명령 분해로만 해소됨.
+- 학습은 사용자 영역. 에이전트는 `python -m tads.train` / `torchrun` / `run_main_7b.sh` 절대 실행 금지.
+- 매 tick에 에이전트가 하는 일: (1) 32 log polling (§0-7), (2) 80셀 분류, (3) eval대기 큐 만들기, (4) 빈 GPU 만큼 launch, (5) 표 atomic 갱신, (6) 사용자 보고.
 
-### 4-1. 사용자가 셀 한 개 eval할 때의 정식 명령 (1셀 = 1명령)
+### 4-1. 에이전트가 한 셀 launch할 때의 정식 명령 (1셀 = 1 GPU = 1명령)
 
 ```bash
-# ⚠️ 한 번에 한 셀만. 다음 셀로 넘어가려면 이 잡이 끝난 뒤(또는 GPU가 비는 뒤) 새 명령을 직접 입력.
-CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
+# ⚠️ 1 GPU = 1 cell. 빈 GPU K개면 K번 이 명령을 따로 실행 (각각 다른 GPU + 다른 셀).
+# 절대 한 명령에 여러 셀을 묶지 말 것.
+CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval \
     --config configs/experiments/main_7b/<model>/<method>.yaml \
     --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
     --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
     >> logs/eval_<model>_<method>.log 2>&1 &
 ```
 
-여러 셀을 같은 노드에서 동시에 돌리고 싶을 때도 **각 셀마다 별개의 `python -m tads.eval` 명령**을 다른 GPU에 핀해서 따로 입력한다 (셸 history에 한 줄씩 기록되도록). 절대 wrapper 한 번 호출로 4~16잡 한꺼번에 띄우지 말 것 — wrapper 호출은 다음과 같은 운영 문제를 만든다:
+빈 GPU가 K개일 때 에이전트는 매 tick에서 **위 명령을 K번 따로 실행**한다 (각각 다른 `<free_gpu>` + 다른 큐의 (model, method)). 절대 wrapper 한 번 호출로 K개 잡을 한꺼번에 띄우지 말 것 — wrapper 호출은 다음과 같은 운영 문제를 만든다:
 
 | Wrapper 사용 시 문제 | 1셀-1명령으로 우회되는 이유 |
 |---|---|
 | 한 잡 fail이 다른 잡까지 cascade | 잡마다 독립 PID → 한 잡 kill해도 나머지 영향 없음 |
 | `tee -a logs/...log` 공유 → 로그 race | 셀마다 별개 log path |
-| 같은 셀에 두 번 launch (큐 알고리즘 vs 사용자) | 사용자가 명시적으로 한 번씩만 입력 |
+| 같은 셀에 두 번 launch (큐 알고리즘 vs 사용자) | 에이전트가 dispatch 전 pgrep 체크로 중복 방지 |
 | OOM / hang 진단 시 어느 잡인지 모호 | pgrep 패턴이 셀별로 명확하게 분리됨 |
 | `_latest` symlink atomic 갱신이 여러 잡과 race | 한 셀당 한 잡이라 race 자체가 없음 |
 
@@ -1172,15 +1183,23 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 - `tads.eval`이 자동으로 `runs/<eval_tag>/` 생성 + `_complete` sentinel + `_latest` 갱신 (§5-1 history layout).
 - 학습 중인 GPU는 피할 것 (OOM).
 
-### 4-2. 에이전트가 매 tick 할 일 — eval **모니터링** (실행 아님)
+### 4-2. 에이전트가 매 tick 할 일 — polling → 분류 → dispatch → report
 
-매 tick 시작 시:
-1. §0-7 (b) log-tail polling으로 각 셀의 eval 로그 상태 확인.
-2. §5-4 표의 5가지 판정 신호로 셀별 상태 결정 (특히 `eval대기` vs `eval중` 구분 — `pgrep` + log mtime 5분 룰).
-3. 결과를 `experiments.md` §0-4 점수표 + §0-5 dashboard + §0-6 HISTORY.md에 atomic 반영.
-4. 새로 sealed된 eval(`_latest/_complete` 등장 + summary mtime > sealed epoch)은 즉시 `NN.NN%`로 전환.
-5. `eval대기` 셀은 §0-4 "사용자 액션 필요 — eval 미실행 셀" 섹션에 추가/유지.
-6. 학습 중인 GPU / 사용자가 launch해둔 eval 잡은 모두 그대로 둠. **kill / restart / dispatch 금지.**
+매 tick 시작 시 (자세한 의사 코드는 §7 / §9-3):
+1. §0-7 (b) log-tail polling으로 각 셀의 train + eval 로그 상태 확인.
+2. §5-4 표의 5가지 판정 신호로 셀별 상태 결정 — `eval대기` vs `eval중` 구분은 §4-3.
+3. **빈 GPU 목록 ↔ `eval대기` 큐 매칭 (dispatch pass)**:
+   - free_gpus = `nvidia-smi`에서 `memory.used < 2GB` AND `pgrep tads.train` 없는 GPU.
+   - eval_queue = §5-4 분류에서 `eval대기`인 셀 목록 — 단, 이미 다른 GPU에서 같은 셀이 running(`pgrep tads.eval.*<model>/<method>\.yaml`)이면 큐에서 제외.
+   - while free_gpus and eval_queue:
+       * gpu = free_gpus.pop()
+       * cell = eval_queue.pop_front()
+       * §4-1 명령 형식으로 background launch (1 GPU = 1 cell = 1 명령).
+       * `sleep 0.5` (CUDA init race 회피).
+4. 결과를 `experiments.md` §0-4 점수표 4종(Current/Latest/Best/History) + §0-5 dashboard에 atomic 반영.
+5. 새로 sealed된 eval(`_latest/_complete` + summary mtime > sealed epoch)은 즉시 `NN.NN%`로 전환.
+6. `eval대기` 셀이 launch 가능했지만 빈 GPU가 모자라 큐에 남았으면 §0-4 "사용자 액션 필요" 섹션 대신 "다음 tick 자동 dispatch 예정" 섹션에 그 목록 표기. 사용자가 직접 띄울 필요 없음 (단, 사용자가 수동으로 띄워도 §4-3 1번에서 잡혀 중복 launch 안 됨).
+7. 학습 중인 GPU는 절대 건드리지 말 것 — dispatch pass의 free_gpus 필터에서 `tads.train` 점유 GPU 제외.
 
 ### 4-3. eval대기 vs eval중 — 매 tick 재판정 (캐싱 금지)
 
@@ -1614,8 +1633,52 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
            f"reason={infer_reason(model, method, sig)}  source={pick_source(model, method, sig)}"
        )
 
+3.7 dispatch pass — 빈 GPU 만큼 eval 자동 launch (1 GPU = 1 cell, eval only)
+   # 운영 가정 (사용자 명시): 학습은 모두 끝났고, 노드에는 eval만 돈다.
+   # 에이전트가 eval대기 큐를 매 tick continuous하게 dispatch — 사용자 개입 0.
+   eval_queue = [(m, x) for (m, x), v in status.items() if v == "eval대기"]
+   # 이미 다른 GPU에서 같은 셀이 running이면 큐에서 제외 (중복 launch 방지).
+   eval_queue = [
+       (m, x) for (m, x) in eval_queue
+       if not pgrep_alive(f"python.*-m tads.eval.*{m}/{x}\\.yaml")
+   ]
+
+   # 빈 GPU 목록 = nvidia-smi에서 memory.used < 2GB. (학습 동시 실행 가정 없음 →
+   # tads.train 필터 불필요. 단 안전망으로 pgrep tads.train 결과를 그대로
+   # 함께 출력해 두면 운영 변화 감지 가능 — log만 남기고 free 판정엔 영향 X.)
+   free_gpus = [
+       idx for idx, mem_used in nvidia_smi_query("memory.used")
+       if mem_used < 2048
+   ]
+
+   # 1 GPU = 1 cell. K개 빈 GPU면 K개 launch만 (큐 나머지는 다음 tick에서 또).
+   for gpu in free_gpus:
+       if not eval_queue:
+           break
+       m, x = eval_queue.pop(0)
+       cmd = (
+           f'CUDA_VISIBLE_DEVICES={gpu} nohup python -m tads.eval '
+           f'--config configs/experiments/main_7b/{m}/{x}.yaml '
+           f'--benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh '
+           f'--out_dir ${{EVAL_RESULTS_ROOT}}/{m}/{x} '
+           f'>> logs/eval_{m}_{x}.log 2>&1 &'
+       )
+       subprocess.Popen(cmd, shell=True)
+       time.sleep(0.5)   # CUDA init race 회피
+       log(f"[tick] dispatched {m}/{x} -> GPU {gpu}")
+       # 즉시 셀 상태를 eval중으로 표 표기 (다음 tick까지 기다리지 말 것).
+       status[(m, x)] = "eval중"
+       updates[(m, x)]["current"] = "eval중"
+       updates[(m, x)]["history_row"] = (
+           f"{now}  cell={m}/{x}  bench=ALL  prev=eval대기  new=eval중  "
+           f"reason=auto-dispatch (GPU {gpu})  source=logs/eval_{m}_{x}.log"
+       )
+   # 매 tick continuous: 큐가 빌 때까지 tick마다 free GPU만큼 자동 launch.
+   # 사용자가 따로 명령 입력할 필요 없음 — 16셀 전체가 DONE될 때까지
+   # 에이전트 혼자서 자동으로 진행.
+
 4. report pass — experiments.md + dashboard + 사용자 액션 섹션 atomic 갱신
-   #  학습/eval auto-launch 없음 (§0 정책).
+   #  eval auto-launch는 위 3.7에서 처리됨 (§0 / §4). 학습 auto-launch는 절대 금지.
 
    ## STRUCTURE — MUST 5개 섹션 모두 갱신 (§0-4 절대 비교섭 규칙):
    ## (6) Current      — 5종 어휘 + Status + Params, 80 cells
@@ -1646,8 +1709,9 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 
 ## 8. 금지 사항 / 함정
 
-- **eval / 학습을 자동 launch하지 말 것** (§0 정책). NEED-EVAL 셀은 `experiments.md` 상단 "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 보고만 하고 사용자가 직접 launch할 때까지 그대로 둔다. `nohup python -m tads.eval ...`, `torchrun`, `run_main_7b.sh`, `run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh` 호출 일체 금지.
-- **eval은 1셀 = 1명령으로만 실행** (§4 정책 강화). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`)는 사용자도 쓰지 말 것 — 여러 셀을 한 번에 dispatch하면 log race, GPU 충돌, fail cascade, _latest symlink race 등 운영 문제가 누적. 셀 여러 개를 동시에 돌릴 때도 각 셀마다 별개 `python -m tads.eval` 명령을 따로 입력 (다른 GPU에 핀). for 루프로 여러 셀을 한꺼번에 띄우는 패턴도 금지.
+- **eval은 에이전트가 자동 launch한다** (§0 / §4 재정의, 2026-05-16). 매 tick `eval대기` 셀과 빈 GPU를 매칭해 셀별로 `python -m tads.eval`을 nohup background launch. 사용자 개입 0.
+- **학습은 절대 자동 launch 금지** — `python -m tads.train`, `torchrun`, `run_main_7b.sh` 호출은 사용자만 가능. NEED-TRAIN 셀은 보고만.
+- **eval은 1셀 = 1 GPU = 1명령으로만 실행** (§4 정책). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`)는 에이전트도 사용자도 쓰지 말 것 — wrapper의 cascade fail / log race / `_latest` symlink race 문제. 셀 여러 개를 동시에 돌릴 때도 각 셀마다 별개 `python -m tads.eval` 명령을 다른 GPU에 핀해서 따로 실행. for 루프로 여러 셀을 한꺼번에 띄우는 패턴 금지.
 - **HF offline 모드를 끄지 말 것**. `setup_env.sh`가 `HF_DATASETS_OFFLINE=1` 등을 강제하는 이유는 클러스터 노드가 outbound HTTPS가 없어서 켜면 캐시락이 깨지기 때문.
 - **체크포인트를 절대 자동 삭제하지 말 것**. legacy 스크립트의 `CLEANUP_EARLY_EPOCHS` 옵션은 **opt-in이고 기본값 0**. 에이전트는 건드리지 말 것.
 - **`OUTPUT_ROOT`와 `EVAL_RESULTS_ROOT`를 혼동하지 말 것**. checkpoint는 `OUTPUT_ROOT/main_7b/...`, 결과는 `EVAL_RESULTS_ROOT/<model>/<method>` (접두어 없음).
@@ -1893,22 +1957,49 @@ if [ ${#free_gpus[@]} -eq 0 ]; then
 fi
 echo "[tick $(date -Is)] free GPUs (참고용): ${free_gpus[*]}  |  eval대기 큐: ${need[*]}"
 
-# **DO NOT LAUNCH** — 2026-05-16 정책 변경 (§0). 에이전트는 eval을 자동
-# 실행하지 않는다. 사용자가 직접 launch할 셀 목록을 experiments.md 상단
-# "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 출력하는 것까지만
-# 한다. 아래 dispatch pass는 의도적으로 비워둠 — 향후 정책이 다시 바뀌어
-# auto-launch가 필요해지면 이 자리에 복원.
-launched_pids=()    # 항상 비어있음 — 호환성 위해 변수만 유지
+# Dispatch pass — 빈 GPU 만큼 자동 launch (1 GPU = 1 cell). 2026-05-16
+# 재정의: eval은 에이전트가 자동 실행 (운영 가정: 학습 동시 실행 없음).
+# wrapper 호출 금지 — 셀별 `python -m tads.eval` 명령을 직접 nohup &.
+launched_pids=()
+LAUNCH_LOG="${LOG_DIR}/auto_dispatch_$(date +%Y%m%d).log"
+for gpu in "${free_gpus[@]}"; do
+  [ ${#need[@]} -eq 0 ] && break
+  cell="${need[0]}"; need=("${need[@]:1}")
+  model="${cell%/*}"; method="${cell#*/}"
 
-echo "[tick $(date -Is)] eval대기 ${#need[@]} cells — 사용자 수동 launch 대기:"
-for cell in "${need[@]}"; do
-  echo "  - $cell"
+  # 같은 셀이 이미 어디서 돌고 있으면 skip (중복 launch 방지).
+  if pgrep -af "python -m tads.eval.*main_7b/${model}/${method}\.yaml" >/dev/null; then
+    echo "[tick $(date -Is)] skip ${cell} — already running" | tee -a "$LAUNCH_LOG"
+    continue
+  fi
+
+  cfg="configs/experiments/main_7b/${model}/${method}.yaml"
+  out_dir="${EVAL_RESULTS_ROOT}/${model}/${method}"
+  log_path="${LOG_DIR}/eval_${model}_${method}.log"
+  echo "[tick $(date -Is)] dispatch ${cell} -> GPU ${gpu}" | tee -a "$LAUNCH_LOG"
+  CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tads.eval \
+      --config "$cfg" \
+      --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+      --out_dir "$out_dir" \
+      >> "$log_path" 2>&1 &
+  pid=$!
+  launched_pids+=("$pid:${cell}:gpu${gpu}")
+  echo "  launched pid=$pid" | tee -a "$LAUNCH_LOG"
+  sleep 0.5    # CUDA init race 회피
 done
 
-# 직전 tick에 사용자가 띄운 eval 잡들의 종료 회수: 별도 pidfile 관리 없이
+if [ ${#launched_pids[@]} -gt 0 ]; then
+  echo "[tick $(date -Is)] launched: ${launched_pids[*]}" | tee -a "$LAUNCH_LOG"
+fi
+if [ ${#need[@]} -gt 0 ]; then
+  echo "[tick $(date -Is)] queue remaining (다음 tick에 자동 dispatch): ${need[*]}"
+fi
+
+# 직전 tick에 에이전트가 띄운 eval 잡들의 종료 회수: 별도 pidfile 관리 없이
 # §5-4 표 5단계로 매 tick 재판정해서 표 갱신한다. eval.py가 sentinel +
 # _latest를 자체 처리하므로 외부 마커 작성 불필요. exit !=0인 잡은 다음
 # 분류 pass에서 로그 tail에 OOM/Traceback이 잡혀 .fail_count 증가 (§10-3).
+# 16셀 전부 DONE되면 큐가 영구적으로 비어 dispatch pass는 no-op.
 ```
 
 ### 9-4. cron 디버깅 체크리스트
