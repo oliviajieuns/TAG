@@ -5,6 +5,68 @@
 
 ---
 
+# 🚨🚨🚨 PRE-FLIGHT CHECKLIST — 매 tick 출력 전 반드시 통과 🚨🚨🚨
+
+**아래 12개 항목을 통과 못 한 출력은 사용자에게 보고하지 말 것. 한 항목이라도 fail이면 해당 tick은 실패로 처리하고 처음부터 재생성한다.** 사용자가 반복해서 지적하는 위반 사항을 여기 모아둠.
+
+```
+[CHECK 01] experiments.md에 "## (6) Current" 헤더가 존재한다.
+[CHECK 02] experiments.md에 "## (7) Latest" 헤더가 존재한다.        ← 자주 빠뜨림
+[CHECK 03] experiments.md에 "## (8) Best" 헤더가 존재한다.           ← 자주 빠뜨림
+[CHECK 04] experiments.md에 "## (9) History" 헤더가 존재한다.        ← 자주 빠뜨림
+[CHECK 05] (6) Current 코드펜스 안에 "Params" 컬럼이 헤더로 들어있다.
+[CHECK 06] (7) Latest 코드펜스 안에 "Params" 컬럼이 헤더로 들어있다.
+[CHECK 07] (8) Best 코드펜스 안에 "Params" 컬럼이 헤더로 들어있다.
+[CHECK 08] (6) Current 80개 셀(16행 × 5벤치 = 80개 값)에 단 하나의
+            `-` / `err` / 공란이 없다 — 전부 5종 어휘(학습전/학습중/
+            eval대기/eval중/NN.NN%) 중 하나.
+[CHECK 09] (9) History의 이번 tick 변경분이 newest-at-bottom으로
+            append 되었다. 변경 0개면 history append 없음 OK.
+[CHECK 10] 사용자가 launch한 학습 프로세스(`pgrep python.*tads.train.
+            *<m>/<x>.yaml`)가 alive면 그 셀은 (6)에서 무조건 `학습중`.
+            DONE 점수였더라도 학습중으로 되돌려 놔야 함 (§0-4 (10) 재학습
+            감지 규약).
+[CHECK 11] (8) Best는 새 NN.NN% > 직전 best일 때만 갱신. 새 점수가
+            낮으면 직전 best 그대로 유지 — 절대 덮어쓰지 말 것.
+[CHECK 12] 표 형식: 코드 펜스(```) + monospace 공백 정렬 + `=======`
+            separator + CJK 글자 visual width 2 cell 계산 + markdown
+            pipe table 금지 (§0-4 "MD 파일 표 작성 규칙 6항"). bold
+            (`**...**`) 표 셀 안에 절대 쓰지 말 것.
+```
+
+**한 항목이라도 fail이면 절대 사용자에게 'tick 완료'로 보고하지 말 것.** 누락된 섹션 / 잘못된 셀 / 빠진 컬럼을 §0-4 (6)/(7)/(8)/(9) 템플릿대로 다시 채워서 atomic 교체. 3회 재시도 후에도 fail이면 보고 중단하고 "표 구조 깨짐 — 사용자 확인 필요" 알람만 보냄.
+
+## 자주 발생하는 위반 패턴 (DO NOT)
+
+```
+❌ Current만 만들고 끝낸다.                    → CHECK 02/03/04 fail
+❌ "최신 점수 표" / "Best Scores" / "변경 로그"  → CHECK 01-04 fail (헤더 이름 변형)
+   같이 헤더 이름을 한국어/영어로 살짝 바꾼다.
+❌ Params 컬럼을 빼먹는다.                     → CHECK 05/06/07 fail
+❌ 셀에 `-` 그대로 남긴다.                     → CHECK 08 fail
+❌ 셀에 `err` / `error` / 공란 쓴다.          → CHECK 08 fail
+❌ 학습 alive인데 셀이 직전 NN.NN%로 남아 있다. → CHECK 10 fail
+❌ 새 NN.NN%가 직전보다 낮은데 Best 덮어쓴다.  → CHECK 11 fail
+❌ markdown pipe table(| ... |)로 그린다.       → CHECK 12 fail
+❌ "Pre-flight checklist 통과했음" 거짓 보고.  → 신뢰성 파괴, 절대 금지.
+```
+
+## 올바른 패턴 (DO)
+
+```
+✓ 매 tick 첫 단계: §0-7 32 log polling → 분류 → 3.5 transitions →
+   4. report pass의 atomic write 전에 CHECK 01-12 실행.
+✓ CHECK fail 발견 즉시 누락 섹션을 §0-4 템플릿대로 생성하고 다시 검증.
+✓ 4표 + History 5개 섹션을 항상 같은 순서로(experiments.md 맨 아래에
+   (6) Current → (7) Latest → (8) Best → (9) History 순서).
+✓ 셀이 학습중이면 (6) Current만 학습중으로 덮어쓰고 (7)/(8)은 이전
+   값 유지. (9) History에 prev=이전값 new=학습중 한 줄 append.
+✓ 새 DONE NN.NN%면 (6)/(7) 갱신, (8)은 max() 비교 후 더 높을 때만
+   갱신, (9)에 append.
+```
+
+---
+
 ## 0. Mission
 
 **학습도, eval도 사용자가 직접 돌린다. 에이전트는 어떤 명령도 자동 실행하지 않는다** (2026-05-16 정책 변경 — 이전엔 eval만은 에이전트가 auto-launch했었음).
@@ -1448,6 +1510,23 @@ CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
 **원칙 재강조**: 셀 1개 = GPU 1장 = `python -m tads.eval` 백그라운드 프로세스 1개.
 bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하고, 큐에 남은 셀은
 다음 tick에서 또 빈 GPU가 생기면 launch.
+
+> # 🚨 RE-CONFIRM — 출력 직전 PRE-FLIGHT CHECKLIST 12항목 다 통과했나? (문서 최상단 참조)
+> 
+> ```
+> [ ] 01 ## (6) Current 헤더 존재
+> [ ] 02 ## (7) Latest 헤더 존재         ← 자주 누락. 반드시 확인.
+> [ ] 03 ## (8) Best 헤더 존재           ← 자주 누락. 반드시 확인.
+> [ ] 04 ## (9) History 헤더 존재        ← 자주 누락. 반드시 확인.
+> [ ] 05/06/07 (6)/(7)/(8)에 Params 컬럼 있음
+> [ ] 08 (6) Current 80개 셀에 `-` / `err` / 공란 0개
+> [ ] 09 (9) History 이번 tick 변경분 append 됨
+> [ ] 10 학습 alive인 셀은 (6)에서 `학습중`, (7)/(8) 이전 값 유지
+> [ ] 11 (8) Best는 max() 비교만 — 낮은 새 점수로 덮어쓰지 말 것
+> [ ] 12 코드 펜스 + monospace + CJK width 2 + pipe table 금지 + bold 금지
+> ```
+> 
+> 하나라도 미통과 → atomic 교체 중단 → 누락 부분 §0-4 (6)/(7)/(8)/(9) 템플릿으로 재생성 → 다시 12개 체크 → 통과해야 사용자에게 보고.
 
 ```
 1. cd /home/jieun/kms/tads
