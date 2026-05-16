@@ -17,6 +17,31 @@
 
 **BBH는 셀당 ~15h+ 걸리는 무거운 benchmark라 에이전트가 자동 launch 하지 않는다** (2026-05-17 분리 정책). 4개만 자동 — mmlu / gsm8k / humaneval / tydiqa.
 
+## 📁 분류 기준 = 파일시스템 + 로그 파일 (pgrep 안 씀)
+
+**80개 셀의 상태 분류는 디스크에 남은 영구 흔적만 본다** (2026-05-17 정책 강화). 사용자 지적: "프로세스 기준으로 표를 업데이트 하지 말 것. 저장된 ckpt와 저장된 로그 파일 기준으로 업데이트."
+
+분류 입력 = **3가지 디스크 신호만**:
+1. **체크포인트 파일** — `<ckpt_root>/_latest/epoch_last/_complete` (sealed sentinel + 내용 = epoch 번호).
+2. **학습 로그 파일 mtime + 내용** — `<ckpt_root>/_latest/logs/train_*_r0.log` 의 mtime / tail.
+3. **eval 결과 파일 + eval 로그 파일** — `<eval_base>/_latest/_complete`, `<eval_base>/_latest/<label>-<bench>.json`, `<eval_base>/_latest/logs/eval_*.log` mtime / tail.
+
+분류에 **pgrep을 쓰지 않는다**. pgrep은:
+- ✗ 분류 입력 ❌ (zombie/orphan 잡힐 수 있음, tick 사이 종료된 잡 놓침, 표가 cron tick보다 빠르게 흔들림).
+- ✓ §7 3.7 dispatch pass의 중복 launch 방지 dedup에만 사용 (동일 cell이 이미 alive면 새로 띄우지 말 것). 분류 결과(표 셀 값) 에는 영향 X.
+
+새 분류 규칙 (filesystem + log only):
+
+| 상태 | 판정 신호 |
+|---|---|
+| **학습전** | `<ckpt_root>/_latest` 도 `_latest.txt` 도 legacy flat `epoch_*` 도 없음 |
+| **학습중** | sealed_n < cfg.train_epochs. (a) 학습 로그 mtime < 30분 = 진행 중. (b) mtime > 30분 = 학습 중단 의심이지만 표기는 `학습중` 유지, Status facet2 에 `HANG <sec>s` 부기 |
+| **eval중** | sealed == target AND `_latest/logs/eval_*.log` 파일이 있고 mtime < 5분 (= 잡이 활발히 로그 쓰는 중) |
+| **NN.NN%** (DONE) | sealed == target AND `_latest/_complete` 존재 AND `_latest/<label>-<bench>.json` 존재 AND summary mtime > sealed epoch mtime |
+| **eval대기** | sealed == target AND DONE 조건 미충족 AND eval 로그 mtime ≥ 5분 (또는 로그 없음) |
+
+**ckpt + log 가 영구 흔적이라 그것만 본다**. 프로세스가 죽었어도 ckpt 와 log 는 남고, 잡이 새로 시작되면 즉시 로그 mtime 이 갱신되어 자연스럽게 `eval중` 으로 잡힘. tick 사이 짧은 시간 동안에 잡이 시작-종료-실패하는 케이스도 로그 mtime 으로 잘 보임 (5분 임계).
+
 ## 🔁 벤치 하나씩 순차 dispatch (동시 묶기 금지)
 
 **`--benchmarks` 인자에 항상 단일 벤치 하나만 넣는다** (2026-05-17 분리 정책). 4개를 한 명령에 묶지 말 것:
