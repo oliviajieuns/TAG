@@ -260,51 +260,158 @@ def _parse_tydiqa_file(path: str) -> List[Dict[str, Any]]:
     return _parse_squad_file(path)
 
 
+_DEV_KEYWORDS = ("validation", "valid", "dev")
+_TRAIN_KEYWORDS = ("train",)
+
+
+def _classify_split(basename: str) -> Optional[str]:
+    """Return ``"dev"`` / ``"train"`` based on filename keyword, else None.
+
+    Order matters: check ``train`` BEFORE ``valid`` because some hashed
+    HF shard names contain "train" without a leading separator.
+    Case-insensitive.
+    """
+    name = basename.lower()
+    # Strip the extension(s) so we only match keywords in the stem
+    # (e.g. "validation-00000-of-00001.parquet" stem == "validation-00000-of-00001").
+    for ext in (".parquet", ".jsonl", ".json"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+            break
+    for kw in _TRAIN_KEYWORDS:
+        if kw in name:
+            return "train"
+    for kw in _DEV_KEYWORDS:
+        if kw in name:
+            return "dev"
+    return None
+
+
+def _glob_split_files(data_dir: str, ext: str) -> Tuple[Optional[str], Optional[str]]:
+    """Walk ``data_dir`` looking for files matching ``*<ext>`` and classify
+    each by filename keyword. Returns ``(dev_path, train_path)``.
+
+    Searches the top level AND one sub-directory deep (HF datasets cache
+    layouts sometimes nest as ``<repo>/data/*.parquet``). The first match
+    of each kind wins.
+    """
+    import glob as _glob
+    dev_path: Optional[str] = None
+    train_path: Optional[str] = None
+
+    patterns = [
+        os.path.join(data_dir, f"*{ext}"),
+        os.path.join(data_dir, "*", f"*{ext}"),
+        os.path.join(data_dir, "*", "*", f"*{ext}"),
+    ]
+    for pat in patterns:
+        for p in sorted(_glob.glob(pat)):
+            kind = _classify_split(os.path.basename(p))
+            if kind == "dev" and dev_path is None:
+                dev_path = p
+            elif kind == "train" and train_path is None:
+                train_path = p
+        if dev_path is not None and train_path is not None:
+            break
+    return dev_path, train_path
+
+
 def _resolve_split_paths(data_dir: str) -> Tuple[str, str, str]:
     """Return (dev_path, train_path, base_dir).
 
     Accepts either:
-      - a direct .json or .parquet path (used as dev_path; train mate is
-        looked up in the same directory using the matching extension),
-      - or a directory containing either the legacy v1.1 JSON files
-        (``tydiqa-goldp-v1.1-dev.json`` / ``…-train.json``) OR the HF
-        parquet layout (``validation-00000-of-00001.parquet`` /
-        ``train-00000-of-00001.parquet``).
+      - a direct .json / .jsonl / .parquet path (used as dev_path; train
+        mate is looked up in the same directory using the matching
+        extension and keyword), or
+      - a directory containing TyDiQA files in any of the following
+        common layouts (preferred order: parquet > legacy JSON):
+            * canonical HF parquet — ``validation-00000-of-00001.parquet`` /
+              ``train-00000-of-00001.parquet``,
+            * any parquet whose filename contains ``validation``/``valid``/``dev``
+              vs ``train`` keyword (e.g. ``dev.parquet`` + ``train.parquet``,
+              or ``tydiqa-dev-<hash>.parquet``),
+            * legacy v1.1 SQuAD JSON — ``tydiqa-goldp-v1.1-dev.json`` /
+              ``tydiqa-goldp-v1.1-train.json``,
+            * fall-back glob: any JSON / JSONL file matching the dev/train
+              keyword.
 
-    Picks the first layout that actually has the dev file present; raises
-    a clear FileNotFoundError listing every checked location if nothing
-    matches.
+    The previous resolver required EXACT canonical filenames and silently
+    fell through to the legacy JSON branch when parquet was present but
+    named differently (`validation.parquet`, `dev.parquet`, …) — and then
+    crashed on a missing JSON. This broader matcher picks parquet first
+    whenever any parquet with a recognisable keyword is on disk.
     """
     if data_dir.endswith((".json", ".jsonl", ".parquet")):
         dev_path = data_dir
         base_dir = os.path.dirname(data_dir) or "."
         if data_dir.endswith(".parquet"):
-            train_path = os.path.join(base_dir, "train-00000-of-00001.parquet")
+            # Try canonical name first, then keyword-glob within the same dir.
+            train_canon = os.path.join(base_dir, "train-00000-of-00001.parquet")
+            if os.path.exists(train_canon):
+                train_path = train_canon
+            else:
+                _, train_path = _glob_split_files(base_dir, ".parquet")
+                if train_path is None:
+                    train_path = train_canon  # leave the missing-file diag to load time
         elif data_dir.endswith(".jsonl"):
-            # Mirror the dev basename for the train file when JSONL.
             stem = os.path.basename(data_dir).replace("dev", "train", 1)
             train_path = os.path.join(base_dir, stem)
         else:
             train_path = os.path.join(base_dir, "tydiqa-goldp-v1.1-train.json")
         return dev_path, train_path, base_dir
 
-    candidates = [
-        # HF parquet layout (current; preferred since the GCS JSON URLs 403).
-        (
-            os.path.join(data_dir, "validation-00000-of-00001.parquet"),
-            os.path.join(data_dir, "train-00000-of-00001.parquet"),
-        ),
-        # Legacy v1.1 JSON layout (still supported if the user has these
-        # files cached locally from before the bucket was locked down).
-        (
-            os.path.join(data_dir, "tydiqa-goldp-v1.1-dev.json"),
-            os.path.join(data_dir, "tydiqa-goldp-v1.1-train.json"),
-        ),
-    ]
-    for dev, train in candidates:
-        if os.path.exists(dev):
-            return dev, train, data_dir
-    tried = "\n  ".join(c[0] for c in candidates)
+    # Directory mode. Prefer parquet, then legacy canonical JSON, then
+    # broad keyword glob.
+    canonical_parquet = (
+        os.path.join(data_dir, "validation-00000-of-00001.parquet"),
+        os.path.join(data_dir, "train-00000-of-00001.parquet"),
+    )
+    if os.path.exists(canonical_parquet[0]):
+        # Canonical names — keep train-canonical even if missing; load
+        # time will surface a clear "no demos → 0-shot" path.
+        return canonical_parquet[0], canonical_parquet[1], data_dir
+
+    # Try parquet glob (any filename containing dev/train keywords).
+    p_dev, p_train = _glob_split_files(data_dir, ".parquet")
+    if p_dev is not None:
+        logger.info(
+            "TyDiQA: matched parquet by keyword (dev=%s, train=%s) — "
+            "exact canonical filenames not found, but a recognisable "
+            "parquet pair was present.",
+            os.path.basename(p_dev),
+            os.path.basename(p_train) if p_train else "(none — will run 0-shot)",
+        )
+        return p_dev, (p_train or canonical_parquet[1]), data_dir
+
+    # Legacy canonical JSON.
+    legacy_json = (
+        os.path.join(data_dir, "tydiqa-goldp-v1.1-dev.json"),
+        os.path.join(data_dir, "tydiqa-goldp-v1.1-train.json"),
+    )
+    if os.path.exists(legacy_json[0]):
+        return legacy_json[0], legacy_json[1], data_dir
+
+    # Broad JSON / JSONL glob as last resort.
+    for ext in (".jsonl", ".json"):
+        j_dev, j_train = _glob_split_files(data_dir, ext)
+        if j_dev is not None:
+            logger.warning(
+                "TyDiQA: matched %s by keyword (dev=%s, train=%s) — "
+                "neither canonical parquet nor legacy SQuAD JSON found. "
+                "If a parquet file exists, please verify its filename "
+                "contains 'validation'/'valid'/'dev' or 'train' and re-run.",
+                ext, os.path.basename(j_dev),
+                os.path.basename(j_train) if j_train else "(none — will run 0-shot)",
+            )
+            return j_dev, (j_train or legacy_json[1]), data_dir
+
+    tried = "\n  ".join((
+        canonical_parquet[0],
+        f"{data_dir}/*.parquet  (keyword glob: validation/valid/dev/train)",
+        legacy_json[0],
+        f"{data_dir}/*.json  (keyword glob)",
+        f"{data_dir}/*.jsonl  (keyword glob)",
+    ))
     # Surface enough state to pinpoint the failure cause: missing dir,
     # missing files, wrong env var, wrong permissions. The previous
     # message only showed candidate paths, which left the user guessing
