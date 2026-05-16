@@ -43,42 +43,90 @@ if [ ! -w "$TARGET" ]; then
   exit 2
 fi
 
-HF_BASE="https://huggingface.co/datasets/google-research-datasets/tydiqa/resolve/main/secondary_task"
+# Two candidate URL patterns per split — HF dataset repos sometimes have
+# raw parquet committed to main (#1), and sometimes only the auto-converted
+# parquet branch (#2). We try #1 first; if that 404's, fall back to #2.
+# (Some weeks one works and the other doesn't; both have been observed.)
+#
+# refs%2Fconvert%2Fparquet  is the URL-encoded form of refs/convert/parquet
+# — the special read-only branch HF maintains with auto-converted parquet
+# shards for every dataset.
 
-# Connectivity probe — if HF is unreachable from this host (cluster
-# firewall, DNS, proxy misconfig) bail out NOW with a clear message
-# instead of hitting curl four times under --retry.
-if ! curl -fLsS -o /dev/null --max-time 10 -I "$HF_BASE/validation-00000-of-00001.parquet" 2>/dev/null; then
-  echo "[error] cannot reach huggingface.co from this host. Probed:" >&2
-  echo "          $HF_BASE/validation-00000-of-00001.parquet" >&2
-  echo "        Common causes on cluster nodes: outbound HTTPS blocked," >&2
-  echo "        no DNS, or a corporate proxy that needs HTTP(S)_PROXY env vars." >&2
-  echo "        If the cluster has a local HF mirror, set HF_ENDPOINT or" >&2
-  echo "        download the two parquet files manually from a login node." >&2
-  exit 3
-fi
-
-declare -A URLS=(
-  [validation-00000-of-00001.parquet]="$HF_BASE/validation-00000-of-00001.parquet"
-  [train-00000-of-00001.parquet]="$HF_BASE/train-00000-of-00001.parquet"
+declare -A CANDIDATES_DEV=(
+  [main]="https://huggingface.co/datasets/google-research-datasets/tydiqa/resolve/main/secondary_task/validation-00000-of-00001.parquet"
+  [refs]="https://huggingface.co/datasets/google-research-datasets/tydiqa/resolve/refs%2Fconvert%2Fparquet/secondary_task/validation/0000.parquet"
+)
+declare -A CANDIDATES_TRAIN=(
+  [main]="https://huggingface.co/datasets/google-research-datasets/tydiqa/resolve/main/secondary_task/train-00000-of-00001.parquet"
+  [refs]="https://huggingface.co/datasets/google-research-datasets/tydiqa/resolve/refs%2Fconvert%2Fparquet/secondary_task/train/0000.parquet"
 )
 
-for fname in "${!URLS[@]}"; do
+# Connectivity probe — try the FIRST candidate of each split. If both
+# patterns are unreachable we still bail (no point retrying 4 URLs).
+_probe_url=""
+for url in "${CANDIDATES_DEV[main]}" "${CANDIDATES_DEV[refs]}"; do
+  if curl -fLsS -o /dev/null --max-time 10 -I "$url" 2>/dev/null; then
+    _probe_url="$url"
+    break
+  fi
+done
+if [ -z "$_probe_url" ]; then
+  echo "[error] cannot reach any TyDiQA parquet URL on huggingface.co." >&2
+  echo "        Tried:" >&2
+  echo "          ${CANDIDATES_DEV[main]}" >&2
+  echo "          ${CANDIDATES_DEV[refs]}" >&2
+  echo "        Common causes on cluster nodes: outbound HTTPS blocked," >&2
+  echo "        no DNS, or a corporate proxy that needs HTTP(S)_PROXY env vars." >&2
+  echo "        Manual alternatives:" >&2
+  echo "          1) download from a login node + scp to TYDIQA_DATA_DIR" >&2
+  echo "          2) python: " >&2
+  echo "             from datasets import load_dataset" >&2
+  echo "             ds = load_dataset('google-research-datasets/tydiqa', 'secondary_task')" >&2
+  echo "             ds['validation'].to_parquet('$TARGET/validation-00000-of-00001.parquet')" >&2
+  echo "             ds['train'].to_parquet('$TARGET/train-00000-of-00001.parquet')" >&2
+  exit 3
+fi
+echo "[probe] reachable via: $_probe_url"
+
+# Final filenames (what tads/evals/tydiqa.py looks for via _resolve_split_paths).
+# Both candidate URL patterns get saved under the same canonical filename so
+# the evaluator doesn't care which one we fetched from.
+declare -A DST_FNAMES=(
+  [dev]="validation-00000-of-00001.parquet"
+  [train]="train-00000-of-00001.parquet"
+)
+
+fetch_with_fallback() {
+  # Args: split (dev|train), dst_path. Tries main→refs.
+  local split="$1" dst="$2"
+  local -n urls=$([ "$split" = "dev" ] && echo CANDIDATES_DEV || echo CANDIDATES_TRAIN)
+  for tag in main refs; do
+    local url="${urls[$tag]}"
+    echo "  [try ${tag}] $url"
+    if curl -fL --retry 3 --retry-delay 2 -o "$dst.part" "$url" 2>&1 | tail -3; then
+      mv "$dst.part" "$dst"
+      echo "  [ok ${tag}] $(stat -c%s "$dst") bytes"
+      return 0
+    fi
+    rm -f "$dst.part"
+    echo "  [fail ${tag}] trying next candidate..."
+  done
+  return 1
+}
+
+for split in dev train; do
+  fname="${DST_FNAMES[$split]}"
   dst="$TARGET/$fname"
   if [ -s "$dst" ]; then
     echo "[skip] $fname already present ($(stat -c%s "$dst") bytes)"
     continue
   fi
   echo "[fetch] $fname  →  $dst"
-  # -L follows redirects; -f bails out on HTTP error; --retry handles
-  # transient 5xx that HF occasionally returns under load.
-  if ! curl -fL --retry 3 --retry-delay 2 -o "$dst.part" "${URLS[$fname]}"; then
-    echo "[error] curl failed for $fname (URL=${URLS[$fname]})" >&2
-    rm -f "$dst.part"
+  if ! fetch_with_fallback "$split" "$dst"; then
+    echo "[error] every candidate URL failed for $split split." >&2
+    echo "        See manual alternative at the top of this script." >&2
     exit 1
   fi
-  mv "$dst.part" "$dst"
-  echo "[ok]    $fname  →  $(stat -c%s "$dst") bytes"
 done
 
 echo ""
