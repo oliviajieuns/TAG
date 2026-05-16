@@ -110,6 +110,11 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (4-bench 대
             없는 facet 자리에는 placeholder(`(no DONE yet)` / `no err` /
             `baseline` / `no score`)를 넣어 facet 3개 유지. 한 facet만
             적고 끝내는 패턴 = 위반 (자주 발생).
+            **셀이 `학습중` 이면 facet1에 `학습중 ep=N/M` (sealed/target
+            epoch) 의무** — 사용자가 학습 진행도 한 눈에 보기 위함. M은
+            `cfg.json` train_epochs, N은 `_latest/epoch_last/_complete`
+            sentinel 내용 (없으면 0). log Signal 1 (`SFT | epoch=K |
+            step=...`) 잡히면 step/loss까지 부기.
 [CHECK 14] (6)/(7)/(8) 16-행 표에서 모델 그룹 사이에 빈 줄 1개로 시각적
             구분: llama2 4행 → 빈 줄 → qwen25 4행 → 빈 줄 → mistral 4행 →
             빈 줄 → deepseek 4행 (총 빈 줄 3개). 그룹 안은 빈 줄 없음.
@@ -890,7 +895,7 @@ def status_cell(model, method, bench):
 
 | facet 위치 | 정상값 예시 | 정보 없을 때 placeholder |
 |---|---|---|
-| **facet1 (history)** | `init 47.56%` / `46.98% ↑ +2.20 (lr↑)` / `44.78% ↓ -2.78 (seed)` / `47.56% stable ×5` | `(no DONE yet)` — 아직 점수 산출 없음 |
+| **facet1 (history)** | 셀이 `학습중`이면: `학습중 ep=2/3` 또는 `학습중 ep=2/3 step=350/2031 loss=1.83` (가용 시) / 셀이 `NN.NN%` (DONE) 이면: `init 47.56%` / `46.98% ↑ +2.20 (lr↑)` / `44.78% ↓ -2.78 (seed)` / `47.56% stable ×5` | `(no DONE yet)` — 아직 점수 한 번도 안 나옴 (셀이 `학습전`/`eval대기`/`eval중`일 때) |
 | **facet2 (오류/상황)** | `OOM ×2 retry pending` / `crash(CUDA) ×1` / `dataset DL fail ×3 BLOCKED` | `no err` — 직전 5 tick 동안 오류 없음 |
 | **facet3 (발산 알람)** | `🔴 < random_10` / `🟡 -5.2p vs full_100` / `🔵 < data_agent_10` / `OK` | `baseline` (full_100/random_10 행) 또는 `no score` (아직 점수 없어 비교 불가) |
 
@@ -898,11 +903,13 @@ def status_cell(model, method, bench):
 
 | facet1 (history) 토큰 | 의미 |
 |---|---|
-| `init NN.NN%` | 첫 eval 결과 |
+| `학습중 ep=N/M` | **학습 진행 중**. N = 현재 sealed epoch (`_latest/epoch_last/_complete` sentinel 내용), M = target (`<latest_run>/cfg.json`의 `train_epochs`). 예: `학습중 ep=2/3`. 셀이 `학습중`이면 facet1은 이 토큰을 사용. ep=0/M (아직 첫 epoch 안 끝남)도 OK. |
+| `학습중 ep=N/M step=S/T loss=L` | 학습 진행 + 현재 epoch 안에서의 step 진행도까지 보고 싶을 때 (§0-7 log polling Signal 1로 추출). 컬럼 폭 허용하면 우선 이 형식. |
+| `init NN.NN%` | 첫 eval 결과 (학습 완료 후 첫 DONE) |
 | `NN.NN% ↑ +Δ (태그)` | 직전 대비 점수 상승 (`Δ` = 둘째 자리, 태그는 원인) |
 | `NN.NN% ↓ -Δ (태그)` | 점수 하락 |
 | `NN.NN% stable ×K` | K회 연속 동일 점수 |
-| `(no DONE yet)` | placeholder — 점수 한 번도 안 나옴 |
+| `(no DONE yet)` | placeholder — 점수 한 번도 안 나옴. 셀이 `학습전`/`eval대기`/`eval중` 일 때 facet1 placeholder. |
 
 | facet2 (오류) 토큰 | 의미 |
 |---|---|
@@ -925,6 +932,9 @@ def status_cell(model, method, bench):
 **조합 예시 (모두 정확히 3-facet, ` · ` 구분):**
 
 ```
+학습중 ep=2/3           · no err                · no score        ← 학습 진행 중, target 3 epoch 중 2개 sealed
+학습중 ep=2/3 step=350/2031 loss=1.83 · no err   · no score       ← 학습 진행 중 (Signal 1 추출되면 step+loss까지)
+학습중 ep=0/3           · no err                · no score        ← 학습 막 시작, 첫 epoch 아직 안 끝남
 init 47.56%             · no err                · OK              ← treatment, 첫 eval, 정상
 46.98% ↑ +2.20 (lr↑)    · no err                · 🟡 -5.2p vs full_100  ← lr 튜닝 상승, BASE-FULL 대비 처짐
 47.56% stable ×3        · no err                · 🔴 < random_10  ← 점수는 안정이지만 RED
@@ -1102,7 +1112,7 @@ EVAL_LOG=$(ls -t "${EVAL_RESULTS_ROOT}/${model}/${method}/_latest/logs/eval_"*.l
 
 | 신호 추출 결과 | Status 표기 |
 |---|---|
-| Signal 1 매치 + 학습 프로세스 alive → `SFT \| epoch=2 \| step=350/2031 \| loss=1.84` | dashboard cell `학습중`, Status에 `epoch 2 step=350/2031 loss=1.84` |
+| Signal 1 매치 + 학습 프로세스 alive → `SFT \| epoch=2 \| step=350/2031 \| loss=1.84` | dashboard cell `학습중`, Status facet1 = `학습중 ep=2/3 step=350/2031 loss=1.83` (sealed N은 `_latest/epoch_last/_complete` 내용, target M은 `cfg.json` 의 `train_epochs`). 컬럼 폭 부족하면 `학습중 ep=N/M` 만이라도 의무. |
 | Signal 4 매치 → `Progress: 60/164 (n_samples=20, chunks=5×4)` | dashboard cell `eval중`, Status에 `humaneval 60/164` |
 | Signal 6 매치 (예: OOM) | Status 즉시 `OOM ×N retry pending · last <score>` 갱신 + §0-6 (c) HISTORY.md `[eval] OOM` 엔트리 작성 (log tail 25줄 포함) |
 | Signal 5 매치 (방금 _latest sealed) | 점수 파싱을 다음 tick까지 기다리지 말고 즉시 §0-4 점수 표 + HISTORY.md `[eval] done` 갱신 (선제 동기화) |
