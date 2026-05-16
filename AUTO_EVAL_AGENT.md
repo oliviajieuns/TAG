@@ -157,6 +157,51 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 = /group-volume/minsoo3.kim/tads-eval-results/experiments.md
 ```
 
+> # 🚨🚨🚨 절대 비교섭 규칙 (MUST READ — 자주 위반됨) 🚨🚨🚨
+>
+> **`experiments.md`는 항상 다음 4개 표 + History 1개 = 총 5개 섹션을 맨 아래에 같은 순서로 가지고 있어야 한다.** 매 tick 출력에 단 하나라도 누락되면 그 tick은 **실패** — 사용자에게 보고하지 말고 다시 그려라.
+>
+> ```
+> ## (6) Current — 80-cell 실시간 상태 (학습전/학습중/eval대기/eval중/NN.NN%) + Status + Params
+> ## (7) Latest  — 80-cell 가장 최근 DONE 점수만 (NN.NN% 또는 -)            + Params
+> ## (8) Best    — 80-cell 역대 최고 점수 + Best run tag                    + Params
+> ## (9) History — append-only 변경 로그 (newest at bottom)
+> ```
+>
+> **4-table layout이 non-negotiable인 이유** (자주 어김):
+>  1. **Current 하나만 만들고 끝내는 것 = 위반**. Latest/Best/History 없으면 사용자는 점수 추세 / 역대 최고 / 변경 이력을 볼 수 없음.
+>  2. **표 이름을 다르게 쓰는 것 = 위반**. "(7) Latest"가 정확한 헤더. "최신 점수 표", "Latest scores", "최근 결과" 같은 변형 금지.
+>  3. **History 빠뜨리는 것 = 위반**. 점수 변경마다 한 줄씩 무조건 append.
+>  4. **Params 컬럼 빠뜨리는 것 = 위반**. (6)/(7)/(8) 모두 맨 우측에 Params 컬럼 필수.
+>  5. **재학습 감지했는데 Current만 학습중으로 바꾸고 Latest/Best 갱신 안 함 = 위반은 아니지만 (8) 페이지 분기에서 새 NN.NN%가 best보다 높으면 Best 갱신해야 함. (7) Latest는 새 NN.NN% 나오기 전까지 이전 값 유지.**
+>
+> **매 tick 출력 직후 self-check (atomic 교체 BEFORE 반드시 통과해야 함):**
+> ```bash
+> exp=${EVAL_RESULTS_ROOT}/experiments.md
+> required_headers=(
+>   "^## \(6\) Current"
+>   "^## \(7\) Latest"
+>   "^## \(8\) Best"
+>   "^## \(9\) History"
+> )
+> for h in "${required_headers[@]}"; do
+>   if ! grep -qE "$h" "$exp"; then
+>     echo "[STRUCT-FAIL] $exp에 헤더 '$h' 없음 — atomic 교체 중단 후 4-table layout 재생성"
+>     exit 1
+>   fi
+> done
+> # Params 컬럼이 (6)/(7)/(8) 헤더 행에 있는지 확인
+> for sec in '## \(6\) Current' '## \(7\) Latest' '## \(8\) Best'; do
+>   if ! awk -v s="$sec" '$0 ~ s { f=1; next } f && /Params/ { print "ok"; exit }
+>                          f && /^```$/ && body++==1 { exit }' "$exp" | grep -q ok; then
+>     echo "[STRUCT-FAIL] '$sec' 섹션에 Params 컬럼 누락"
+>     exit 1
+>   fi
+> done
+> echo "[STRUCT-OK] 4-table layout 통과"
+> ```
+> 이 체크가 fail이면 **사용자에게 'tick 갱신 완료'로 보고하지 말 것**. 누락된 섹션을 §0-4 (6)/(7)/(8)/(9) 템플릿대로 생성한 뒤 다시 atomic 교체. 3회 fail 시 보고 중단하고 "표 구조 자체가 깨졌으니 사용자 확인 필요" 알람만.
+
 이 파일이 **유일한 score board**다. 에이전트는 매 tick마다:
 
 1. 셀의 `<experiment_label>-eval_summary.json`을 읽어 정확도(%) 둘째 자리까지 추출
@@ -1470,12 +1515,45 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
              continue
          status[(model, method)] = "eval대기"
 
+   ## 3.5 transitions pass — (7) Latest / (8) Best / (9) History 갱신 입력 생성
+   # status[(m, k)] 가 바뀐 셀들에 대해 (6)/(7)/(8)/(9) 어느 표를 어떻게
+   # 갱신할지 결정 (§0-4 (10) 표 흐름).
+   for (model, method), new in status.items():
+       prev = read_prev_value_from_experiments_md(model, method)   # (6) Current cell
+       if prev == new:
+           continue
+       # 어떤 표를 갱신할지 (§0-4 (10) 표):
+       updates[(model, method)]["current"] = new      # (6) 무조건 덮어씀
+       if re.match(r"^\d+\.\d{2}%$", new):
+           # 새 DONE NN.NN% 나왔음
+           updates[(model, method)]["latest"]  = new      # (7) 덮어씀
+           updates[(model, method)]["best_if_higher"] = new   # (8) max 비교
+       # (7) Latest / (8) Best는 학습중 / eval중 / eval대기로 변할 때 안 건드림 (§0-4 (10))
+       # (9) History에는 무조건 한 줄 append
+       updates[(model, method)]["history_row"] = (
+           f"{now}  cell={model}/{method}  prev={prev}  new={new}  "
+           f"reason={infer_reason(model, method, sig)}  source={pick_source(model, method, sig)}"
+       )
+
 4. report pass — experiments.md + dashboard + 사용자 액션 섹션 atomic 갱신
    #  학습/eval auto-launch 없음 (§0 정책).
-   - §0-4 (1)-(6) 표 + §0-5 dashboard 코드 펜스 안만 atomic 교체
+
+   ## STRUCTURE — MUST 5개 섹션 모두 갱신 (§0-4 절대 비교섭 규칙):
+   ## (6) Current      — 5종 어휘 + Status + Params, 80 cells
+   ## (7) Latest       — NN.NN%/- + Last DONE + Params, 80 cells
+   ## (8) Best         — NN.NN%/- + AVG + Best run + Params, 80 cells
+   ## (9) History      — 그 tick의 셀 값 변경마다 한 줄 append (newest at bottom)
+   ## 4개 표 + 1 로그 누락 시 → atomic 교체 실패로 간주 → 재생성 후 다시 검증.
+
+   - §0-4 (1)-(5) 모델별 점수 표 + §0-5 dashboard 코드 펜스 안만 atomic 교체
    - §0-4 (6) 80-cell 표에 `-`가 단 하나도 남지 않도록 dash-self-check 수행
      (§0-4 셀프 체크 bash). 통과 못 하면 그 tick의 출력은 사용자에게
      보고하지 않고 분류를 재돌릴 것.
+   - §0-4 절대 비교섭 STRUCT-OK self-check 수행 — (6)/(7)/(8)/(9) 헤더 4개
+     모두 존재 + (6)/(7)/(8)에 Params 컬럼 존재 확인. STRUCT-FAIL이면 atomic
+     교체 중단, 누락 섹션 생성 후 재시도.
+   - 재학습 감지된 셀은 (6)만 학습중으로 덮어쓰고 (7)/(8) Latest/Best는
+     이전 값 유지, (9) History에 prev=NN.NN% new=학습중 append (§0-4 (10)).
    - 학습전 / eval대기 셀이 1개 이상이면 experiments.md 상단에 "사용자 액션
      필요" 섹션 2개(학습 미실행, eval 미실행) 갱신.
    - 채팅 보고: 변경된 행만 1줄 요약(§0-7 (e) 형식). raw 표 dump 금지.
