@@ -184,6 +184,14 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             problems = problems[:limit]
         logger.info("HumanEval: %d problems | limit=%s", len(problems), limit)
 
+        # Truncation safety: HumanEval prompt ends with the function signature
+        # + docstring that the model continues. Default `truncation_side=
+        # 'right'` would cut the docstring (loses examples / type hints).
+        # Left-truncation cuts imports/preamble — model still has signature
+        # + docstring to work with. Most prompts fit in 2048 tokens; this
+        # only matters for the small number of long-docstring problems.
+        tokenizer.truncation_side = "left"
+
         # Paper §D: pass@10 with temperature=0.8, top_p=0.95, n=20 completions
         # per problem (n=20 gives a low-variance pass@10 estimate; n=10 is the
         # minimum needed but noisy). When n_samples == 1 we silently fall back

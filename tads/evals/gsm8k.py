@@ -109,6 +109,14 @@ class GSM8KEvaluator(BenchmarkEvaluator):
             test_data = test_data[:limit]
         logger.info("GSM8K: %d examples | limit=%s", len(test_data), limit)
 
+        # Truncation safety: GSM8K prompt ends with "Q: <test>\n A: " — the
+        # actual test question + the answer-prefix the model continues. With
+        # the HF tokenizer's default `truncation_side='right'`, an over-long
+        # 8-shot prompt would have the TEST QUESTION truncated, silently
+        # destroying the prediction. Left-truncation drops a few-shot demo
+        # from the FRONT instead.
+        tokenizer.truncation_side = "left"
+
         correct = 0
         results = []
         for i, ex in enumerate(test_data):

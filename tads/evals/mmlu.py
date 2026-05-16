@@ -193,6 +193,16 @@ class MMLUEvaluator(BenchmarkEvaluator):
         subjects = test_df["subject"].unique()
         logger.info("MMLU: %d subjects | limit=%s", len(subjects), limit)
 
+        # Truncation safety: MMLU prompt ends with the test question +
+        # "Answer:" suffix that the model must complete. With the HF tokenizer's
+        # default `truncation_side='right'`, an over-long 5-shot prompt would
+        # have the TEST QUESTION truncated away (silently destroying the
+        # prediction — model is asked to complete something that no longer
+        # contains the test query). Left-truncation drops a few-shot demo
+        # from the FRONT instead, which is recoverable. Set explicitly so
+        # the eval is robust regardless of the tokenizer's default.
+        tokenizer.truncation_side = "left"
+
         results = []
         # Track truncation once per run (don't spam): a 2048-token cap can
         # decapitate the prompt prefix when a Qwen ChatML 5-shot template is

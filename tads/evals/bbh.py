@@ -209,6 +209,14 @@ class BBHEvaluator(BenchmarkEvaluator):
             len(task_files), cot_root, n_cot_files, limit, n_fewshot,
         )
 
+        # Truncation safety: BBH prompt ends with "Q: <test>\nA: Let's think
+        # step by step." — the model must continue from that A: prefix. With
+        # the HF tokenizer's default `truncation_side='right'`, an over-long
+        # cot-prefix + test Q prompt would have the TEST QUESTION truncated
+        # away. Left-truncation drops part of the cot-prefix demos from the
+        # FRONT instead, which preserves the test query.
+        tokenizer.truncation_side = "left"
+
         per_task: List[Dict[str, Any]] = []
         total_correct = 0
         total_count = 0

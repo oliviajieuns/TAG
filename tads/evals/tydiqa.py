@@ -564,6 +564,14 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
         if limit is not None:
             examples = examples[:limit]
 
+        # Truncation safety: TyDiQA prompt ends with the test "Context:\n...\n
+        # Question:\n...\nAnswer:" block. With the HF tokenizer's default
+        # `truncation_side='right'`, an over-long 5-shot prompt would have
+        # the TEST context+question+Answer: prefix truncated, silently
+        # destroying the prediction. Left-truncation drops a same-language
+        # demo from the FRONT instead.
+        tokenizer.truncation_side = "left"
+
         # Load same-language demonstrations from train.json.
         demos_by_lang = _load_demos_by_language(train_file, n_fewshot) if n_fewshot > 0 else {}
         fewshot_fallback_reason: Optional[str] = None
