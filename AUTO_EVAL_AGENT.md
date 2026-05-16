@@ -860,7 +860,7 @@ def status_cell(model, method, bench):
 
 #### 갱신 빈도 / 출력 위치
 
-- 매 tick (cron 30분 주기)마다 dispatch pass 직전 1회, dispatch 직후 1회 = tick당 2회 출력.
+- 매 tick (cron 15분 주기)마다 dispatch pass 직전 1회, dispatch 직후 1회 = tick당 2회 출력.
 - 출력은 `experiments.md` **상단**에 §0-4의 "표 작성 규칙"을 따른 **코드 펜스(```) + 고정폭 정렬** 표로 갱신 (markdown pipe table 금지 — terminal `cat`에서 깨짐). 전체 파일을 매번 다시 쓰지 말고 `<!-- STATUS DASHBOARD START -->` ... `<!-- STATUS DASHBOARD END -->` 마커 사이만 atomic 교체. 마커 자체는 markdown 렌더러에선 안 보이고 terminal에선 한 줄로 보여 위치 식별에 도움.
 - 채팅/슬랙 보고에는 변경된 셀만 `diff` 형태로 인용 ("[#4 llama2/tads_10] 학습중 → eval대기", "[#1 llama2/full_100, MMLU] eval중 → 47.56%" 등). 표 전체 매번 복붙 금지.
 
@@ -1945,18 +1945,19 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 
 에이전트는 **무한 루프로 상주하지 않는다**. cron이 정해진 간격으로 호출하고 매번 idempotent하게 §7 의사코드를 수행한다.
 
-### 9-1. 권장 간격
+### 9-1. 권장 간격 (2026-05-17 정책)
 
-- **30분마다** (`*/30 * * * *`) — 학습 한 epoch에 통상 1시간 이상 걸리므로 30분 폴링이면 새 체크포인트를 늦지 않게 잡는다. GPU/디스크 부담도 최소.
-- 학습 끝물(체크포인트가 줄줄이 떨어지는 구간)에 빠른 따라잡기가 필요하면 일시적으로 10분(`*/10`)으로 조이고, 매트릭스 16셀이 다 차면 다시 30분 또는 1시간으로 늘릴 것.
+- **15분마다** (`*/15 * * * *`) — eval 셀 1개당 평균 5~15분이라 15분 폴링이면 빈 GPU가 생긴 직후 다음 (cell, bench) pair를 빠르게 dispatch. 매 tick continuous하게 진행하므로 16 cells × 4 benches = 64 pair가 빈 GPU 수에 따라 1~3일 안에 완료.
+- 사용자가 BBH를 수동 launch 중인 경우에도 별 영향 없음 — auto dispatch는 BBH 제외 4-bench만 처리하며, 학습/BBH 점유 GPU는 free_gpus 필터에서 자동 제외.
+- 학습이 동시에 안 돈다는 운영 가정 하에서 15분이 sweet spot. 만약 학습이 동시에 돈다면 30분으로 늦추면 학습 잡과의 메모리 경합 줄임.
 
 ### 9-2. crontab 예시
 
 서버에 `crontab -e`로 등록:
 
 ```cron
-# TADS auto-eval — 매 30분, 새 체크포인트 감지 후 eval
-*/30 * * * * /home/jieun/kms/tads/scripts/auto_eval_tick.sh >> /home/jieun/kms/tads/logs/auto_eval_cron.log 2>&1
+# TADS auto-eval — 매 15분, eval대기 셀이 있으면 빈 GPU 만큼 자동 dispatch (4-bench, BBH 제외)
+*/15 * * * * /home/jieun/kms/tads/scripts/auto_eval_tick.sh >> /home/jieun/kms/tads/logs/auto_eval_cron.log 2>&1
 ```
 
 ### 9-3. tick 스크립트 (없으면 에이전트가 생성)
