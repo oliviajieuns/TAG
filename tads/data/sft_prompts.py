@@ -304,15 +304,16 @@ def tydiqa_generation_prefix(
     if prompt_style in ("llama_user_assistant", "deepseek_user_assistant"):
         return f"<|user|>\n{user}\n<|assistant|>\n"
     if prompt_style == "alpaca_default":
-        # Match the Alpaca SFT template the model was trained with —
-        # bucketing alpaca_default into the Llama chat wrap would expose
-        # the eval to `<|user|>` / `<|assistant|>` tokens the model has
-        # never seen as a response prefix, hurting extractive accuracy.
-        return (
-            "Below is an instruction that describes a task. "
-            "Write a response that appropriately completes the request.\n\n"
-            f"### Instruction:\n{user}\n\n### Response:\n"
-        )
+        # NAIT TyDiQA convention is the standard SQuAD-style raw few-shot
+        # prompt that ends in "Answer:" — the model continues with the
+        # short extractive span and we EM-compare. Wrapping in Alpaca's
+        # "### Instruction:" / "### Response:" template (as a previous
+        # version did) coerces the SFT'd model into "complete response"
+        # mode → multi-sentence answers like "The answer is X according
+        # to the passage" → fails EM against the short gold span → score
+        # collapses to ~0. Return the user_block AS-IS; the trailing
+        # "Answer:" in the block is the cue the model continues from.
+        return user
     raise ValueError(f"Unknown prompt_style={prompt_style!r} for TyDiQA eval prefix")
 
 

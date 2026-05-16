@@ -227,6 +227,14 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         n_truncated_samples = 0
         n_total_samples = 0
 
+        # Diagnostics — preserved across problems so we can dump a sample at
+        # the end of the run. The first problem's first completion is shown
+        # in the summary JSON so a 0-score run is immediately diagnosable
+        # ("model produced empty / non-code / fragmented output" vs "scoring
+        # harness threw" vs "stop sequences cut too aggressive").
+        first_raw_sample: Optional[str] = None
+        first_postprocessed: Optional[str] = None
+
         completions: Dict[str, list] = {}
         for i, problem in enumerate(problems):
             prefix = humaneval_generation_prefix(
@@ -286,6 +294,15 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
                         n_truncated_samples += 1
                     completion = _postprocess_completion(raw, entry_point=entry_point)
                     completions.setdefault(problem["task_id"], []).append(completion)
+                    if first_raw_sample is None:
+                        first_raw_sample = raw[:1000]
+                        first_postprocessed = completion[:1000]
+                        logger.info(
+                            "HumanEval sample[0] | raw=%r ... | "
+                            "postprocessed=%r ...",
+                            (raw[:200] + "...") if len(raw) > 200 else raw,
+                            (completion[:200] + "...") if len(completion) > 200 else completion,
+                        )
                 remaining -= this_call
                 # Drop the call-local tensor before allocating the next
                 # chunk's KV cache. Without this the prior chunk's `out`
@@ -340,6 +357,7 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             pass_at_k = evaluate_functional_correctness(
                 sample_file=temp_path, k=[1, 10], timeout=10, n_workers=4,
             )
+            logger.info("HumanEval evaluate_functional_correctness → %r", pass_at_k)
         finally:
             try:
                 os.unlink(temp_path)
@@ -366,6 +384,12 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         # parsing. `accuracy` field aliases pass@10 so the §5-5 score reader
         # picks it without bench-specific branching ("accuracy" 후보 키 사용).
         # pass@1 is still recorded for diagnostic / debugging only.
+        # Surface the raw pass_at_k dict in case the human_eval package
+        # returned keys we don't recognize (some forks use pass_at_1 with
+        # underscore, or numeric k as the key). If pass@10 is 0.0 the user
+        # can inspect this field to see whether the harness produced
+        # anything at all.
+        raw_pass_at_k = {str(k): v for k, v in pass_at_k.items()}
         summary = {
             "accuracy": pass_at_k.get("pass@10", 0.0),    # primary = pass@10 (NAIT)
             "pass@10": pass_at_k.get("pass@10", 0.0),
@@ -375,6 +399,7 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             "benchmark": "humaneval",
             # Diagnostics — surface in JSON so a low score's cause is visible
             # without re-reading the eval log.
+            "raw_pass_at_k": raw_pass_at_k,
             "n_samples": n_samples,
             "n_total_samples": n_total_samples,
             "n_truncated_samples": n_truncated_samples,
@@ -383,6 +408,11 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             "temperature": temperature,
             "top_p": top_p,
             "prompt_style": prompt_style,
+            # First completion sample — instantly tells you whether the model
+            # is producing valid code, garbage, or empty. Without this a 0
+            # score is impossible to diagnose without re-running.
+            "first_sample_raw": first_raw_sample,
+            "first_sample_postprocessed": first_postprocessed,
         }
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)
