@@ -2465,17 +2465,28 @@ nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
 
 ---
 
-## 13. 기준치 (사용자 입력) — 점수 검증용 reference
+## 13. 기준치 (사용자 입력 + 논문 인용) — 점수 검증용 reference
 
-사용자가 직접 측정하거나 다른 환경에서 확인한 점수를 여기에 기록한다. 에이전트의 eval 결과가 이 값과 ±2%p 이상 차이나면 **노란불** (학습 / eval 환경 의심), ±5%p 이상이면 **빨간불** (재학습 권장). 점수 신뢰성 baseline 역할.
+**에이전트는 매 tick에서 새로 산출된 NN.NN%를 이 표의 값과 비교해야 한다** — 그래야 학습/eval 환경이 정상인지 즉시 진단 가능.
+
+값의 출처는 두 가지:
+- **사용자 직접 측정값** (다른 환경에서 재현한 결과).
+- **논문 인용값** (NAIT Table 2 / 각 cell의 config 헤더 코멘트에 명시). 예: `configs/experiments/main_7b/llama2/full_100.yaml` 첫 줄에 `# Expected (paper): MMLU 46.87, GSM 14.63, H-Eval 27.87, TyDiQA 39.48, BBH 39.94` 라고 적혀있음.
+
+발산 알람 임계:
+- ±2%p 이상 차이 → **노란불** (학습 / eval 환경 의심)
+- ±5%p 이상 차이 → **빨간불** (재학습 권장)
+- §0-6 (a) Status facet3에 `🟡 -2.5p vs ref` / `🔴 +6.1p vs ref` 식으로 부기.
 
 표 형식 = §0-4 표 작성 규칙(코드 펜스 + 고정폭 정렬). 값은 정확도(%) 둘째 자리. 셀이 비어있으면 (`-`) 사용자가 아직 측정하지 않았다는 뜻 (이 표는 에이전트가 자동 갱신하지 않으므로 `-` 사용 OK — 점수 표가 아니라 reference 표).
+
+**에이전트가 새 reference 값을 자동으로 추출하려면**: 각 셀의 config 파일 첫 줄 코멘트에서 `Expected (paper): MMLU X, GSM Y, H-Eval Z, TyDiQA W, BBH V` 패턴을 grep해 가져올 것. config에 적혀있는 셀은 그 값이 paper-faithful reference이고, 사용자 직접 입력이 따로 있는 셀은 사용자 값 우선.
 
 ```
 Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh
 ========================== ========= ========= ========= ========= =========
 llama2 / random_10         47.14%    14.13%    25.55%    44.16%    39.21%
-llama2 / full_100          -         -         -         -         -
+llama2 / full_100          46.87%    14.63%    27.87%    39.48%    39.94%
 llama2 / data_agent_10     -         -         -         -         -
 llama2 / tads_10           -         -         -         -         -
 
