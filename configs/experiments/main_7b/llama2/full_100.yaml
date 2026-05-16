@@ -7,6 +7,5 @@ defaults:
   - configs/modes/full_ft.yaml
 
 output_subdir: main_7b/llama2/full_100
-# LLAMA-TUNE: 3 → 4 to recover the last ~5% of convergence we leave on the
-# table at epoch 3. NAIT paper used 3 but our loss curves still drop here.
-train_epochs: 4
+# epochs-reset(2026-05-16): 4 → 3. NAIT/대다수 IT-SFT 논문(Alpaca, LIMA, NAIT Table 8 등)이 3 epoch을 기준으로 보고하므로 매트릭스 전 셀을 3으로 환원해 baseline 비교 가능성 확보.
+train_epochs: 3

@@ -7,5 +7,5 @@ defaults:
 
 output_subdir: main_7b/deepseek/random_10
 selection_ratio: 0.1
-# epochs-unify(2026-05-16): 3 → 4. llama2 매트릭스(LLAMA-TUNE 1차)와 동일하게 통일.
-train_epochs: 4
+# epochs-reset(2026-05-16): 4 → 3. NAIT/대다수 IT-SFT 논문(Alpaca, LIMA, NAIT Table 8 등)이 3 epoch을 기준으로 보고하므로 매트릭스 전 셀을 3으로 환원해 baseline 비교 가능성 확보.
+train_epochs: 3

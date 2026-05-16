@@ -61,7 +61,7 @@ random AVG가 alpaca를 약간 상회. 이건 벤치 부분집합 효과지 알�
 
 | 변경 | Before → After | 이유 |
 |---|---|---|
-| `train_epochs` | `3` → `4` | 논문은 3 epoch이지만 우리 실측에서 epoch 3 종료 시점 loss가 아직 떨어지는 추세 → 1 epoch 추가로 마지막 ~5% 수렴분 회수. 5 이상은 overfit 위험. |
+| `train_epochs` | ~~`3` → `4`~~ → `3` (환원, 2026-05-16) | 1차에서 4로 올렸으나 NAIT/Alpaca/LIMA 등 대다수 IT-SFT 논문이 3 epoch 기준이라 매트릭스 baseline 비교 가능성 위해 3으로 환원. 우리 epoch 3 loss 추세가 더 떨어지더라도, paper-comparable 점수가 우선. |
 | `weight_decay` | `0.1` (그대로) | 변경 안 함 — 작은 SFT 데이터셋엔 0.0이 좋다는 견해도 있으나 기본 stick. |
 
 ### 2-3. `tads_10` 추가 변경 (proposed method 강화)
@@ -128,9 +128,9 @@ MODELS=llama2 bash scripts/run_eval_main_7b.sh --gpus 0
 
 **기대 효과 합산** (대략):
 - prompt_style 변경: AVG +1~3%p (가장 큰 영향)
-- train_epochs 3→4: AVG +0.3~0.5%p
+- ~~train_epochs 3→4: AVG +0.3~0.5%p~~ → 2026-05-16 환원(3). paper-comparable 우선.
 - agent/anchor 튜닝 (tads only): AVG +0.2~0.5%p
-- 합계: 우리 baseline보다 **+1.5~4%p** 정도 상승 기대
+- 합계: 우리 baseline보다 **+1.2~3.5%p** 정도 상승 기대 (epoch 4 효과 제외)
 
 ---
 
