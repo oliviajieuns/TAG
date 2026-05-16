@@ -501,6 +501,57 @@ def main() -> None:
     wd = float(cfg.get("weight_decay", 0.1))
     want_8bit = bool(cfg.get("use_8bit_optimizer", False))
     optimizer = None
+
+    # Two-stage bnb safety:
+    #   (A) PROBE — import bnb and run a real AdamW8bit.step() on a 1-element
+    #       synthetic CUDA tensor. This exercises bnb's full CUDA kernel
+    #       launch path (libcublasLt.so.X.Y, libcudart.so.X.Y) which is
+    #       commonly lazily loaded only at first-step time. Without the
+    #       probe, a version mismatch in those libs shows up 30+ minutes
+    #       into collect_episode (data_agent/tads spend that entire window
+    #       BEFORE the first optimizer.step()), wasting the run.
+    #   (B) BUILD — construct the real optimizer over model.parameters().
+    #       Only reached if (A) passes.
+    # Any exception from (A) flips want_8bit off for the rest of the run.
+    # Both stages catch the same exception classes (ImportError, OSError,
+    # RuntimeError, AttributeError) — these cover "module missing", "lib
+    # not found", "CUDA setup failed", and "missing kernel symbol" in turn.
+    if want_8bit and torch.cuda.is_available():
+        _probe_dev = torch.device(f"cuda:{local_rank()}")
+        try:
+            import bitsandbytes as _bnb_probe
+            _probe_p = torch.nn.Parameter(
+                torch.zeros(1, device=_probe_dev, dtype=torch.float32),
+            )
+            _probe_opt = _bnb_probe.optim.AdamW8bit([_probe_p], lr=1e-5)
+            _probe_p.grad = torch.zeros_like(_probe_p)
+            _probe_opt.step()
+            torch.cuda.synchronize()
+            del _probe_opt, _probe_p
+            torch.cuda.empty_cache()
+            if is_main_process():
+                logger.info(
+                    "bitsandbytes early probe OK (version=%s) on %s",
+                    getattr(_bnb_probe, "__version__", "?"), _probe_dev,
+                )
+        except (ImportError, OSError, RuntimeError, AttributeError) as _bnb_e:
+            if is_main_process():
+                logger.error(
+                    "bitsandbytes early probe FAILED (%s: %s). "
+                    "Auto-disabling use_8bit_optimizer for THIS run and "
+                    "falling back to torch.AdamW (fp32). This typically "
+                    "means the installed bnb wheel was compiled against a "
+                    "different CUDA minor version than this node's "
+                    "runtime — common signature is `OSError: libcublasLt.so.X.Y: "
+                    "cannot open shared object file`. To re-enable bnb, "
+                    "install a matching wheel (see bitsandbytes-foundation "
+                    "release notes for your CUDA version). Continuing with "
+                    "fp32 AdamW so this training run isn't lost.",
+                    type(_bnb_e).__name__, _bnb_e,
+                )
+            want_8bit = False
+            cfg["use_8bit_optimizer"] = False
+
     if want_8bit:
         try:
             import bitsandbytes as bnb
@@ -508,16 +559,17 @@ def main() -> None:
                 model.parameters(), lr=lr, weight_decay=wd,
             )
             if is_main_process():
-                logger.info("Optimizer: bitsandbytes.AdamW8bit | wd=%s", wd)
+                logger.info(
+                    "Optimizer: bitsandbytes.AdamW8bit | wd=%s | probe=OK", wd,
+                )
         except (ImportError, OSError, RuntimeError, AttributeError) as e:
+            # Should be unreachable when the probe above passed, but keep
+            # the catch as defense-in-depth (e.g. probe used cuda:0 while
+            # model.parameters() live elsewhere, or DDP rank-specific state).
             if is_main_process():
                 logger.warning(
-                    "use_8bit_optimizer=True but bitsandbytes import failed "
-                    "(%s: %s). Falling back to torch.optim.AdamW (fp32). "
-                    "Expect ~4× higher optimizer-state VRAM; if rank 0 OOMs "
-                    "during the first SFT step, either enable gradient_check"
-                    "pointing or fix bnb (typically: install a wheel built "
-                    "against your CUDA minor version).",
+                    "bnb construction failed AFTER passing probe "
+                    "(%s: %s). Falling back to torch.optim.AdamW (fp32).",
                     type(e).__name__, e,
                 )
     if optimizer is None:
