@@ -131,6 +131,20 @@ class GSM8KEvaluator(BenchmarkEvaluator):
             prompt_tok_len = inputs["input_ids"].shape[1]
             response = tokenizer.decode(out[0, prompt_tok_len:], skip_special_tokens=True).strip()
 
+            # Trim hallucinated continuations BEFORE answer extraction.
+            # With max_new_tokens=256 and no `stop` kwarg, greedy decoding
+            # routinely continues past "The answer is X." into another
+            # `\n\nQ: ... A: ... The answer is Y.` it makes up — the
+            # extractor's last-match rule then returns Y (= the hallucinated
+            # demo's answer), not X. Cut at the first "\n\nQ:" / "\nQ:" so
+            # only the test problem's own reasoning is fed to the extractor.
+            # `\nQuestion:` covers chat-style hallucinations.
+            for stop in ("\n\nQ:", "\nQ:", "\n\nQuestion:", "\nQuestion:"):
+                idx = response.find(stop)
+                if idx != -1:
+                    response = response[:idx]
+                    break
+
             ok = _grade(response, ex["answer"])
             correct += int(ok)
             results.append({

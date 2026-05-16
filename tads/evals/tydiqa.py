@@ -327,11 +327,18 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 {lang: len(d) for lang, d in demos_by_lang.items()},
             )
 
-        # Map alpaca_default to llama_user_assistant for the generation prefix
-        # (paper convention; the prefix only affects the generation framing).
-        prefix_style = (
-            "llama_user_assistant" if prompt_style == "alpaca_default" else prompt_style
-        )
+        # Use the caller's prompt_style as-is. The earlier code force-mapped
+        # alpaca_default → llama_user_assistant on the assumption that NAIT's
+        # paper layout was always `<|user|>/<|assistant|>`. That mapping
+        # actively HURT accuracy on models SFT'd with the Alpaca template
+        # (the new LLAMA-TUNE default for llama2 — see configs/models/
+        # llama2-7b.yaml): those models never saw `<|user|>` as a
+        # response prefix, so their answers came out as fragmentary / wrong-
+        # format text, tanking EM by ~5-15pt. The `tydiqa_generation_prefix`
+        # function in tads/data/sft_prompts.py already has an
+        # `alpaca_default` branch (Alpaca SFT template) that matches what
+        # the model saw at train time — let it through unchanged.
+        prefix_style = prompt_style
 
         correct = 0
         results = []
