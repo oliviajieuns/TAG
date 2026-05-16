@@ -775,7 +775,16 @@ def main() -> None:
             except Exception as e:  # never block save on a cleanup hiccup
                 logger.warning("Pre-save cleanup failed (continuing): %s", e)
 
-            ckpt_path = run_dir / f"epoch_{epoch}"
+            # epoch_last/ layout (2026-05-16): instead of epoch_1, epoch_2, ...,
+            # every save overwrites a single `epoch_last/` directory. The
+            # actual epoch number lives in two places:
+            #   - <run>/metrics.json (per-epoch rows, last row's "epoch" field)
+            #   - <run>/epoch_last/_complete sentinel content (single int)
+            # cfg.json snapshot stores the run's target train_epochs, so
+            # "is training done?" = (sealed_epoch_from_sentinel >= train_epochs).
+            # Eval picks <run>/epoch_last/ unconditionally — no need to scan
+            # for the max numeric.
+            ckpt_path = run_dir / "epoch_last"
             ckpt_path.mkdir(parents=True, exist_ok=True)
             save_errors: list = []
 
@@ -870,19 +879,18 @@ def main() -> None:
                 except Exception:
                     pass
 
-            # Optional: keep only last K epoch_N/ inside this run dir. This
-            # never touches OTHER runs/<tag>/ directories — those are
-            # explicit history that the user opted into preserving.
+            # keep_last_n_checkpoints is now a no-op with the epoch_last layout
+            # (only one ckpt dir per run by construction). Left intact in cfg
+            # for backward compat with older YAMLs that set it. If a run dir
+            # has legacy epoch_N/ subdirs alongside the new epoch_last/ (from
+            # before this migration), the user can clean them manually — we
+            # don't auto-delete to keep the migration explicit.
             _keep = int(cfg.get("keep_last_n_checkpoints", 0))
             if _keep > 0:
-                existing = sorted(
-                    [p for p in run_dir.glob("epoch_*") if p.is_dir()],
-                    key=lambda p: int(p.name.replace("epoch_", "")),
+                logger.info(
+                    "keep_last_n_checkpoints=%d ignored: epoch_last/ layout "
+                    "stores only one ckpt per run.", _keep,
                 )
-                for old in existing[:-_keep]:
-                    import shutil as _shutil
-                    _shutil.rmtree(old, ignore_errors=True)
-                    logger.info("Removed old checkpoint: %s", old)
 
             # Update _latest pointer after each completed epoch save so an
             # eval can fire mid-training (after epoch 1 finishes, before

@@ -442,14 +442,27 @@ def status_cell(model, method, bench):
         return "학습중"
     cfg = json.load(open(f"{latest_run}/cfg.json"))
     target = int(cfg.get("train_epochs", 3))
-    sealed = [p for p in glob(f"{latest_run}/epoch_*") if exists(f"{p}/_complete")]
-    if len(sealed) < target:
+    # epoch_last/ 레이아웃 우선 — _complete sentinel 내용이 마지막 sealed
+    # epoch 번호. 없으면 legacy epoch_<N>/ glob fallback.
+    last_dir = f"{latest_run}/epoch_last"
+    if exists(f"{last_dir}/_complete"):
+        sealed_n = int(open(f"{last_dir}/_complete").read().strip() or 0)
+        sealed_max = last_dir
+    else:
+        legacy = [p for p in glob(f"{latest_run}/epoch_*")
+                  if basename(p) != "epoch_last" and exists(f"{p}/_complete")]
+        if legacy:
+            sealed_max = max(legacy, key=lambda p: int(basename(p).replace("epoch_", "")))
+            sealed_n = int(basename(sealed_max).replace("epoch_", ""))
+        else:
+            sealed_n = 0
+            sealed_max = None
+    if sealed_n < target:
         return "학습중"
     # 학습 완료. 이 벤치 평가 상태 확인 — eval 측 _latest를 거쳐 본다.
     eval_base = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
     eval_latest = resolve_latest_run(eval_base)
     label   = f"{model}_{method}"
-    sealed_max = max(sealed, key=lambda p: int(basename(p).replace("epoch_","")))
     if eval_latest is not None and exists(f"{eval_latest}/_complete"):
         bench_json = f"{eval_latest}/{label}-{bench}.json"
         if exists(bench_json) and mtime(bench_json) > mtime(sealed_max):
@@ -594,7 +607,7 @@ def status_cell(model, method, bench):
 - 이유: 직전 평균 44.78%가 BASE-FULL 대비 -8%p (YELLOW)
 
 ## 2026-05-16 18:00  [train]  학습 완료 (3 epochs)
-- ckpt: <ckpt_root>/_latest/epoch_3
+- ckpt: <ckpt_root>/_latest/epoch_last  (sealed epoch=3, train_epochs=3 → DONE)
 - duration: 4h 12m
 - cfg snapshot: <ckpt_root>/_latest/cfg.json
 ```
@@ -813,12 +826,12 @@ ${OUTPUT_ROOT}/main_7b/<model>/<method>/
 ├── runs/
 │   ├── 20260515_180000/                ← 첫 학습 (auto-timestamp tag)
 │   │   ├── cfg.yaml + cfg.json         ← 사용된 모든 하이퍼파라미터 스냅샷
-│   │   ├── epoch_1/, epoch_2/, epoch_3/
-│   │   │   ├── _complete               ← 저장 성공 시에만 생기는 sentinel
+│   │   ├── epoch_last/                 ← 단일 ckpt dir, 매 epoch마다 덮어씀
+│   │   │   ├── _complete               ← 마지막 sealed epoch 번호 (int) 기록
 │   │   │   ├── env_meta.json           ← torch / bitsandbytes 버전
 │   │   │   ├── optimizer.pt, scheduler.pt
 │   │   │   └── (model.safetensors 등 HF 표준)
-│   │   ├── metrics.json
+│   │   ├── metrics.json                ← 매 epoch row append (epoch 번호 포함)
 │   │   └── selected_indices_epoch{N}.json
 │   ├── 20260515_193000_lr5e5/          ← 같은 셀에 파라미터 튜닝 재학습
 │   └── 20260516_080000_anchor_all/
@@ -827,21 +840,28 @@ ${OUTPUT_ROOT}/main_7b/<model>/<method>/
 
 - `<model>` ∈ {`llama2`, `qwen25`, `mistral`, `deepseek`}
 - `<method>` ∈ {`full_100`, `random_10`, `data_agent_10`, `tads_10`} (또는 `_50` 변형)
+- **epoch_last/ 레이아웃 (2026-05-16~)**: 학습은 매 epoch마다 단일 `epoch_last/` 디렉터리를 atomic하게 덮어쓴다. 디렉터리 이름엔 epoch 번호를 안 박는다 — 번호는 cfg.json snapshot의 `train_epochs`(target)와 `_complete` sentinel 내용(현재 마지막 sealed epoch, int)에서 읽는다.
 - 매 sealed epoch 저장 후 `_latest` 포인터가 atomic하게 갱신됨 (학습 중 eval 가능).
 - symlink 불가 FS는 `_latest.txt` (run_tag 한 줄)로 fallback.
-- **eval은 항상 `_latest` 기준** — 사용자가 새 튜닝 잡을 띄우면 자동으로 새 결과가 평가됨.
+- **eval은 항상 `_latest/epoch_last` 기준** — 사용자가 새 튜닝 잡을 띄우면 자동으로 새 결과가 평가됨.
 
 대응 config: `configs/experiments/main_7b/<model>/<method>.yaml`
 
-**최신 epoch 찾는 정식 방법**:
+**최신 ckpt 경로 + 마지막 sealed epoch 찾는 정식 방법**:
 ```bash
 ckpt_root="${OUTPUT_ROOT}/main_7b/<model>/<method>"
 latest_run="$(readlink -f "$ckpt_root/_latest" 2>/dev/null || \
               { [ -f "$ckpt_root/_latest.txt" ] && echo "$ckpt_root/runs/$(cat "$ckpt_root/_latest.txt")"; })"
-latest_epoch="$(ls -1d "$latest_run"/epoch_* 2>/dev/null | sort -V | tail -n 1)"
-# latest_epoch에 _complete 파일이 있어야 정상적으로 sealed 됐다는 뜻.
-[ -f "$latest_epoch/_complete" ] || { echo "WARN: $latest_epoch is not sealed"; }
+ckpt_dir="${latest_run}/epoch_last"
+[ -f "${ckpt_dir}/_complete" ] || { echo "WARN: ${ckpt_dir} is not sealed"; }
+# 마지막 sealed epoch 번호 = _complete sentinel 내용 (int).
+sealed_n="$(cat "${ckpt_dir}/_complete" 2>/dev/null || echo 0)"
+# 학습 target epoch = cfg.json snapshot.
+target_n="$(python3 -c "import json;print(json.load(open('${latest_run}/cfg.json')).get('train_epochs',3))")"
+echo "sealed=${sealed_n} / target=${target_n}"
 ```
+
+> Back-compat: 이전 학습 결과는 `epoch_1/`, `epoch_2/`, … 처럼 epoch 번호별 별도 dir이었다 (legacy). 새 코드는 `epoch_last/`가 있으면 우선 사용하고, 없으면 가장 큰 sealed `epoch_<N>/`로 fall-back한다 (`tads/core/run_layout.py:find_latest_complete_epoch`).
 
 ### 3-2. Legacy flat layout (`feature/run-layout` 이전 학습)
 
@@ -850,8 +870,11 @@ ${OUTPUT_ROOT}/main_7b/<model>/<method>/epoch_<N>/   ← runs/ 와 _latest 없�
 ```
 
 `feature/run-layout` 머지 이전에 학습된 셀은 평탄 구조로 떨어져 있다. eval 측은
-`_latest`가 없으면 평탄 구조를 fallback으로 자동 인식 (§4-4 참고). 이전 체크포인트를
-새 구조로 마이그레이션하려면 `runs/<tag>/`로 이동 후 `_latest`를 수동 설정:
+`_latest`가 없으면 평탄 구조를 fallback으로 자동 인식 (§4-4 참고).
+
+추가로 **epoch_last/ migration 이전 (~2026-05-15)에 학습된 run dir** 안에는 `epoch_1/`, `epoch_2/`, …처럼 epoch 번호별 별도 dir이 존재할 수 있다. 새 코드(`tads/core/run_layout.py:find_latest_complete_epoch`)는 `epoch_last/`를 우선 보고, 없으면 numeric `epoch_<N>/` glob fallback으로 자동 처리하므로 별도 마이그레이션 불필요. epoch 번호는 dir 이름(legacy) 또는 `_complete` sentinel 내용(new layout)에서 추출.
+
+이전 체크포인트를 새 구조로 마이그레이션하려면 `runs/<tag>/`로 이동 후 `_latest`를 수동 설정:
 
 ```bash
 mv ${OUTPUT_ROOT}/main_7b/llama2/tads_10/epoch_* ${OUTPUT_ROOT}/main_7b/llama2/tads_10/runs/legacy/
@@ -861,10 +884,11 @@ ln -s runs/legacy ${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest
 ### 3-3. Legacy 7b_fullft (더 옛날 구버전, 보통은 건드릴 일 없음)
 
 ```
-${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/
+${OUTPUT_ROOT}/7b_fullft/<run>/epoch_last/   ← 새 학습이면 epoch_last
+${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/      ← 옛 학습이면 epoch_3 (legacy)
 ```
 
-대응 config: `configs/experiments/7b_fullft_<run>.yaml`. 이건 별도 스크립트(`auto_eval_7b_fullft.sh`)에 위임한다 — §6 참고.
+대응 config: `configs/experiments/7b_fullft_<run>.yaml`. `auto_eval_7b_fullft.sh`는 사용 금지(§6) — 평가가 필요하면 §4-1 1셀-1명령으로 직접 launch.
 
 ---
 
@@ -1081,14 +1105,48 @@ def _resolve_latest_run(ckpt_root):
     return None
 
 def _largest_sealed_epoch(run_dir):
-    """epoch_N/_complete 가 있는 것만 카운트. 없으면 None."""
+    """Return path of the most-recent sealed ckpt under run_dir, or None.
+
+    Priority:
+      (1) <run_dir>/epoch_last/_complete (new layout, 2026-05-16~)
+      (2) max sealed epoch_<N>/ (legacy)
+    """
+    # (1) epoch_last/ — single rolling ckpt dir, _complete sentinel content
+    #     is the int epoch number. Beats any numeric dir.
+    last = f"{run_dir}/epoch_last"
+    if os.path.exists(f"{last}/_complete"):
+        return last
+    # (2) Legacy numeric epoch_<N>/.
     sealed = []
     for p in glob(f"{run_dir}/epoch_*"):
-        try: n = int(os.path.basename(p).replace("epoch_", ""))
+        name = os.path.basename(p)
+        if name == "epoch_last":
+            continue
+        try: n = int(name.replace("epoch_", ""))
         except ValueError: continue
         if not os.path.exists(f"{p}/_complete"): continue
         sealed.append((n, p))
     return max(sealed)[1] if sealed else None
+
+
+def _sealed_epoch_n(sealed_path):
+    """Read the epoch number from a sealed ckpt dir.
+
+    For epoch_last/_complete, the int is the sentinel content.
+    For legacy epoch_<N>/, parse from the directory name.
+    """
+    if sealed_path is None:
+        return 0
+    name = os.path.basename(sealed_path)
+    if name == "epoch_last":
+        try:
+            return int(open(f"{sealed_path}/_complete").read().strip() or 0)
+        except (OSError, ValueError):
+            return 0
+    try:
+        return int(name.replace("epoch_", ""))
+    except ValueError:
+        return 0
 
 def classify_cell(model, method):
     ckpt_root = f"{OUTPUT_ROOT}/main_7b/{model}/{method}"
@@ -1224,7 +1282,7 @@ bash scripts/auto_eval_7b_fullft.sh <gpu_id> [run1 run2 ...]
 # 셀 1개 — 사용자가 직접 입력
 CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
     --config configs/experiments/7b_fullft_<run>.yaml \
-    --ckpt ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3 \
+    --ckpt ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_last \  # epoch_3 (legacy)도 가능
     --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
     --out_dir ${EVAL_RESULTS_ROOT}/7b_fullft/<run> \
     >> logs/eval_7b_fullft_<run>.log 2>&1 &
@@ -1274,12 +1332,14 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
          if not latest_run:
              status[(model, method)] = "학습전"
              continue
-         latest_epoch = largest_sealed_epoch(latest_run)
+         latest_epoch = largest_sealed_epoch(latest_run)   # path or None
          train_alive  = pgrep_alive(f"python.*tads.train.*{model}/{method}\\.yaml")
          cfg          = json.load(latest_run + "/cfg.json")
          target_epochs = int(cfg.get("train_epochs", 3))
-         sealed_count  = count(latest_run + "/epoch_*/_complete")
-         if train_alive or sealed_count < target_epochs:
+         # sealed N = epoch_last/_complete sentinel content (single int),
+         # or for legacy epoch_<N>/ layout the max N. See §3-1.
+         sealed_n     = sealed_epoch_n(latest_epoch)   # 0 if None
+         if train_alive or sealed_n < target_epochs:
              status[(model, method)] = "학습중"
              continue
 
@@ -1397,10 +1457,34 @@ resolve_latest_run() {
 }
 
 largest_sealed_epoch() {
+  # Return path of the most-recent sealed ckpt under <run_dir>, or empty.
+  # Priority: (1) epoch_last/ (new layout, 2026-05-16~), (2) max sealed
+  # numeric epoch_<N>/ (legacy).
   local run_dir=$1
+  if [ -f "${run_dir}/epoch_last/_complete" ]; then
+    echo "${run_dir}/epoch_last"
+    return
+  fi
   ls -1d "${run_dir}"/epoch_* 2>/dev/null | sort -V | while read -r p; do
+    [ "$(basename "$p")" = "epoch_last" ] && continue
     [ -f "${p}/_complete" ] && echo "${p}"
   done | tail -n 1
+}
+
+sealed_epoch_n() {
+  # Return the epoch number for a sealed ckpt path. For epoch_last/, the
+  # number is the integer content of _complete. For legacy epoch_<N>/, it
+  # is parsed from the directory name. Returns 0 when missing/malformed.
+  local p="$1"
+  [ -z "$p" ] && { echo 0; return; }
+  local base
+  base="$(basename "$p")"
+  if [ "$base" = "epoch_last" ]; then
+    cat "${p}/_complete" 2>/dev/null | head -1 | grep -oE '^-?[0-9]+' \
+      | head -1 || echo 0
+    return
+  fi
+  echo "${base}" | sed 's/^epoch_//' | grep -oE '^-?[0-9]+' || echo 0
 }
 
 # ---------------- §0-7: log-tail polling pass (classify보다 먼저) ---------------
@@ -1730,13 +1814,21 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 ```bash
 cd /home/jieun/kms/tads
 source scripts/setup_env.sh
-# 새 run-layout: <ckpt_root>/_latest -> runs/<tag>/epoch_<N>/
+# 새 run-layout: <ckpt_root>/_latest -> runs/<tag>/epoch_last/
 ls -ld ${OUTPUT_ROOT}/main_7b/*/*/_latest 2>/dev/null | head
-# 그 안의 sealed epoch들
+# 그 안의 sealed epoch_last (or legacy epoch_<N>)
 for r in ${OUTPUT_ROOT}/main_7b/*/*/_latest; do
-  for e in "$r"/epoch_*; do
-    [ -f "$e/_complete" ] && echo "OK   $e"
-  done
+  # epoch_last 우선
+  if [ -f "$r/epoch_last/_complete" ]; then
+    n=$(cat "$r/epoch_last/_complete" 2>/dev/null | head -1)
+    echo "OK   $r/epoch_last  (epoch=$n)"
+  else
+    # legacy fallback
+    for e in "$r"/epoch_*; do
+      [ "$(basename "$e")" = "epoch_last" ] && continue
+      [ -f "$e/_complete" ] && echo "OK   $e  (legacy numeric)"
+    done
+  fi
 done | head
 # Legacy flat layout (옛날 학습용)도 확인
 ls -d ${OUTPUT_ROOT}/main_7b/*/*/epoch_* 2>/dev/null | head

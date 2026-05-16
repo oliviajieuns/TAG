@@ -55,37 +55,45 @@ echo "[run_eval] METHODS=$METHODS"
 mkdir -p logs
 
 latest_epoch() {
-  # Resolve <ckpt_root> -> the largest sealed (= _complete sentinel) epoch_N
-  # under the new run-layout (<ckpt_root>/_latest -> runs/<tag>/) when present,
-  # falling back to the legacy flat layout (<ckpt_root>/epoch_N) otherwise.
+  # Resolve <ckpt_root> -> the sealed ckpt directory.
+  # Priority:
+  #   (1) new epoch_last/ layout (2026-05-16~):
+  #         <ckpt_root>/_latest/epoch_last/_complete exists
+  #         → returns <ckpt_root>/_latest/epoch_last
+  #   (2) legacy numeric epoch_N/ (largest N with _complete sentinel)
+  #   (3) pre-sentinel legacy (largest epoch_N regardless)
   local ckpt_root=$1
   local run_dir=""
 
-  # 1) New layout: _latest symlink/dir
+  # Resolve _latest pointer (symlink, dir, or _latest.txt fallback).
   if [ -L "${ckpt_root}/_latest" ] || [ -d "${ckpt_root}/_latest" ]; then
     run_dir=$(readlink -f "${ckpt_root}/_latest" 2>/dev/null || echo "${ckpt_root}/_latest")
-  # 2) New layout: _latest.txt fallback (filesystems w/o symlink)
   elif [ -f "${ckpt_root}/_latest.txt" ]; then
     local tag
     tag=$(cat "${ckpt_root}/_latest.txt")
     [ -d "${ckpt_root}/runs/${tag}" ] && run_dir="${ckpt_root}/runs/${tag}"
   fi
-
-  # 3) Legacy flat layout
   if [ -z "$run_dir" ]; then
     run_dir="$ckpt_root"
   fi
 
-  # Largest epoch_N inside run_dir whose _complete sentinel exists.
+  # (1) New epoch_last/ layout — wins over any numeric dir.
+  if [ -f "${run_dir}/epoch_last/_complete" ]; then
+    echo "${run_dir}/epoch_last"
+    return
+  fi
+
+  # (2) Legacy: largest sealed numeric epoch_N/.
   local last=""
   while IFS= read -r p; do
+    [ "$(basename "$p")" = "epoch_last" ] && continue
     [ -f "${p}/_complete" ] && last="$p"
   done < <(ls -1d "${run_dir}"/epoch_* 2>/dev/null | sort -V)
 
-  # If nothing sealed (legacy ckpt without sentinels), fall back to the
-  # largest epoch_N regardless. Backward-compat for pre-sentinel runs.
+  # (3) Pre-sentinel legacy: largest epoch_N regardless of _complete.
   if [ -z "$last" ]; then
-    last=$(ls -1d "${run_dir}"/epoch_* 2>/dev/null | sort -V | tail -n 1)
+    last=$(ls -1d "${run_dir}"/epoch_* 2>/dev/null \
+           | grep -v '/epoch_last$' | sort -V | tail -n 1)
   fi
   echo "$last"
 }

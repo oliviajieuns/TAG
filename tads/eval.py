@@ -259,17 +259,40 @@ def main() -> None:
                     f"under {experiment_dir}. Train first or pass --ckpt.",
                 )
         if args.epoch is not None:
-            ckpt_path = target_run / f"epoch_{args.epoch}"
-            if not ckpt_path.exists():
-                raise SystemExit(
-                    f"epoch_{args.epoch} not found in {target_run}. "
-                    f"Available: {sorted(p.name for p in target_run.glob('epoch_*'))}",
-                )
+            # New epoch_last/ layout: only one ckpt dir per run. Honor
+            # --epoch=N only if it matches the sentinel-recorded epoch
+            # of epoch_last (or a legacy epoch_<N>/ still exists).
+            last_dir = target_run / "epoch_last"
+            if (last_dir / "_complete").exists():
+                try:
+                    saved_n = int((last_dir / "_complete").read_text().strip() or 0)
+                except (OSError, ValueError):
+                    saved_n = 0
+                if saved_n == args.epoch:
+                    ckpt_path = last_dir
+                elif (target_run / f"epoch_{args.epoch}").exists():
+                    ckpt_path = target_run / f"epoch_{args.epoch}"  # legacy fall-back
+                else:
+                    raise SystemExit(
+                        f"--epoch {args.epoch} requested but {target_run}/epoch_last "
+                        f"records epoch={saved_n} and no legacy epoch_{args.epoch}/ "
+                        f"directory exists. With the epoch_last/ layout there is "
+                        f"only one ckpt per run — pass --epoch={saved_n} or omit "
+                        f"--epoch to use it.",
+                    )
+            else:
+                ckpt_path = target_run / f"epoch_{args.epoch}"
+                if not ckpt_path.exists():
+                    raise SystemExit(
+                        f"epoch_{args.epoch} not found in {target_run}. "
+                        f"Available: {sorted(p.name for p in target_run.glob('epoch_*'))}",
+                    )
         else:
             n, ckpt_path = find_latest_complete_epoch(target_run)
             if ckpt_path is None:
                 raise SystemExit(
-                    f"No sealed epoch_N found inside {target_run}.",
+                    f"No sealed checkpoint (epoch_last/ or epoch_N/) "
+                    f"inside {target_run}.",
                 )
 
     args.ckpt = str(ckpt_path)

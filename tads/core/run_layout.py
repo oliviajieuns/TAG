@@ -189,31 +189,70 @@ def load_cfg_snapshot(run_dir_path: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _is_sealed_ckpt_dir(p: Path) -> bool:
+    """A checkpoint dir is considered sealed iff:
+      * ``_complete`` sentinel file exists (atomic-rename'd at end of save), AND
+      * ``config.json`` (full FT) or ``adapter_config.json`` (LoRA) exists.
+    """
+    return (
+        p.is_dir()
+        and (p / "_complete").exists()
+        and ((p / "config.json").exists() or (p / "adapter_config.json").exists())
+    )
+
+
+def _read_sentinel_epoch(p: Path) -> int:
+    """Return the epoch number recorded in ``p/_complete`` (single integer line),
+    falling back to 0 if missing / malformed.
+
+    The training save writes ``str(epoch)`` into the sentinel as part of the
+    atomic seal — so the sentinel content IS the source of truth for "what
+    epoch number does this dir represent". With the new epoch_last/ layout
+    we no longer encode N in the dir name; this read becomes the canonical
+    way to learn N.
+    """
+    sentinel = p / "_complete"
+    if not sentinel.exists():
+        return 0
+    try:
+        return int(sentinel.read_text().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
 def find_latest_complete_epoch(run_dir_path: Path) -> Tuple[int, Optional[Path]]:
-    """Largest ``epoch_N`` under ``run_dir_path`` whose ``_complete`` sentinel
-    is present. Returns ``(0, None)`` if nothing usable.
+    """Resolve the most-recent sealed ckpt under ``run_dir_path``.
 
-    A checkpoint is considered "complete" only when both:
-      * ``_complete`` sentinel file exists (atomic-rename'd at the end of
-        the save sequence)
-      * ``config.json`` (full FT) or ``adapter_config.json`` (LoRA) exists
+    Two layouts are supported, in priority order:
+      1. **epoch_last/** (current — single rolling dir per run, overwritten
+         each save). Epoch number is recovered from ``_complete`` sentinel
+         content. Returns ``(n, run/epoch_last)``.
+      2. **epoch_N/** (legacy — per-epoch numeric dirs). Picks the largest
+         N whose dir is sealed. Returns ``(N, run/epoch_N)``.
 
-    so partial / mid-save dirs are skipped and the next run picks up
-    cleanly from the last good epoch.
+    Returns ``(0, None)`` if nothing usable.
     """
     if not run_dir_path.exists():
         return 0, None
+
+    # (1) New layout: epoch_last/ is canonical and beats any numeric dir.
+    last_dir = run_dir_path / "epoch_last"
+    if _is_sealed_ckpt_dir(last_dir):
+        n = _read_sentinel_epoch(last_dir)
+        return n, last_dir
+
+    # (2) Legacy: numeric epoch_<N>/ glob.
     epochs: List[Tuple[int, Path]] = []
     for p in run_dir_path.glob("epoch_*"):
+        if p.name == "epoch_last":
+            continue
         if not p.is_dir():
             continue
         try:
             n = int(p.name.replace("epoch_", ""))
         except ValueError:
             continue
-        if not (p / "_complete").exists():
-            continue
-        if (p / "config.json").exists() or (p / "adapter_config.json").exists():
+        if _is_sealed_ckpt_dir(p):
             epochs.append((n, p))
     if not epochs:
         return 0, None
@@ -263,17 +302,30 @@ def resolve_eval_ckpt(
         )
 
     if epoch is not None:
+        # With the new epoch_last/ layout, only one ckpt dir exists per run.
+        # If --epoch matches the sentinel-recorded epoch we return epoch_last,
+        # otherwise we still accept legacy epoch_<N>/ for back-compat.
+        last_dir = latest_run / "epoch_last"
+        if _is_sealed_ckpt_dir(last_dir):
+            saved_n = _read_sentinel_epoch(last_dir)
+            if saved_n == epoch:
+                return last_dir
+            # Legacy fall-through: ask for epoch_<N> explicitly when the
+            # number doesn't match epoch_last's recorded epoch. Useful when
+            # a run dir was migrated mid-way and both forms exist.
         target = latest_run / f"epoch_{epoch}"
         if not target.exists():
             raise FileNotFoundError(
-                f"epoch_{epoch} not found in {latest_run}. "
-                f"Available: {sorted(p.name for p in latest_run.glob('epoch_*'))}"
+                f"epoch_{epoch} not found in {latest_run}. epoch_last in this "
+                f"run records epoch={_read_sentinel_epoch(latest_run / 'epoch_last')}. "
+                f"Available subdirs: {sorted(p.name for p in latest_run.glob('epoch_*'))}"
             )
         return target
 
     n, p = find_latest_complete_epoch(latest_run)
     if p is None:
         raise FileNotFoundError(
-            f"No complete epoch_N/_complete checkpoint inside {latest_run}.",
+            f"No complete epoch_last/_complete or epoch_N/_complete "
+            f"checkpoint inside {latest_run}.",
         )
     return p

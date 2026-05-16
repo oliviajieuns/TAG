@@ -46,7 +46,16 @@ CLEANUP_EARLY_EPOCHS="${CLEANUP_EARLY_EPOCHS:-0}"
 
 while true; do
   for run in "${RUNS[@]}"; do
-    ckpt="${OUTPUT_ROOT}/7b_fullft/${run}/epoch_3"
+    # Prefer epoch_last/ (new layout, 2026-05-16~) over the legacy
+    # hardcoded epoch_3/. The 7b_fullft tree pre-dates the run-layout
+    # migration so most existing dirs still have epoch_3; new training
+    # invocations write to epoch_last/.
+    run_root="${OUTPUT_ROOT}/7b_fullft/${run}"
+    if [ -d "${run_root}/epoch_last" ]; then
+      ckpt="${run_root}/epoch_last"
+    else
+      ckpt="${run_root}/epoch_3"
+    fi
     out_dir="${EVAL_RESULTS_ROOT}/7b_fullft/${run}"
     done_marker="${out_dir}/.eval_done"
     if [ -d "${ckpt}" ] && [ ! -f "${done_marker}" ]; then
