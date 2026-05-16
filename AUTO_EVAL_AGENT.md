@@ -5,20 +5,25 @@
 
 ---
 
-# 🚨 용어 명확화 — 두 가지 다른 "5" 🚨
+# 🚨 용어 명확화 — "5"는 벤치마크 데이터 5개를 가리킨다 🚨
 
-이 문서엔 "5"가 두 곳에서 등장하는데 의미가 다르다. 혼동 시 표 형식이 깨진다.
+이 문서에서 **"5"는 항상 벤치마크 데이터 5개** (`mmlu` / `gsm8k` / `humaneval` / `tydiqa` / `bbh`) 를 의미한다. 다른 용도로 "5"를 쓰지 말 것 — 모델별 점수 표 컬럼 수, 80-cell 표의 점수 컬럼 수, dashboard column 수 모두 이 5개 벤치마크에서 유래.
 
-| 명칭 | 개수 | 무엇 | 예시 |
+**상태 토큰** (`학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%`) 은 별개 개념 — 셀 값으로 들어가는 어휘이지 "5"라는 숫자와 무관 (현재 5개 토큰이 정의돼 있지만 spec 진화로 추가될 수도 있어 "5-state" 같은 카운트 기반 이름은 쓰지 않음).
+
+| 명칭 | 개수 (의미) | 무엇 | 예시 |
 |---|---|---|---|
-| **5종 벤치마크** | 5 | 점수 컬럼 이름 | `mmlu` / `gsm8k` / `humaneval` / `tydiqa` / `bbh` |
-| **5-state 상태 토큰** | 5 | 셀 값으로 들어가는 어휘 | `학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%` |
+| **벤치마크** | 항상 5 | 점수 컬럼 이름 (= 평가 데이터셋 종류) | `mmlu` / `gsm8k` / `humaneval` / `tydiqa` / `bbh` |
+| **상태 토큰** | (incidental count) | 셀 값으로 들어가는 어휘 | `학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%` |
 
 §0-4 (6)/(7)/(8) 테이블 구조:
-- **컬럼**: 16개 (#, Model/Method, **5종 벤치마크**, Status, Params) — 5는 벤치마크 컬럼 수.
-- **각 (행, 벤치마크) 교차점의 셀 값**: **5-state 상태 토큰** 중 하나.
+- **컬럼**: # / Model/Method / **벤치마크 5개** / Status / Params.
+- **각 (행, 벤치마크) 교차점의 셀 값**: **상태 토큰** 중 하나.
 
-이 둘을 서로 바꿔 부르면 안 됨. spec에서 "5종"이라는 표현 단독으로 쓰지 않고 항상 "5종 벤치마크" 또는 "5-state 상태 토큰"으로 명시. 옛 spec에 "5종 어휘"라고 적혀 있던 자리는 모두 "5-state 상태 토큰"으로 의미함 (vocabulary가 아니라 token set).
+용어 사용 규칙:
+- "5개 벤치마크" / "5개 점수 컬럼" / "5종 벤치마크" — OK (벤치마크 데이터 갯수).
+- "상태 토큰" — OK (셀에 들어가는 어휘 통칭).
+- "5-state" / "5종 상태" / "5종 어휘" / "5종 마커" / "5 상태" — **금지** (의미 혼동). 옛 spec에 적혀 있던 자리는 모두 "상태 토큰"으로 의미함.
 
 ---
 
@@ -35,7 +40,7 @@
 [CHECK 06] (7) Latest 코드펜스 안에 "Params" 컬럼이 헤더로 들어있다.
 [CHECK 07] (8) Best 코드펜스 안에 "Params" 컬럼이 헤더로 들어있다.
 [CHECK 08] (6) Current 80개 셀(16행 × 5벤치 = 80개 값)에 단 하나의
-            `-` / `err` / 공란이 없다 — 전부 5-state 상태 토큰(학습전/학습중/
+            `-` / `err` / 공란이 없다 — 전부 상태 토큰(학습전/학습중/
             eval대기/eval중/NN.NN%) 중 하나.
 [CHECK 09] (9) History의 이번 tick 변경분이 newest-at-bottom으로
             append 되었다. 변경 0개면 history append 없음 OK.
@@ -312,12 +317,12 @@ ${EVAL_RESULTS_ROOT}/experiments.md
     * `학습중` → `학습중`: (6)만 갱신 (이미 그 상태였을 수 있음 — no-op이지만 그래도 atomic 교체).
     * `학습중` → `NN.NN%` (재학습 완료): (6)/(7) 갱신, (8)은 max 비교, (9) append.
     * `NN.NN%` → `학습중` (재학습 시작): (6)만 학습중으로, (7)/(8) 그대로, (9) append.
-    * 그 외 5-state 상태 토큰 전환 (eval대기 → eval중 등): (6)만 갱신, (9) append.
+    * 그 외 상태 토큰 전환 (eval대기 → eval중 등): (6)만 갱신, (9) append.
 - 셀의 가장 최근 학습 run의 cfg.json snapshot이 바뀌면 (6) Params 컬럼만 갱신. (7) Params는 마지막 DONE 시점 cfg 그대로, (8) Params는 best run cfg 그대로.
 
 **🚨 셀 값 어휘 — 매우 엄격 (자주 위반되니 주의):**
 
-매 tick의 출력에 들어갈 수 있는 셀 값은 정확히 **5-state 상태 토큰** 중 하나뿐 (이것은 "5종 벤치마크"와 별개 개념 — 용어 혼동 주의, 위 "🚨 두 가지 '5'" 박스 참조):
+매 tick의 출력에 들어갈 수 있는 셀 값은 정확히 **상태 토큰** 중 하나뿐 (이것은 "5종 벤치마크"와 별개 개념 — 용어 혼동 주의, 위 "🚨 두 가지 '5'" 박스 참조):
 
 1. `학습전` — 체크포인트가 아직 없음 (§5-4 NEED-TRAIN)
 2. `학습중` — 학습 프로세스가 살아있거나 sealed epoch 수 < train_epochs
@@ -327,12 +332,12 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 
 **🚫 금지된 토큰** — 아래 중 어떤 것도 `experiments.md`의 셀 값으로 절대 들어가면 안 된다:
 - `-` (dash) — 가이드 문서의 placeholder일 뿐. 셀 값이 아님.
-- `err` / `error` / `Error` / `ERR` / `ERROR` / `에러` / `오류` / `실패` — eval/train 실패는 위 5-state 상태 토큰 중 하나로 **반드시 매핑**해서 표기한다 (아래 매핑 규칙 참조).
-- 공란 / `null` / `None` / `nil` / `n/a` / `N/A` / `TBD` / `?` — 의미 모호. 5-state 상태 토큰 중 하나로 결정.
+- `err` / `error` / `Error` / `ERR` / `ERROR` / `에러` / `오류` / `실패` — eval/train 실패는 위 상태 토큰 중 하나로 **반드시 매핑**해서 표기한다 (아래 매핑 규칙 참조).
+- 공란 / `null` / `None` / `nil` / `n/a` / `N/A` / `TBD` / `?` — 의미 모호. 상태 토큰 중 하나로 결정.
 - `legacy(...)` / `학습필요` / `재학습` / `eval필요` 같은 옛 임시 표기.
 - `**bold**` / `*italic*` / 백틱(\`)으로 감싼 형태 — 표 셀에는 평문만 (markdown 강조 금지, terminal에서 별표/백틱이 그대로 보임).
 
-**모든 가능한 상태를 5-state 상태 토큰으로 매핑 — 빠짐없이:**
+**모든 가능한 상태를 상태 토큰으로 매핑 — 빠짐없이:**
 
 | 셀의 실제 상황 | 정답 토큰 | 비고 |
 |---|---|---|
@@ -356,15 +361,15 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 table=$(awk '/^## 80-cell Consolidated Score Table/,0' experiments.md \
         | awk '/^```$/{f=!f; next} f' | grep -E '^[ ]*[0-9]+ ')
 
-# 2. 5-state 상태 토큰 외의 토큰이 있는지 확인 (정규식: 학습전/학습중/eval대기/eval중/NN.NN%)
+# 2. 상태 토큰 외의 토큰이 있는지 확인 (정규식: 학습전/학습중/eval대기/eval중/NN.NN%)
 bad=$(echo "$table" \
       | grep -oE '[^[:space:]]+' \
       | grep -vE '^([0-9]+|llama2|qwen25|mistral|deepseek|/|full_100|random_10|data_agent_10|tads_10|학습전|학습중|eval대기|eval중|[0-9]+\.[0-9]{2}%)$' \
       | sort -u)
 if [ -n "$bad" ]; then
-  echo "[FAIL] 80-cell 표에 금지 토큰 발견 — 5-state 상태 토큰로 재분류 필요:"
+  echo "[FAIL] 80-cell 표에 금지 토큰 발견 — 상태 토큰로 재분류 필요:"
   echo "$bad" | sed 's/^/  - /'
-  echo "  (`-`, `err`, `error`, 공란 등은 모두 5-state 상태 토큰 중 하나로 매핑할 것. 모르면 eval대기로 떨어뜨릴 것.)"
+  echo "  (`-`, `err`, `error`, 공란 등은 모두 상태 토큰 중 하나로 매핑할 것. 모르면 eval대기로 떨어뜨릴 것.)"
   exit 1
 fi
 
@@ -375,7 +380,7 @@ if [ "$n" -ne 80 ]; then
   exit 1
 fi
 
-echo "[OK] 80-cell 표 검증 통과 (모든 셀이 5-state 상태 토큰로 채워짐)"
+echo "[OK] 80-cell 표 검증 통과 (모든 셀이 상태 토큰로 채워짐)"
 ```
 
 이 체크가 한 단계라도 fail이면:
@@ -468,7 +473,7 @@ tads_10         -          -          -          -
 #### (6) Current — 80-cell real-time status table + Status + Params
 
 > **위치 = `experiments.md`의 맨 아래 (이 표 + 아래 (7) Latest + (8) Best + (9) History 4종이 항상 마지막)**. (1)-(5)는 모델별/요약별 뷰, (6)이 **현재 시점 80개 전체 셀의 single source of truth**. 매 tick 동기화 필수.
-> **5-state 상태 토큰(`학습전 / 학습중 / eval대기 / eval중 / NN.NN%`) 그대로 채움 (§5-4).** 새로 학습이 시작되면 이전에 DONE이었던 셀도 즉시 `학습중`으로 돌아옴 (§0-4 (10) "재학습 → 표 갱신" 규약 참조). 이전 점수는 (7) Latest 표와 (9) History 로그에 보존.
+> **상태 토큰(`학습전 / 학습중 / eval대기 / eval중 / NN.NN%`) 그대로 채움 (§5-4).** 새로 학습이 시작되면 이전에 DONE이었던 셀도 즉시 `학습중`으로 돌아옴 (§0-4 (10) "재학습 → 표 갱신" 규약 참조). 이전 점수는 (7) Latest 표와 (9) History 로그에 보존.
 > **`Status` 컬럼** = 셀의 (1) 점수 이력, (2) 시스템 오류, (3) baseline 발산 알람을 한 줄로 요약 (§0-6 가이드 참조).
 > **`Params` 컬럼** = 그 셀의 가장 최근 학습 run(`<ckpt_root>/_latest/cfg.json`)에서 추출한 주요 하이퍼파라미터 한 줄 요약 (아래 §0-4 (10) "Params 한 줄 형식" 참조). 사용자가 셀 점수와 학습 설정을 한 화면에 같이 보기 위한 컬럼.
 
@@ -539,7 +544,7 @@ tads_10         -          -          -          -
 
 규칙:
 - newest at bottom (append-only). 절대 이전 줄을 수정/삭제하지 말 것.
-- 셀 값이 (a) 5-state 상태 토큰 사이 전환 (예: `eval대기` → `eval중` → `NN.NN%`)이거나 (b) `NN.NN%` 값이 변경되거나 (c) `NN.NN%`가 `학습중`으로 돌아갈 때 모두 한 줄씩 추가.
+- 셀 값이 (a) 상태 토큰 사이 전환 (예: `eval대기` → `eval중` → `NN.NN%`)이거나 (b) `NN.NN%` 값이 변경되거나 (c) `NN.NN%`가 `학습중`으로 돌아갈 때 모두 한 줄씩 추가.
 - 컬럼 폭은 §0-4의 표 작성 규칙(`MD 파일 표 작성 규칙 6항`)을 따름. monospace 정렬, CJK는 visual width 2 cell로 패딩.
 - `reason` 태그는 §0-6 (a)의 원인 태그(`lr↑`, `seed`, `재학습`, `cfg변경`, `param`, `initial`, `재학습 시작`, `재학습 완료` 등) 또는 사용자가 cell에 명시한 자유 텍스트.
 - 매 tick 종료 시 그 tick에서 발생한 변경만 추가. 변경 없으면 줄 추가 안 함.
@@ -636,9 +641,9 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 >
 > **재학습 감지** (§0-4 (10)): 셀이 이전 tick에 DONE(`NN.NN%`)이었어도, 현재 tick에서 위 결정 트리 #2 (학습 프로세스 alive 또는 새 run의 sealed < cfg_target)가 만족되면 **즉시 `학습중`으로 되돌린다**. 이전 NN.NN%는 (7) Latest 표에 유지되고 (9) History에 prev=NN.NN% new=학습중 한 줄 append. (6) Current만 학습중으로 덮어씀. DONE → 학습중 → 새 NN.NN% 흐름이 매 tick 동기화됨.
 
-> **표기는 위 5-state 상태 토큰만 허용** (5종 벤치마크와 혼동 금지). `-`는 본 가이드 문서 안의 placeholder일 뿐 `experiments.md`의 셀 값으로는 **절대 쓰지 말 것** — `experiments.md`를 최초 생성할 때부터 §5-4 분류를 돌려 5-state 상태 토큰 중 하나를 채운다. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 5-state 상태 토큰 중 하나로 매핑: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
+> **표기는 위 상태 토큰만 허용** (5종 벤치마크와 혼동 금지). `-`는 본 가이드 문서 안의 placeholder일 뿐 `experiments.md`의 셀 값으로는 **절대 쓰지 말 것** — `experiments.md`를 최초 생성할 때부터 §5-4 분류를 돌려 상태 토큰 중 하나를 채운다. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 상태 토큰 중 하나로 매핑: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
 >
-> 흔한 실수: 가이드 §0-4(6) 코드 블록의 `-`로 채워진 행을 그대로 `experiments.md`에 복사하고 끝내는 것. 이건 잘못된 출력이다. **복사 직후 같은 tick에서 분류해서 5-state 상태 토큰로 덮어써야 매 tick이 마무리된다.**
+> 흔한 실수: 가이드 §0-4(6) 코드 블록의 `-`로 채워진 행을 그대로 `experiments.md`에 복사하고 끝내는 것. 이건 잘못된 출력이다. **복사 직후 같은 tick에서 분류해서 상태 토큰로 덮어써야 매 tick이 마무리된다.**
 
 추가 규칙:
 - treatment 행이 DONE이면 옆에 §0-2의 발산 알람을 인라인으로 붙일 것. 예: `tads_10  41.20% (RED < random_10)`
@@ -666,7 +671,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 
 매 tick 보고에 에이전트는 **다음 80-cell 표 한 개를 반드시 출력**한다. §0-4의
 score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 사용자가 한
-번에 진행 상태를 파악하는 dashboard. 셀 값은 정확히 **5-state 상태 토큰 중 하나** (§0-4 채우는 규칙과 동일 어휘):
+번에 진행 상태를 파악하는 dashboard. 셀 값은 정확히 **상태 토큰 중 하나** (§0-4 채우는 규칙과 동일 어휘):
 
 | 상태 표기 | 의미 | 분류 조건 |
 |---|---|---|
@@ -1383,7 +1388,7 @@ ${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log
 
 ### 5-4. 셀 상태 분류 (4 파일-state + 1 process-state = 5 display state) — 매 tick 시작 시 모든 셀에 대해 판정
 
-매트릭스 16개 셀 각각을 다음 **4가지 file-state 중 하나**로 분류 (디스크 상태 기반). 그 위에 **process-state** 1종(eval 프로세스가 떠있는지)을 겹쳐 score board에는 항상 **5-state 상태 토큰 (`학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%`) 중 하나**로만 표기.
+매트릭스 16개 셀 각각을 다음 **4가지 file-state 중 하나**로 분류 (디스크 상태 기반). 그 위에 **process-state** 1종(eval 프로세스가 떠있는지)을 겹쳐 score board에는 항상 **상태 토큰 (`학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%`) 중 하나**로만 표기.
 
 **🔑 핵심 규칙 — `cfg_target_epochs`의 정의**:
 
@@ -1655,7 +1660,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
              sync_score_board_now(model, method)         # 다음 tick 안 기다리고 표 갱신
          update_status_column(model, method, signals)     # §0-5/§0-6 (a)
 
-3. classify pass — 모든 80개 셀에 §5-4 표의 5-state 상태 토큰 부여
+3. classify pass — 모든 80개 셀에 §5-4 표의 상태 토큰 부여
    for model in {llama2, qwen25, mistral, deepseek}:
      for method in {full_100, random_10, data_agent_10, tads_10}:
          ckpt_root = ${OUTPUT_ROOT}/main_7b/${model}/${method}
@@ -1766,7 +1771,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
    #  eval auto-launch는 위 3.7에서 처리됨 (§0 / §4). 학습 auto-launch는 절대 금지.
 
    ## STRUCTURE — MUST 5개 섹션 모두 갱신 (§0-4 절대 비교섭 규칙):
-   ## (6) Current      — 5-state 상태 토큰 + Status + Params, 80 cells
+   ## (6) Current      — 상태 토큰 + Status + Params, 80 cells
    ## (7) Latest       — NN.NN%/- + Last DONE + Params, 80 cells
    ## (8) Best         — NN.NN%/- + AVG + Best run + Params, 80 cells
    ## (9) History      — 그 tick의 셀 값 변경마다 한 줄 append (newest at bottom)
