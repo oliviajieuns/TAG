@@ -326,7 +326,7 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 | Summary JSON 파싱 실패 (스키마 모름) | `eval대기` | 점수 추출 못 했으면 미완성 — 재시도 큐 |
 | 위 어디에도 해당 안 됨 | `eval대기` | **fall-through 기본값** (학습 끝난 셀의 미정 상태는 항상 `eval대기`) |
 
-> **핵심 fall-through 규칙**: 분류 로직에서 어떤 분기에도 안 걸린 셀이 있으면 **무조건 `eval대기`**. 절대 `-` / `err` / 공란을 남기지 말 것. "모르겠으면 eval대기" — 사용자가 §0-4 "사용자 액션 필요 — eval 미실행 셀" 섹션에서 보고 결정한다.
+> **핵심 fall-through 규칙**: 분류 로직에서 어떤 분기에도 안 걸린 셀이 있으면 **무조건 `eval대기`**. 절대 `-` / `err` / 공란을 남기지 말 것. "모르겠으면 eval대기" — 다음 dispatch pass에서 에이전트가 빈 GPU가 있을 때 자동으로 launch한다 (§4 / §7 3.7).
 
 **셀프 체크 — 매 tick의 표 작성 직후 반드시 수행 (3단계 검증):**
 ```bash
@@ -576,7 +576,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 |---|---|---|
 | **NO-CKPT** | `학습전` | `_latest`도 `_latest.txt`도 legacy flat `epoch_*`도 없음. 행 전체 5컬럼 동일. 사용자에게 "학습이 필요한 셀 목록" 보고. |
 | **TRAINING** | `학습중` | 학습 프로세스 alive **또는** sealed epoch < `cfg_target_epochs`. 행 전체 5컬럼 동일. |
-| **NEED-EVAL** | `eval대기` | (a) 학습 끝남 (sealed == `cfg_target_epochs`) AND (b) `_latest/_complete` + `_latest/<label>-eval_summary.json` 부재 또는 stale AND **(c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime > 5분 (= 진짜 idle)**. 사용자가 직접 실행할 셀. |
+| **NEED-EVAL** | `eval대기` | (a) 학습 끝남 (sealed == `cfg_target_epochs`) AND (b) `_latest/_complete` + `_latest/<label>-eval_summary.json` 부재 또는 stale AND **(c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime > 5분 (= 진짜 idle)**. 다음 dispatch pass에서 에이전트가 자동 launch (§4 / §7 3.7). |
 | **EVAL-RUNNING** | `eval중` | `python -m tads.eval.*<model>/<method>` 프로세스 alive **또는** eval 로그 mtime < 5분 이내 활동 (pgrep이 잠시 놓쳤어도 로그가 움직이면 살아있는 것). |
 | **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. humaneval은 pass@1. |
 
@@ -605,12 +605,12 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 >    → eval대기 [END]  (.fail_count 증가, HISTORY.md `[eval]` 오류 엔트리 작성)
 >
 > 6. ← 위 5단계 모두 안 걸린 셀 = "학습 끝났는데 eval 결과 없는 셀"
->    → eval대기 [END]  (fall-through 기본값. 사용자 액션 큐로 보고)
+>    → eval대기 [END]  (fall-through 기본값. 다음 dispatch pass에서 auto-launch)
 > ```
 >
-> **`eval대기`로 떨어진 셀은 §0-4 "사용자 액션 필요 — eval 미실행 셀" 섹션에 자동 추가**. 사용자가 §4-1 명령으로 직접 launch한다 — **에이전트는 절대 자동 launch하지 않는다 (§0)**.
+> **`eval대기`로 떨어진 셀은 §7 의사 코드의 `3.7 dispatch pass`에서 빈 GPU 만큼 자동 launch된다** (§0 / §4 — 학습 동시 실행 없는 운영 가정). 사용자 입력 불필요. launch 직후 §0-4 (6) Current 표에서 즉시 `eval대기` → `eval중`으로 갱신.
 >
-> 이전 tick의 분류 값을 캐싱하지 말 것. 사용자가 tick 사이에 eval을 launch하면 3번에서 잡히고, 끝나면 4번에서 잡힌다 — 매 tick 처음부터 6단계 다시 돌려야 정확.
+> 이전 tick의 분류 값을 캐싱하지 말 것. 에이전트가 매 tick dispatch한 잡은 #3 (pgrep 또는 로그 mtime)에서 잡혀 `eval중`, 끝나면 #4에서 잡혀 `NN.NN%` — 매 tick 처음부터 6단계 다시 돌려야 정확.
 >
 > **재학습 감지** (§0-4 (10)): 셀이 이전 tick에 DONE(`NN.NN%`)이었어도, 현재 tick에서 위 결정 트리 #2 (학습 프로세스 alive 또는 새 run의 sealed < cfg_target)가 만족되면 **즉시 `학습중`으로 되돌린다**. 이전 NN.NN%는 (7) Latest 표에 유지되고 (9) History에 prev=NN.NN% new=학습중 한 줄 append. (6) Current만 학습중으로 덮어씀. DONE → 학습중 → 새 NN.NN% 흐름이 매 tick 동기화됨.
 
@@ -628,15 +628,16 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
   - mistral / random_10
   ...
   ```
-- **`eval대기` 셀도 동일하게 별도 섹션을 `experiments.md` 상단에 추가** (학습전 섹션 바로 아래). 사용자가 직접 실행할 큐이기 때문 (§0 — 에이전트 auto-launch 금지). 형식:
+- **`eval대기` 셀은 별도 섹션 "Auto-dispatch queue (eval대기)"으로 `experiments.md` 상단에 표시** (학습전 섹션 바로 아래). 사용자 액션은 필요 없음 — 에이전트가 다음 tick에 빈 GPU 만큼 자동 launch (§4 / §7 3.7). 사용자에겐 진행 상황 알림 용도. 형식:
   ```
-  ## 사용자 액션 필요 — eval 미실행 셀 (eval대기)
-  - llama2 / random_10        (epoch 4 sealed at 2026-05-16 18:00; eval 로그 없음)
-  - qwen25 / data_agent_10    (epoch 4 sealed at 2026-05-16 17:30; 직전 eval 5h 전 idle)
-  - mistral / tads_10         (epoch 4 sealed at 2026-05-16 16:15)
+  ## Auto-dispatch queue — eval 미실행 셀 (다음 tick에 자동 launch 예정)
+  - llama2 / random_10        (epoch 3 sealed at 2026-05-16 18:00; eval 로그 없음)
+  - qwen25 / data_agent_10    (epoch 3 sealed at 2026-05-16 17:30; 직전 eval 5h 전 idle)
+  - mistral / tads_10         (epoch 3 sealed at 2026-05-16 16:15)
   ...
+  현재 빈 GPU: 2개 (cuda:1, cuda:3) — 위 큐 중 앞 2개 launch 예정.
   ```
-  각 줄에는 ckpt sealed 시각과 (있다면) 직전 eval 활동 시각을 짧게 부기 — 사용자가 어느 셀부터 launch할지 우선순위 정할 때 참고.
+  각 줄에 ckpt sealed 시각 + 직전 eval 활동 시각 부기. 맨 아래에 현재 빈 GPU 수 + 다음 tick에 어느 셀까지 launch될지 명시.
 - 옛 포맷에서 추출한 점수도 그대로 `NN.NN%`로 표기하되, 발산 알람은 다음 tick 재평가로 DONE 전환될 때까지 회색(`(provisional)`)으로 표기.
 
 ### 0-5. Status Dashboard — **5×16 한눈 보기 표 (의무 출력)**
@@ -649,8 +650,8 @@ score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 �
 |---|---|---|
 | `학습전` | 체크포인트 없음 | `<ckpt_root>/_latest`도 `_latest.txt`도 없고, legacy flat `epoch_*`도 없음. 행(=한 셀) 전체 5개 컬럼이 모두 이 표기. |
 | `학습중` | 학습 진행 중 | (a) `python -m tads.train.*<model>/<method>` 프로세스가 살아있음, **또는** (b) `<latest_run>/cfg.json`의 `train_epochs` 값보다 sealed (`_complete`) epoch 수가 적음. 행 전체 5개 컬럼 모두 이 표기. |
-| `eval대기` | 학습 끝남, eval 프로세스도 아직 안 떴음 | 학습 완료(sealed == `train_epochs`)이고 `<eval_base>/_latest/<exp_label>-<bench>.json` 없음 (또는 mtime이 sealed epoch보다 옛날), **그리고** `python -m tads.eval.*<model>/<method>` 프로세스 없음. |
-| `eval중` | eval 프로세스 떠있음 | `python -m tads.eval.*<model>/<method>` 프로세스가 떠 있음 (대기든 실행이든). |
+| `eval대기` | 학습 끝남, eval 프로세스도 아직 안 떴음 | (a) sealed_n >= `cfg_target_epochs` AND (b) `<eval_base>/_latest/<exp_label>-<bench>.json` 없음 또는 mtime ≤ sealed epoch AND (c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime ≥ 5분 (= 진짜 idle). **다음 §7 3.7 dispatch pass에서 에이전트가 자동 launch.** |
+| `eval중` | eval 프로세스 떠있거나 log 활동 중 | (a) `python -m tads.eval.*<model>/<method>` 프로세스 alive **또는** (b) `<eval_base>/_latest/logs/eval_*.log` mtime < 5분 이내 (pgrep이 잠시 놓친 케이스 포함). |
 | `47.56%` | 점수 산출 완료 | `<eval_base>/_latest/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
 
 **판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 5×16에 투영):
@@ -691,9 +692,13 @@ def status_cell(model, method, bench):
         bench_json = f"{eval_latest}/{label}-{bench}.json"
         if exists(bench_json) and mtime(bench_json) > mtime(sealed_max):
             return f"{extract_score_pct(bench_json):.2f}%"
-    # 점수 JSON 아직 없음 또는 _latest unsealed — eval 프로세스 떠있는지로
-    # 대기/진행 구분.
+    # 점수 JSON 아직 없음 또는 _latest unsealed — pgrep + log mtime으로
+    # eval중 vs eval대기 구분 (§5-4와 동일 룰).
     if pgrep_alive(f"python.*-m tads.eval.*{model}/{method}"):
+        return "eval중"
+    # pgrep이 잠시 놓친 케이스: 로그 mtime이 5분 이내면 살아있는 잡.
+    eval_log = newest(f"{eval_base}/_latest/logs/eval_*.log")
+    if eval_log and (now() - mtime(eval_log)) < 300:
         return "eval중"
     return "eval대기"
 ```
@@ -1314,8 +1319,8 @@ ${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log
 
 | 상태 | 판정 조건 | 에이전트 행동 | Score board 마커 |
 |---|---|---|---|
-| **NEED-TRAIN** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/`이 없거나, `_latest` 포인터(또는 `_latest.txt`)가 없고 평탄 layout의 `epoch_*`도 없음 | **아무것도 자동 실행하지 말 것**. 사용자에게 "이 셀은 학습이 아직 안 됐다" 보고만. | `학습전` (학습 프로세스가 살아있으면 `학습중`) |
-| **NEED-EVAL** | sealed epoch이 존재하지만, `_latest/<exp_label>-eval_summary.json` + `_latest/_complete` 조합이 없거나 mtime ≤ latest sealed epoch mtime | 다음 tick에 eval 실행 (단일 셀에 `MODELS=<m> METHODS=<x>` 필터로 호출) | `eval대기` (eval 프로세스가 떠있으면 `eval중`) |
+| **NEED-TRAIN** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/`이 없거나, `_latest` 포인터(또는 `_latest.txt`)가 없고 평탄 layout의 `epoch_*`도 없음 | **학습 자동 실행 금지** (사용자 영역). 사용자에게 "이 셀은 학습이 아직 안 됐다" 보고만. eval은 ckpt가 없어 의미 없음. | `학습전` (학습 프로세스가 살아있으면 `학습중`) |
+| **NEED-EVAL** | sealed epoch이 존재하지만, `_latest/<exp_label>-eval_summary.json` + `_latest/_complete` 조합이 없거나 mtime ≤ latest sealed epoch mtime | **다음 tick 의 §7 3.7 dispatch pass에서 빈 GPU 만큼 에이전트가 자동 launch** (1 GPU = 1 cell, §4-1 형식). 큐가 GPU 보다 많으면 다음 tick에 또 dispatch. | `eval대기` (eval 프로세스가 떠있거나 eval 로그 mtime < 5분이면 `eval중`) |
 | **LEGACY** | `_latest`가 없고 BASE eval dir에 flat 포맷 파일만 있음 (예: `<base>/<exp_label>-eval_summary.json`, `<base>/eval_summary.json` 접두어 없음, 또는 벤치별 `<base>/mmlu.json` 류) | 점수는 flat 파일에서 추출해 표에 잠정 기재하되, **재실행 권장 (NEED-EVAL과 동일하게 큐잉)**. 새 history layout으로 다시 평가하면 자동으로 DONE으로 갱신. | `NN.NN%` (옛 점수 그대로, `(provisional)` 주석 별도 라인) |
 | **DONE** | `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/` 안에 `_complete` sentinel과 `<exp_label>-eval_summary.json`이 모두 있고, summary mtime > latest sealed epoch mtime | 건너뜀. 점수 표에 숫자 반영. | `NN.NN%` 예: `47.56%` |
 
