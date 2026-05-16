@@ -62,24 +62,24 @@ treatment (data_agent_10, tads_10)  ← 위 둘 사이 어디쯤이어야 정상
 
 #### (a) 학습 config × 체크포인트 위치 × 결과 디렉터리 (16개 셀)
 
-| # | 모델 | 메서드 | Role | Config (학습/eval 공용) | 체크포인트 루트 | 결과 디렉터리 | `experiment_label` | 비교 대상 / 발산 알람 |
-|---|---|---|---|---|---|---|---|---|
-| 1 | llama2 | full_100 | **BASE-FULL** | `configs/experiments/main_7b/llama2/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/full_100/` | `llama2_full_100` | 기준선 (천장). 절대값 자체가 sanity 체크 — 평균 정확도가 동급 reference 대비 5%p 이상 낮으면 학습 자체 의심 |
-| 2 | llama2 | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/llama2/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/random_10/` | `llama2_random_10` | 기준선 (바닥). 보통 BASE-FULL 대비 3~8%p 처짐이 정상 |
-| 3 | llama2 | data_agent_10 | treat | `configs/experiments/main_7b/llama2/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/data_agent_10/` | `llama2_data_agent_10` | vs `llama2_random_10` (반드시 ≥), vs `llama2_full_100` (≤이지만 -2%p 이내 권장) |
-| 4 | llama2 | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/llama2/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/tads_10/` | `llama2_tads_10` | vs `llama2_random_10` (반드시 ≥, -1%p 처지면 **빨간불**), vs `llama2_data_agent_10` (≥ 권장), vs `llama2_full_100` (-5%p 이상 처지면 **노란불**) |
-| 5 | qwen25 | full_100 | **BASE-FULL** | `configs/experiments/main_7b/qwen25/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/full_100/` | `qwen25_full_100` | 기준선 (천장) |
-| 6 | qwen25 | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/qwen25/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/random_10/` | `qwen25_random_10` | 기준선 (바닥) |
-| 7 | qwen25 | data_agent_10 | treat | `configs/experiments/main_7b/qwen25/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/` | `qwen25_data_agent_10` | vs `qwen25_random_10` / `qwen25_full_100` (위 #3 규칙) |
-| 8 | qwen25 | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/qwen25/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/tads_10/` | `qwen25_tads_10` | vs `qwen25_random_10` / `qwen25_data_agent_10` / `qwen25_full_100` (위 #4 규칙) |
-| 9 | mistral | full_100 | **BASE-FULL** | `configs/experiments/main_7b/mistral/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/full_100/` | `mistral_full_100` | 기준선 (천장) |
-| 10 | mistral | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/mistral/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/random_10/` | `mistral_random_10` | 기준선 (바닥) |
-| 11 | mistral | data_agent_10 | treat | `configs/experiments/main_7b/mistral/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/data_agent_10/` | `mistral_data_agent_10` | vs `mistral_random_10` / `mistral_full_100` (위 #3 규칙) |
-| 12 | mistral | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/mistral/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/tads_10/` | `mistral_tads_10` | vs `mistral_random_10` / `mistral_data_agent_10` / `mistral_full_100` (위 #4 규칙) |
-| 13 | deepseek | full_100 | **BASE-FULL** | `configs/experiments/main_7b/deepseek/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/full_100/` | `deepseek_full_100` | 기준선 (천장) |
-| 14 | deepseek | random_10 | **BASE-NAIT** | `configs/experiments/main_7b/deepseek/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/random_10/` | `deepseek_random_10` | 기준선 (바닥) |
-| 15 | deepseek | data_agent_10 | treat | `configs/experiments/main_7b/deepseek/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/data_agent_10/` | `deepseek_data_agent_10` | vs `deepseek_random_10` / `deepseek_full_100` (위 #3 규칙) |
-| 16 | deepseek | tads_10 | **treat (proposed)** | `configs/experiments/main_7b/deepseek/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/tads_10/` | `deepseek_tads_10` | vs `deepseek_random_10` / `deepseek_data_agent_10` / `deepseek_full_100` (위 #4 규칙) |
+| # | 모델 | 메서드 | Config (학습/eval 공용) | 체크포인트 루트 | 결과 디렉터리 | `experiment_label` | 비교 대상 / 발산 알람 |
+|---|---|---|---|---|---|---|---|
+| 1 | llama2 | full_100 | `configs/experiments/main_7b/llama2/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/full_100/` | `llama2_full_100` | 기준선 (천장). 절대값 자체가 sanity 체크 — 평균 정확도가 동급 reference 대비 5%p 이상 낮으면 학습 자체 의심 |
+| 2 | llama2 | random_10 | `configs/experiments/main_7b/llama2/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/random_10/` | `llama2_random_10` | 기준선 (바닥). 보통 BASE-FULL 대비 3~8%p 처짐이 정상 |
+| 3 | llama2 | data_agent_10 | `configs/experiments/main_7b/llama2/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/data_agent_10/` | `llama2_data_agent_10` | vs `llama2_random_10` (반드시 ≥), vs `llama2_full_100` (≤이지만 -2%p 이내 권장) |
+| 4 | llama2 | tads_10 | `configs/experiments/main_7b/llama2/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/tads_10/` | `llama2_tads_10` | vs `llama2_random_10` (반드시 ≥, -1%p 처지면 **빨간불**), vs `llama2_data_agent_10` (≥ 권장), vs `llama2_full_100` (-5%p 이상 처지면 **노란불**) |
+| 5 | qwen25 | full_100 | `configs/experiments/main_7b/qwen25/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/full_100/` | `qwen25_full_100` | 기준선 (천장) |
+| 6 | qwen25 | random_10 | `configs/experiments/main_7b/qwen25/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/random_10/` | `qwen25_random_10` | 기준선 (바닥) |
+| 7 | qwen25 | data_agent_10 | `configs/experiments/main_7b/qwen25/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/` | `qwen25_data_agent_10` | vs `qwen25_random_10` / `qwen25_full_100` (위 #3 규칙) |
+| 8 | qwen25 | tads_10 | `configs/experiments/main_7b/qwen25/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/tads_10/` | `qwen25_tads_10` | vs `qwen25_random_10` / `qwen25_data_agent_10` / `qwen25_full_100` (위 #4 규칙) |
+| 9 | mistral | full_100 | `configs/experiments/main_7b/mistral/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/full_100/` | `mistral_full_100` | 기준선 (천장) |
+| 10 | mistral | random_10 | `configs/experiments/main_7b/mistral/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/random_10/` | `mistral_random_10` | 기준선 (바닥) |
+| 11 | mistral | data_agent_10 | `configs/experiments/main_7b/mistral/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/data_agent_10/` | `mistral_data_agent_10` | vs `mistral_random_10` / `mistral_full_100` (위 #3 규칙) |
+| 12 | mistral | tads_10 | `configs/experiments/main_7b/mistral/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/tads_10/` | `mistral_tads_10` | vs `mistral_random_10` / `mistral_data_agent_10` / `mistral_full_100` (위 #4 규칙) |
+| 13 | deepseek | full_100 | `configs/experiments/main_7b/deepseek/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/full_100/` | `deepseek_full_100` | 기준선 (천장) |
+| 14 | deepseek | random_10 | `configs/experiments/main_7b/deepseek/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/random_10/` | `deepseek_random_10` | 기준선 (바닥) |
+| 15 | deepseek | data_agent_10 | `configs/experiments/main_7b/deepseek/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/data_agent_10/` | `deepseek_data_agent_10` | vs `deepseek_random_10` / `deepseek_full_100` (위 #3 규칙) |
+| 16 | deepseek | tads_10 | `configs/experiments/main_7b/deepseek/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/tads_10/` | `deepseek_tads_10` | vs `deepseek_random_10` / `deepseek_data_agent_10` / `deepseek_full_100` (위 #4 규칙) |
 
 > 모든 config 파일은 로컬에 실제로 존재함을 확인함. `random_50 / data_agent_50 / tads_50`도 디스크엔 있지만 **이번 매트릭스 범위 밖**이므로 자동 eval에서 제외.
 
@@ -138,56 +138,79 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 #### (1) llama2
 
 ```
-Method          Role          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
-=============== ============= ======= ======= ========== ======== ======= =======
-full_100        BASE-FULL     -       -       -          -        -       -
-random_10       BASE-NAIT     -       -       -          -        -       -
-data_agent_10   treat         -       -       -          -        -       -
-tads_10         proposed *    -       -       -          -        -       -
+Method          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
+=============== ======= ======= ========== ======== ======= =======
+full_100        -       -       -          -        -       -
+random_10       -       -       -          -        -       -
+data_agent_10   -       -       -          -        -       -
+tads_10         -       -       -          -        -       -
 ```
 
 #### (2) qwen25
 
 ```
-Method          Role          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
-=============== ============= ======= ======= ========== ======== ======= =======
-full_100        BASE-FULL     -       -       -          -        -       -
-random_10       BASE-NAIT     -       -       -          -        -       -
-data_agent_10   treat         -       -       -          -        -       -
-tads_10         proposed *    -       -       -          -        -       -
+Method          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
+=============== ======= ======= ========== ======== ======= =======
+full_100        -       -       -          -        -       -
+random_10       -       -       -          -        -       -
+data_agent_10   -       -       -          -        -       -
+tads_10         -       -       -          -        -       -
 ```
 
 #### (3) mistral
 
 ```
-Method          Role          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
-=============== ============= ======= ======= ========== ======== ======= =======
-full_100        BASE-FULL     -       -       -          -        -       -
-random_10       BASE-NAIT     -       -       -          -        -       -
-data_agent_10   treat         -       -       -          -        -       -
-tads_10         proposed *    -       -       -          -        -       -
+Method          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
+=============== ======= ======= ========== ======== ======= =======
+full_100        -       -       -          -        -       -
+random_10       -       -       -          -        -       -
+data_agent_10   -       -       -          -        -       -
+tads_10         -       -       -          -        -       -
 ```
 
 #### (4) deepseek
 
 ```
-Method          Role          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
-=============== ============= ======= ======= ========== ======== ======= =======
-full_100        BASE-FULL     -       -       -          -        -       -
-random_10       BASE-NAIT     -       -       -          -        -       -
-data_agent_10   treat         -       -       -          -        -       -
-tads_10         proposed *    -       -       -          -        -       -
+Method          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
+=============== ======= ======= ========== ======== ======= =======
+full_100        -       -       -          -        -       -
+random_10       -       -       -          -        -       -
+data_agent_10   -       -       -          -        -       -
+tads_10         -       -       -          -        -       -
 ```
 
 #### (5) Cross-model summary (avg of 5 benchmarks)
 
 ```
-                          llama2     qwen25     mistral    deepseek
-========================= ========== ========== ========== ==========
-full_100      BASE-FULL   -          -          -          -
-random_10     BASE-NAIT   -          -          -          -
-data_agent_10 treat       -          -          -          -
-tads_10       proposed *  -          -          -          -
+                llama2     qwen25     mistral    deepseek
+=============== ========== ========== ========== ==========
+full_100        -          -          -          -
+random_10       -          -          -          -
+data_agent_10   -          -          -          -
+tads_10         -          -          -          -
+```
+
+#### (6) 80-cell consolidated score table (5 벤치 × 16 모델/메서드 = 80)
+
+```
+#   Model/Method               mmlu    gsm8k   humaneval  tydiqa   bbh
+=== ========================== ======= ======= ========== ======== =======
+ 1  llama2 / full_100          -       -       -          -        -
+ 2  llama2 / random_10         -       -       -          -        -
+ 3  llama2 / data_agent_10     -       -       -          -        -
+ 4  llama2 / tads_10           -       -       -          -        -
+ 5  qwen25 / full_100          -       -       -          -        -
+ 6  qwen25 / random_10         -       -       -          -        -
+ 7  qwen25 / data_agent_10     -       -       -          -        -
+ 8  qwen25 / tads_10           -       -       -          -        -
+ 9  mistral / full_100         -       -       -          -        -
+10  mistral / random_10        -       -       -          -        -
+11  mistral / data_agent_10    -       -       -          -        -
+12  mistral / tads_10          -       -       -          -        -
+13  deepseek / full_100        -       -       -          -        -
+14  deepseek / random_10       -       -       -          -        -
+15  deepseek / data_agent_10   -       -       -          -        -
+16  deepseek / tads_10         -       -       -          -        -
 ```
 
 채우는 규칙 (§5-4의 4-state 분류를 그대로 반영):
