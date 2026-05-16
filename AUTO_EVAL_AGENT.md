@@ -140,7 +140,20 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 - 상태 표기는 아래 "채우는 규칙" 5종 + 초기 템플릿 `-`만 사용: `학습전` / `학습중` / `eval대기` / `eval중` / `47.56%` / `-`.
 - 80개 셀 전체가 `NN.NN%`로 채워지면 = 실험 완료. 이 시점에 §0-2 발산 알람 최종 평가를 별도 섹션 `## 최종 발산 알람 요약`으로 (6) 표 바로 위에 추가.
 
-값은 `<experiment_label>-eval_summary.json` 또는 벤치별 JSON에서 직접 파싱한 정확도 (%, 소수점 둘째자리까지). **아직 안 돌아간 셀은 `-` 그대로**. 표 형식은 monospace 가정. `experiments.md`에 쓸 때 코드 펜스(```) 안에 넣어 정렬 깨지지 않게.
+값은 `<experiment_label>-eval_summary.json` 또는 벤치별 JSON에서 직접 파싱한 정확도 (%, 소수점 둘째자리까지). **아직 안 돌아간 셀은 `-` 그대로**.
+
+**`experiments.md`의 표 작성 규칙 (terminal 정렬 보존 — 핵심):**
+
+`experiments.md`는 사용자가 markdown 렌더러 없이 `cat / less / vim / tail -f` 같은 **plain terminal**로 열기도 한다. 그래서 이 파일 안에 들어가는 **모든 표는 예외 없이** 아래 형식이어야 한다:
+
+1. **코드 펜스(```) 안에 둔다.** 펜스 밖에 markdown 표를 쓰면 terminal에서 `|` 파이프와 셀 값이 한 줄에 뭉개져 보인다.
+2. **컬럼은 monospace 폭으로 고정**하고 행 사이에 단순 공백 정렬 (`Method          mmlu    gsm8k   ...` 같은 식). markdown pipe table (`| ... | ... |`)은 **이 파일에 절대 쓰지 않는다** — pipe table은 가이드 문서 본문(AUTO_EVAL_AGENT.md, LLAMA_TUNING.md 등)에서만 허용.
+3. **컬럼 separator는 `=======`** (등호 7개 이상, 컬럼 폭에 맞춰). markdown의 `|---|---|` 형식 금지.
+4. **CJK 문자는 표시폭 2 cell로 계산**해 패딩 길이를 잡는다 (East Asian Wide). 예: `학습전`은 3글자지만 visual width = 6 → 7-cell 컬럼이면 `학습전 `(공백 1), `eval중`은 visual width = 6 → 같은 컬럼에 `eval중 `, `47.56%`는 6 → `47.56% `. 같은 컬럼 안에서 한·영이 섞여도 column boundary가 한 자리 이상 어긋나지 않아야 한다.
+5. **상태 토큰의 컬럼 폭 표준은 다음 5개를 다 담을 수 있는 최소 폭 = visual 9 cell** (`eval대기` = visual 8 + 여백 1). (1)-(6) 표의 점수 컬럼 = 7 cell (`NN.NN% ` / `학습전  ` / `eval중 `), (5) summary 표의 모델 컬럼 = 10 cell.
+6. **편집 시 컬럼 폭 변경 금지.** 새 행을 추가할 때는 헤더와 separator 라인의 폭을 그대로 카피해 같은 칸 수를 유지한다. 폭이 바뀌어야 하면 그 표 전체를 atomic 교체.
+
+§0-4(1)-(6) 표가 이 규칙의 reference 구현. §0-5 dashboard 표도 동일 규칙으로 출력(아래 참조). 사용자 액션 섹션("필요한 학습 목록")처럼 표가 아닌 bullet list는 코드 펜스 없이 두어도 무방하다.
 
 #### (1) llama2
 
@@ -292,40 +305,48 @@ def status_cell(model, method, bench):
 
 #### 80-cell 표 (16 행 × 5 벤치 컬럼) — 초기 상태 / 갱신 템플릿
 
-행 순서는 `(model, method)` 묶음, §0-3 16-cell 표와 동일:
+행 순서는 `(model, method)` 묶음, §0-3 16-cell 표와 동일.
 
-| # | 모델 / 메서드 | MMLU | GSM8K | HumanEval | TyDiQA | BBH |
-|---|---|---|---|---|---|---|
-| 1 | llama2 / full_100      | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 2 | llama2 / random_10     | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 3 | llama2 / data_agent_10 | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 4 | llama2 / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 5 | qwen25 / full_100      | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 6 | qwen25 / random_10     | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 7 | qwen25 / data_agent_10 | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 8 | qwen25 / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 9 | mistral / full_100     | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 10 | mistral / random_10    | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 11 | mistral / data_agent_10 | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 12 | mistral / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 13 | deepseek / full_100     | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 14 | deepseek / random_10    | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 15 | deepseek / data_agent_10 | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
-| 16 | deepseek / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+**experiments.md에 쓸 형식 — 반드시 아래처럼 코드 펜스 + 고정폭 정렬** (§0-4 표 작성 규칙 적용. 컬럼 폭: `#`=3, `Model/Method`=26, 각 벤치 상태 컬럼=9 — `eval대기`(visual 8) + 여백 1).
 
-#### 진행 예시 (이런 형태로 보고)
+```
+#   Model/Method               MMLU      GSM8K     HumanEval TyDiQA    BBH
+=== ========================== ========= ========= ========= ========= =========
+ 1  llama2 / full_100          학습전    학습전    학습전    학습전    학습전
+ 2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전
+ 3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전
+ 4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전
+ 5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전
+ 6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전
+ 7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전
+ 8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전
+ 9  mistral / full_100         학습전    학습전    학습전    학습전    학습전
+10  mistral / random_10        학습전    학습전    학습전    학습전    학습전
+11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전
+12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전
+13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전
+14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전
+15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전
+16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전
+```
 
-학습이 일부 진행되고 평가도 시작된 시점의 예시:
+> `**tads_10**` 같은 markdown bold는 experiments.md에는 쓰지 않는다 (terminal에서 `**` 별표가 그대로 보임). 강조가 필요하면 별도 ASCII 마커(`<` `>` 같은) 사용하거나 그냥 평문.
 
-| # | 모델 / 메서드 | MMLU | GSM8K | HumanEval | TyDiQA | BBH |
-|---|---|---|---|---|---|---|
-| 1 | llama2 / full_100      | `47.56%` | `14.63%` | `27.87%` | `39.48%` | `39.94%` |
-| 2 | llama2 / random_10     | `47.14%` | `14.13%` | `eval중` | `eval대기` | `eval대기` |
-| 3 | llama2 / data_agent_10 | `학습중` | `학습중` | `학습중` | `학습중` | `학습중` |
-| 4 | llama2 / **tads_10**   | `학습중` | `학습중` | `학습중` | `학습중` | `학습중` |
-| 5 | qwen25 / full_100      | `eval중` | `eval대기` | `eval대기` | `eval대기` | `eval대기` |
-| ... |
-| 16 | deepseek / **tads_10**   | `학습전` | `학습전` | `학습전` | `학습전` | `학습전` |
+#### 진행 예시 (이런 형태로 보고 + 그대로 experiments.md에 들어가는 모양)
+
+학습이 일부 진행되고 평가도 시작된 시점의 예시. 셀 값이 섞여도 컬럼 boundary는 그대로 유지(좌측 정렬, 우측에 공백 패딩):
+
+```
+#   Model/Method               MMLU      GSM8K     HumanEval TyDiQA    BBH
+=== ========================== ========= ========= ========= ========= =========
+ 1  llama2 / full_100          47.56%    14.63%    27.87%    39.48%    39.94%
+ 2  llama2 / random_10         47.14%    14.13%    eval중    eval대기  eval대기
+ 3  llama2 / data_agent_10     학습중    학습중    학습중    학습중    학습중
+ 4  llama2 / tads_10           학습중    학습중    학습중    학습중    학습중
+ 5  qwen25 / full_100          eval중    eval대기  eval대기  eval대기  eval대기
+ ...
+16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전
+```
 
 해석 가이드:
 - 행 전체가 `학습전`/`학습중`이면 학습 단계 → **에이전트는 자동 트리거 금지**, 사용자에게만 보고.
@@ -336,7 +357,7 @@ def status_cell(model, method, bench):
 #### 갱신 빈도 / 출력 위치
 
 - 매 tick (cron 30분 주기)마다 dispatch pass 직전 1회, dispatch 직후 1회 = tick당 2회 출력.
-- 출력은 `experiments.md` **상단**에 fenced markdown 표로 갱신 (전체 파일을 매번 다시 쓰지 말고, "STATUS DASHBOARD" 섹션 사이의 영역만 atomic 교체).
+- 출력은 `experiments.md` **상단**에 §0-4의 "표 작성 규칙"을 따른 **코드 펜스(```) + 고정폭 정렬** 표로 갱신 (markdown pipe table 금지 — terminal `cat`에서 깨짐). 전체 파일을 매번 다시 쓰지 말고 `<!-- STATUS DASHBOARD START -->` ... `<!-- STATUS DASHBOARD END -->` 마커 사이만 atomic 교체. 마커 자체는 markdown 렌더러에선 안 보이고 terminal에선 한 줄로 보여 위치 식별에 도움.
 - 채팅/슬랙 보고에는 변경된 셀만 `diff` 형태로 인용 ("[#4 llama2/tads_10] 학습중 → eval대기", "[#1 llama2/full_100, MMLU] eval중 → 47.56%" 등). 표 전체 매번 복붙 금지.
 
 ### 0-6. History Tracking Guide — Status 컬럼 + per-cell `HISTORY.md`
