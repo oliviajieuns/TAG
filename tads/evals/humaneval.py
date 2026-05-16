@@ -146,6 +146,40 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
 
         with gzip.open(data_path, "rt") as f:
             problems = [json.loads(line) for line in f]
+        # Canonical HumanEval schema (openai/human-eval HumanEval.jsonl.gz):
+        # task_id, prompt, entry_point, canonical_solution, test. The eval
+        # uses prompt + entry_point; the scoring harness uses test. Validate
+        # all 4 up-front so the run aborts cleanly if someone points
+        # HUMANEVAL_DATA_DIR at a different jsonl (e.g. HumanEval-X or
+        # MultiPL-E variants that rename fields). Without the check the
+        # generation loop would KeyError on the first problem after model
+        # load.
+        _need_keys = {"task_id", "prompt", "entry_point", "test"}
+        if not problems:
+            raise ValueError(
+                f"HumanEval file at {data_path} is empty. Expected 164 "
+                f"problems from openai/human-eval HumanEval.jsonl.gz."
+            )
+        _missing = _need_keys - set(problems[0].keys())
+        if _missing:
+            raise ValueError(
+                f"HumanEval file at {data_path} has wrong schema. "
+                f"Expected keys {sorted(_need_keys)} per problem (openai/"
+                f"human-eval canonical jsonl), got {sorted(problems[0].keys())}. "
+                f"Missing: {sorted(_missing)}. This is NOT the HumanEval "
+                f"dataset the eval expects — fetch the canonical file via "
+                f"`bash scripts/download_humaneval.sh ${{HUMANEVAL_DATA_DIR}}` "
+                f"and re-run.",
+            )
+        # NAIT paper Table 2 reports HumanEval on the canonical 164 problems.
+        # Counts ≪ 164 mean a partial / truncated download (e.g. the user
+        # only had a debug subset on disk).
+        if not limit and len(problems) < 164:
+            logger.warning(
+                "HumanEval: only %d problems found — canonical set is 164. "
+                "Score will not be comparable to NAIT paper Table 2.",
+                len(problems),
+            )
         if limit is not None:
             problems = problems[:limit]
         logger.info("HumanEval: %d problems | limit=%s", len(problems), limit)

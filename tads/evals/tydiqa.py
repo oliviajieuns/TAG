@@ -500,6 +500,67 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
         dev_file, train_file, base_dir = _resolve_split_paths(data_dir)
 
         examples = _parse_tydiqa_file(dev_file)
+
+        # Content audit BEFORE running any model forward. A file can
+        # successfully parse as JSON/parquet but contain the wrong dataset
+        # (e.g. SQuAD v1.1 itself, MS MARCO, or a flat array of OPP problems).
+        # NAIT-faithful TyDiQA GoldP has these characteristics:
+        #   - non-empty list of records,
+        #   - each record carries a non-empty `question`,
+        #   - majority have at least one gold answer,
+        #   - record `id` starts with one of the 9 TyDiQA-GoldP language
+        #     prefixes (arabic / bengali / english / finnish / indonesian /
+        #     korean / russian / swahili / telugu).
+        # If any of these fail markedly, abort with a clear message.
+        if not examples:
+            raise ValueError(
+                f"TyDiQA file {dev_file!r} parsed but produced 0 records — "
+                f"either empty file or unrecognised schema. Refusing to run "
+                f"a benchmark on an empty dataset.",
+            )
+        _has_q = sum(1 for ex in examples if ex.get("question"))
+        _has_a = sum(1 for ex in examples if ex.get("answers", {}).get("text"))
+        _expected_langs = {
+            "arabic", "bengali", "english", "finnish", "indonesian",
+            "korean", "russian", "swahili", "telugu",
+        }
+        _seen_langs = {ex.get("language", "unknown") for ex in examples}
+        _known = _seen_langs & _expected_langs
+        if _has_q < 0.95 * len(examples):
+            raise ValueError(
+                f"TyDiQA file {dev_file!r}: only {_has_q}/{len(examples)} "
+                f"records have a non-empty `question` field — the dataset "
+                f"doesn't look like TyDiQA GoldP. Refusing to run.",
+            )
+        if _has_a < 0.50 * len(examples):
+            raise ValueError(
+                f"TyDiQA file {dev_file!r}: only {_has_a}/{len(examples)} "
+                f"records have any gold answer text — TyDiQA GoldP's "
+                f"validation split should have answers on ~all rows. "
+                f"This is likely the wrong dataset. Refusing to run.",
+            )
+        if not _known:
+            raise ValueError(
+                f"TyDiQA file {dev_file!r}: no record id starts with a "
+                f"known TyDiQA-GoldP language prefix (expected one of "
+                f"{sorted(_expected_langs)}). Got language prefixes: "
+                f"{sorted(_seen_langs)[:10]}. This is NOT TyDiQA GoldP — "
+                f"refusing to run.",
+            )
+        if len(_known) < 5:
+            logger.warning(
+                "TyDiQA: only %d/9 known languages present in dev (%s) — "
+                "score will be over a partial language set and won't be "
+                "directly comparable to NAIT Table 2 (which reports the "
+                "full 9-language average).",
+                len(_known), sorted(_known),
+            )
+        logger.info(
+            "TyDiQA schema OK: %d records | %d with question | %d with answer "
+            "| known langs: %s",
+            len(examples), _has_q, _has_a, sorted(_known),
+        )
+
         if limit is not None:
             examples = examples[:limit]
 

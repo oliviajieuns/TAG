@@ -130,6 +130,48 @@ class MMLUEvaluator(BenchmarkEvaluator):
             )
         dfs = [pd.read_parquet(os.path.join(data_dir, f)) for f in test_files]
         test_df = pd.concat(dfs, ignore_index=True)
+        # Canonical MMLU `all` schema (HF parquet from cais/mmlu): question,
+        # choices, answer, subject. Validate up-front so the eval aborts
+        # cleanly if someone points data_dir at a different MMLU mirror
+        # (e.g. tasksource which uses `option_a/option_b/...` instead of a
+        # `choices` array). Without this check the loop would KeyError on
+        # the first example, after spending minutes loading the model.
+        _need_cols = {"question", "choices", "answer", "subject"}
+        _missing = _need_cols - set(test_df.columns)
+        if _missing:
+            raise ValueError(
+                f"MMLU parquet at {data_dir} has wrong schema. "
+                f"Expected columns {sorted(_need_cols)} (HF canonical: "
+                f"cais/mmlu `all` split), got {sorted(test_df.columns)}. "
+                f"Missing: {sorted(_missing)}. This is NOT the MMLU dataset "
+                f"the eval expects — point MMLU_DATA_DIR at a directory "
+                f"containing the canonical parquet shards "
+                f"(`test-XXXXX-of-XXXXX.parquet` + `dev-XXXXX-of-XXXXX.parquet`) "
+                f"from huggingface.co/datasets/cais/mmlu (config `all`).",
+            )
+        # Sanity: `choices` must be a list/array of 4, `answer` an int 0..3.
+        _bad_row = None
+        for _i, _row in test_df.head(5).iterrows():
+            _c = _row.get("choices")
+            if not (hasattr(_c, "__len__") and len(_c) == 4):
+                _bad_row = ("choices is not a 4-element list/array", _i, _c)
+                break
+            try:
+                _a = int(_row.get("answer", -1))
+            except (TypeError, ValueError):
+                _bad_row = ("answer is not int-coercible", _i, _row.get("answer"))
+                break
+            if _a < 0 or _a > 3:
+                _bad_row = (f"answer={_a} out of range [0..3]", _i, _a)
+                break
+        if _bad_row is not None:
+            reason, _i, val = _bad_row
+            raise ValueError(
+                f"MMLU parquet at {data_dir} has wrong values: {reason} "
+                f"(row {_i}, sample={val!r}). Expected `choices` as a 4-element "
+                f"list of strings and `answer` as int 0..3. The schema doesn't "
+                f"match the canonical cais/mmlu `all` split — refusing to run.",
+            )
         # The dev split is conventionally a single shard
         # (``dev-00000-of-00001.parquet``) but cluster mirrors and re-shardings
         # can change that suffix. Glob defensively so the eval doesn't crash

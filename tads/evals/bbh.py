@@ -214,6 +214,52 @@ class BBHEvaluator(BenchmarkEvaluator):
         total_count = 0
         used_cot_count = 0
 
+        # Schema audit BEFORE running any model forward: every task file must
+        # be a JSON dict with an `examples` key, each example must have
+        # `input` and `target`. NAIT/BBH canonical (suzgun/BIG-Bench-Hard)
+        # follows this shape strictly. Mismatches almost always mean the
+        # user pointed BBH_DATA_DIR at the wrong repo (e.g. legacy
+        # google/BIG-bench dump with `examples[*].inputs` plural, or a
+        # tasksource conversion). Abort with a precise error rather than
+        # silently producing accuracy=0 across all tasks.
+        _bad_tasks: List[str] = []
+        for _t in task_files:
+            try:
+                with open(_t) as _f:
+                    _d = json.load(_f)
+            except json.JSONDecodeError as _e:
+                _bad_tasks.append(f"{_t.name}: JSON decode error ({_e})")
+                continue
+            if not isinstance(_d, dict) or "examples" not in _d:
+                _bad_tasks.append(
+                    f"{_t.name}: not a dict with `examples` key "
+                    f"(top-level keys: "
+                    f"{list(_d.keys())[:5] if isinstance(_d, dict) else type(_d).__name__})"
+                )
+                continue
+            _ex = _d.get("examples")
+            if not isinstance(_ex, list) or not _ex:
+                _bad_tasks.append(f"{_t.name}: `examples` is not a non-empty list")
+                continue
+            _first = _ex[0]
+            if not (isinstance(_first, dict)
+                    and "input" in _first and "target" in _first):
+                _bad_tasks.append(
+                    f"{_t.name}: example records missing `input` or `target` "
+                    f"(got keys: {sorted(_first.keys()) if isinstance(_first, dict) else type(_first).__name__})",
+                )
+        if _bad_tasks:
+            raise ValueError(
+                "BBH dataset schema mismatch — refusing to run. "
+                f"Expected the suzgun/BIG-Bench-Hard layout (each per-task "
+                f"file is a JSON dict `{{'examples': [{{'input': str, "
+                f"'target': str}}, ...]}}`). Bad task files (first 5):\n  "
+                + "\n  ".join(_bad_tasks[:5])
+                + (f"\n  ... +{len(_bad_tasks) - 5} more" if len(_bad_tasks) > 5 else "")
+                + f"\nFix: clone https://github.com/suzgunmirac/BIG-Bench-Hard "
+                + f"and point BBH_DATA_DIR at the resulting `bbh/` directory.",
+            )
+
         for task_path in task_files:
             task_name = task_path.stem
             with open(task_path) as f:
