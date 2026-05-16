@@ -7,9 +7,11 @@ formatting matches the model family used at evaluation time.
 """
 from __future__ import annotations
 
+import contextlib
 import glob
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from datasets import load_dataset
@@ -17,6 +19,90 @@ from datasets import load_dataset
 from .sft_prompts import tokenize_alpaca
 
 logger = logging.getLogger(__name__)
+
+
+# Coarse inter-process lock around the dataset-build sequence. Concurrent
+# training launches that share a cache_dir — multiple DDP ranks within one
+# job, OR several `python -m tads.train --config <...>` invocations fired
+# in parallel against the same model_key/prompt_style — would otherwise
+# race on (a) HF `load_dataset` reading the raw shards into Arrow, and
+# (b) `.map(_tokenize, num_proc=4)` writing the tokenised cache file.
+# HF datasets uses its own filelocks internally, but they're per-file and
+# don't cover the fingerprint→path resolution window; symptoms we've
+# observed:
+#   - "ArrowInvalid: ... cache file truncated" when two workers wrote the
+#     same shard simultaneously,
+#   - "DatasetGenerationError: ... .incomplete left behind" when one
+#     process was killed mid-write,
+#   - intermittent silent stalls inside .map's multiprocess fork.
+# This module-level lock serialises only the BUILD phase. Once the cache
+# is warm, every subsequent call falls through .map's cache-hit path
+# (microseconds) so the lock cost amortises to zero across runs.
+_LOCK_TIMEOUT_SEC = 4 * 60 * 60  # 4h ceiling — first-time tokenise of 52K
+                                 # Alpaca samples with num_proc=4 is ~2min
+                                 # on a fast filesystem; the cap exists to
+                                 # surface a wedged lock instead of hanging.
+
+
+def _dataset_build_lock(cache_dir: str):
+    """Return a context manager that holds an advisory lock on cache_dir.
+
+    Uses ``filelock.FileLock`` (transitive dep via ``datasets``); falls
+    back to a no-op context if the lib isn't importable so a partial
+    install never blocks training. The lockfile lives inside cache_dir
+    so it shares the FS's lock semantics with the data it protects —
+    notably, NFS hosts that disable fcntl byte-range locks will surface
+    that via filelock's own diagnostic, not via mysterious arrow errors.
+    """
+    try:
+        from filelock import FileLock  # type: ignore
+    except Exception as e:  # filelock missing / broken install
+        logger.warning(
+            "filelock unavailable (%s); proceeding without cross-process "
+            "serialisation. Concurrent dataset builds on the same cache "
+            "may race on first-time tokenisation.", e,
+        )
+        return contextlib.nullcontext()
+
+    lock_path = os.path.join(cache_dir, ".tads_dataset_build.lock")
+    return _LoggingFileLock(FileLock(lock_path, timeout=_LOCK_TIMEOUT_SEC), lock_path)
+
+
+class _LoggingFileLock:
+    """Wrap FileLock to log acquire / release with elapsed wall time.
+
+    When several experiments race for first-time tokenisation, the loser
+    can wait minutes inside acquire() with no log output, which looks
+    indistinguishable from a hang. Emit a single info line on entry and
+    on exit so the wait is visible.
+    """
+
+    def __init__(self, lock, path: str):
+        self._lock = lock
+        self._path = path
+        self._t0 = 0.0
+
+    def __enter__(self):
+        self._t0 = time.time()
+        logger.info("Acquiring dataset-build lock: %s", self._path)
+        self._lock.acquire()
+        waited = time.time() - self._t0
+        if waited > 1.0:
+            logger.info(
+                "Acquired dataset-build lock after %.1fs wait", waited,
+            )
+        else:
+            logger.info("Acquired dataset-build lock (no contention)")
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            self._lock.release()
+        finally:
+            logger.info(
+                "Released dataset-build lock | held=%.1fs",
+                time.time() - self._t0,
+            )
 
 
 def _resolve_data_files(spec: str) -> Optional[str]:
@@ -119,6 +205,32 @@ def build_alpaca_dataset(
     data_files = data_files or None
     dataset_name = dataset_name or None
 
+    # Serialise concurrent builders that share this cache_dir. The lock is
+    # released as soon as we return; cache-hit calls after the first build
+    # acquire and release in microseconds and never block.
+    with _dataset_build_lock(cache_dir):
+        return _build_alpaca_dataset_locked(
+            tokenizer=tokenizer,
+            cache_dir=cache_dir,
+            max_seq_len=max_seq_len,
+            dataset_name=dataset_name,
+            data_files=data_files,
+            prompt_style=prompt_style,
+            num_proc=num_proc,
+        )
+
+
+def _build_alpaca_dataset_locked(
+    tokenizer,
+    cache_dir: str,
+    max_seq_len: int,
+    *,
+    dataset_name: Optional[str],
+    data_files: Optional[str],
+    prompt_style: str,
+    num_proc: int,
+):
+    """Inner builder — caller already holds the cross-process build lock."""
     if data_files:
         resolved = _resolve_data_files(str(data_files))
         if not resolved:
