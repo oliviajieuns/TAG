@@ -866,19 +866,63 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/
 
 ---
 
-## 4. Eval 실행 — **사용자가 직접 실행, 에이전트는 모니터링만** (2026-05-16 정책 변경)
+## 4. Eval 실행 — **셀 1개씩 사용자가 직접 실행** (2026-05-16 정책 강화)
 
-**원칙**: 에이전트는 **eval을 자동으로 launch하지 않는다**. NEED-EVAL 셀이 발견되면 §0-4의 "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 명시적으로 보고하고, 사용자가 직접 launch할 때까지 그대로 둔다. 매 tick은 (1) 진행 중인 잡 상태 추적, (2) 새로 sealed된 결과 흡수, (3) eval대기 목록 갱신만 수행.
+**원칙 — strict one-at-a-time**:
+- 에이전트는 **eval을 자동으로 launch하지 않는다**. NEED-EVAL 셀이 발견되면 §0-4의 "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 명시적으로 보고하고, 사용자가 직접 launch할 때까지 그대로 둔다.
+- **batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 사용 금지** — 사용자도, 에이전트도 안 씀. 이 스크립트들은 한 번에 여러 셀을 sequential/parallel로 dispatch하는데, 우리는 **셀 1개 → 직접 명령 1개**로 진행한다. wrapper의 `--parallel` 모드는 GPU 충돌 + log 파일 race + 모니터링 어려움 등 운영 문제가 있어 금지.
+- 매 tick에 에이전트가 하는 일: (1) 진행 중인 잡 상태 추적, (2) 새로 sealed된 결과 흡수, (3) eval대기 목록 갱신.
 
-### 4-1. 사용자가 셀 한 개 eval할 때의 정식 명령 (참고용 — 에이전트가 직접 실행하지는 않음)
+### 4-1. 사용자가 셀 한 개 eval할 때의 정식 명령 (1셀 = 1명령)
 
 ```bash
-# 단일 GPU, 단일 셀 — 한 번에 한 (model, method)에 5개 벤치 모두
+# ⚠️ 한 번에 한 셀만. 다음 셀로 넘어가려면 이 잡이 끝난 뒤(또는 GPU가 비는 뒤) 새 명령을 직접 입력.
 CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
     --config configs/experiments/main_7b/<model>/<method>.yaml \
     --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
     --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
     >> logs/eval_<model>_<method>.log 2>&1 &
+```
+
+여러 셀을 같은 노드에서 동시에 돌리고 싶을 때도 **각 셀마다 별개의 `python -m tads.eval` 명령**을 다른 GPU에 핀해서 따로 입력한다 (셸 history에 한 줄씩 기록되도록). 절대 wrapper 한 번 호출로 4~16잡 한꺼번에 띄우지 말 것 — wrapper 호출은 다음과 같은 운영 문제를 만든다:
+
+| Wrapper 사용 시 문제 | 1셀-1명령으로 우회되는 이유 |
+|---|---|
+| 한 잡 fail이 다른 잡까지 cascade | 잡마다 독립 PID → 한 잡 kill해도 나머지 영향 없음 |
+| `tee -a logs/...log` 공유 → 로그 race | 셀마다 별개 log path |
+| 같은 셀에 두 번 launch (큐 알고리즘 vs 사용자) | 사용자가 명시적으로 한 번씩만 입력 |
+| OOM / hang 진단 시 어느 잡인지 모호 | pgrep 패턴이 셀별로 명확하게 분리됨 |
+| `_latest` symlink atomic 갱신이 여러 잡과 race | 한 셀당 한 잡이라 race 자체가 없음 |
+
+**금지 명령:**
+```bash
+# ❌ 절대 금지 — wrapper 일괄 dispatch
+bash scripts/run_eval_main_7b.sh ...
+bash scripts/run_eval_main_7b.sh --parallel ...
+bash scripts/auto_eval_7b_fullft.sh ...
+
+# ❌ 절대 금지 — 한 명령으로 여러 셀 launch (for 루프 등)
+for m in llama2 qwen25; do for x in tads_10 random_10; do
+  python -m tads.eval --config configs/.../$m/$x.yaml ... &
+done; done
+```
+
+**허용 패턴:**
+```bash
+# ✓ 셀 1개 launch → 결과 확인 → 그 다음 셀 launch
+CUDA_VISIBLE_DEVICES=0 nohup python -m tads.eval \
+    --config configs/experiments/main_7b/llama2/tads_10.yaml \
+    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    --out_dir ${EVAL_RESULTS_ROOT}/llama2/tads_10 \
+    >> logs/eval_llama2_tads_10.log 2>&1 &
+# (잡 끝나길 기다리거나 다른 빈 GPU 확인 후 다음 명령 입력)
+
+# ✓ 다른 GPU에 다른 셀 — 각각 별개 명령
+CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
+    --config configs/experiments/main_7b/qwen25/data_agent_10.yaml \
+    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    --out_dir ${EVAL_RESULTS_ROOT}/qwen25/data_agent_10 \
+    >> logs/eval_qwen25_data_agent_10.log 2>&1 &
 ```
 
 요점:
@@ -1149,16 +1193,30 @@ done
 
 ---
 
-## 6. Legacy 7b_fullft 자동 감시 모드 (참고만)
-
-쓸 일이 있다면:
+## 6. Legacy 7b_fullft 자동 감시 모드 (사용 금지 — 역사 기록)
 
 ```bash
+# ❌ 더 이상 쓰지 말 것 — §4 의 1셀-1명령 정책에 위배
 bash scripts/auto_eval_7b_fullft.sh <gpu_id> [run1 run2 ...]
-# 예: bash scripts/auto_eval_7b_fullft.sh 0 tads_50 random_50
 ```
 
-이건 무한 루프(60초 sleep)로 `epoch_3`를 polling하므로 **tmux/screen 안에서 띄워야 한다**. 메인 매트릭스에는 이 스크립트를 쓰지 말 것.
+`auto_eval_7b_fullft.sh`는 무한 루프(60초 sleep)로 여러 run을 polling하고 차례로 eval을 자동 실행하는 옛 자동화 스크립트다. 다음 이유로 **사용자도, 에이전트도 호출하지 말 것** (§4 / §8 금지 목록):
+
+- 여러 잡을 sequential로 dispatch → 한 잡 fail이 다음 잡 시작에 영향 (cascade).
+- `.eval_done` sentinel을 BASE 디렉터리에 직접 touch → 새 history layout(`runs/<eval_tag>/_complete`)과 비호환.
+- 무한 루프라 tick 모델에 안 맞음. 1셀-1명령 정책과 정면 충돌.
+- 메인 매트릭스(`main_7b/...`)는 절대 안 건드림 (legacy `7b_fullft/...` 트리만 다룸) — 매트릭스 외 트리에 대해서도 이 스크립트로 자동 실행하지 말 것.
+
+이 트리(`${OUTPUT_ROOT}/7b_fullft/...`)를 평가해야 한다면 §4-1 패턴(단일 셀 단일 명령)을 따른다:
+```bash
+# 셀 1개 — 사용자가 직접 입력
+CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
+    --config configs/experiments/7b_fullft_<run>.yaml \
+    --ckpt ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3 \
+    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    --out_dir ${EVAL_RESULTS_ROOT}/7b_fullft/<run> \
+    >> logs/eval_7b_fullft_<run>.log 2>&1 &
+```
 
 ---
 
@@ -1252,6 +1310,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 ## 8. 금지 사항 / 함정
 
 - **eval / 학습을 자동 launch하지 말 것** (§0 정책). NEED-EVAL 셀은 `experiments.md` 상단 "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 보고만 하고 사용자가 직접 launch할 때까지 그대로 둔다. `nohup python -m tads.eval ...`, `torchrun`, `run_main_7b.sh`, `run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh` 호출 일체 금지.
+- **eval은 1셀 = 1명령으로만 실행** (§4 정책 강화). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`)는 사용자도 쓰지 말 것 — 여러 셀을 한 번에 dispatch하면 log race, GPU 충돌, fail cascade, _latest symlink race 등 운영 문제가 누적. 셀 여러 개를 동시에 돌릴 때도 각 셀마다 별개 `python -m tads.eval` 명령을 따로 입력 (다른 GPU에 핀). for 루프로 여러 셀을 한꺼번에 띄우는 패턴도 금지.
 - **HF offline 모드를 끄지 말 것**. `setup_env.sh`가 `HF_DATASETS_OFFLINE=1` 등을 강제하는 이유는 클러스터 노드가 outbound HTTPS가 없어서 켜면 캐시락이 깨지기 때문.
 - **체크포인트를 절대 자동 삭제하지 말 것**. legacy 스크립트의 `CLEANUP_EARLY_EPOCHS` 옵션은 **opt-in이고 기본값 0**. 에이전트는 건드리지 말 것.
 - **`OUTPUT_ROOT`와 `EVAL_RESULTS_ROOT`를 혼동하지 말 것**. checkpoint는 `OUTPUT_ROOT/main_7b/...`, 결과는 `EVAL_RESULTS_ROOT/<model>/<method>` (접두어 없음).
