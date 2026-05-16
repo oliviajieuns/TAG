@@ -144,6 +144,16 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (4-bench 대
             구분: llama2 4행 → 빈 줄 → qwen25 4행 → 빈 줄 → mistral 4행 →
             빈 줄 → deepseek 4행 (총 빈 줄 3개). 그룹 안은 빈 줄 없음.
             terminal `cat`/`less`로 봤을 때 모델 단위 시각적 chunking.
+[CHECK 15a] **결과 파일 광역 스캔 (자주 어김, §5-2.5)**.
+            점수표 갱신 시 `_latest/<label>-<bench>.json` 만 읽지 말 것.
+            셀당 4개 위치 모두 recursive glob:
+              (1) `<eval_base>/_latest/`
+              (2) `<eval_base>/runs/*/`         (모든 과거 스냅샷)
+              (3) `<eval_base>/`                 (flat / legacy, maxdepth 1)
+              (4) `<ckpt_root>/.../epoch_*/eval/` (legacy bundled)
+            발견된 file 모두 (path, mtime, score) 추출 → 정상 path 우선
+            tie-breaker로 표 셀 값 결정. 매 tick 로그에 발견 file 수 dump.
+
 [CHECK 15] **DISPATCH 실행 확인 (가장 자주 누락되는 단계)**.
             classify 후 status가 `eval대기` 인 셀이 1개 이상이고 nvidia-smi
             기준 빈 GPU 가 1개 이상이면 **이번 tick에 반드시 1개 이상의
@@ -1504,23 +1514,81 @@ ${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log
 
 (과거 run의 로그는 `${EVAL_RESULTS_ROOT}/<model>/<method>/runs/<eval_tag>/logs/`에 그대로 있음.)
 
+### 5-2.5. 🔍 결과 파일 광역 스캔 (`_latest`만 보지 말 것 — 자주 누락)
+
+**에이전트가 자주 어기는 패턴**: 점수표 갱신 시 `<eval_base>/_latest/<label>-<bench>.json` 만 읽음 → `_latest` 포인터 갱신 전 사용자가 수동 launch한 eval 결과, 과거 run의 결과, legacy flat 결과 모두 놓침.
+
+**올바른 정책 (2026-05-17 강화)**: 셀의 모든 result JSON을 **광역 recursive glob**으로 모은 뒤, 그중에서 가장 최근/최고/이력별 점수를 추출한다.
+
+#### (a) 광역 스캔 대상 — 셀 1개당 다음 4개 위치 전부
+
+```bash
+EVAL_BASE="${EVAL_RESULTS_ROOT}/<model>/<method>"
+LABEL="<model>_<method>"
+BENCH="<mmlu|gsm8k|humaneval|tydiqa|bbh>"
+
+# 1. _latest (현재 history layout 표준)
+find "$EVAL_BASE/_latest" -name "${LABEL}-${BENCH}.json" -type f 2>/dev/null
+
+# 2. 모든 과거 runs/<eval_tag>/ 스냅샷
+find "$EVAL_BASE/runs" -name "${LABEL}-${BENCH}.json" -type f 2>/dev/null
+
+# 3. legacy flat layout — BASE 디렉터리 직속 (--flat 호출 결과 + 옛날 결과)
+find "$EVAL_BASE" -maxdepth 1 -name "${LABEL}-${BENCH}.json" -type f 2>/dev/null
+find "$EVAL_BASE" -maxdepth 1 -name "${BENCH}.json" -type f 2>/dev/null   # 옛 접두어 없음
+
+# 4. legacy bundled-with-ckpt — ckpt dir의 eval/ subdir (history layout 도입 전)
+find "${OUTPUT_ROOT}/main_7b/<model>/<method>" -path "*/epoch_*/eval/${LABEL}-${BENCH}.json" -type f 2>/dev/null
+find "${OUTPUT_ROOT}/main_7b/<model>/<method>" -path "*/epoch_last/eval/${LABEL}-${BENCH}.json" -type f 2>/dev/null
+```
+
+위 4개 glob을 합쳐 **한 셀의 모든 result file 목록**을 얻는다. (`_latest` 포인터는 그중 가장 최근의 한 파일을 가리키지만, 다른 파일들도 모두 후보.)
+
+#### (b) 광역 스캔 결과 활용
+
+각 발견된 파일에 대해 `(path, mtime, score, source)` 튜플을 만든다 (`score`는 §5-5의 정규화 규칙으로 추출, `source` ∈ {`_latest`, `runs/<eval_tag>`, `flat`, `bundled`}).
+
+표별 활용:
+- **(6) Current**: 4개 glob 중 mtime이 가장 최근인 파일의 score → 셀 값. `_latest` 포인터가 가리키는 파일이 가장 최근이 아닐 수 있음 (사용자가 `--flat` 으로 launch했거나 다른 path에 떨어뜨린 경우).
+- **(7) Latest**: 4개 glob 중 가장 최근 NN.NN% 산출값.
+- **(8) Best**: 4개 glob 모두 합쳐 max(score). (이미 적용 중인 정책이지만 광역 스캔 강조.)
+- **(9) History**: glob 결과를 mtime 오름차순 정렬 → 각 entry가 한 줄 변경 로그.
+
+#### (c) "정상 path 우선" 규칙 — 동률 시 tie-breaker
+
+여러 파일이 같은 (model, method, bench) 점수를 보일 때 우선순위:
+1. `_latest/_complete` sentinel이 있는 file 우선 (정상 완료된 run).
+2. 같은 sentinel 상태면 mtime 최신 우선.
+3. 같은 mtime이면 path 우선순위: `_latest` > `runs/<eval_tag>` > `epoch_*/eval` (bundled) > flat.
+
+#### (d) 검증 self-check
+
+매 tick 광역 스캔 후 셀당 발견된 result file 개수를 로그에 dump:
+```bash
+echo "[scan] ${model}/${method}/${bench}: found N files"
+echo "  - $EVAL_BASE/_latest/${LABEL}-${BENCH}.json (mtime=...)"
+echo "  - $EVAL_BASE/runs/20260516_180000/${LABEL}-${BENCH}.json (mtime=...)"
+echo "  - $EVAL_BASE/${LABEL}-${BENCH}.json (mtime=..., flat-legacy)"
+echo "  ..."
+```
+사용자가 cron 로그에서 "왜 이 셀이 0%로 나오지" 확인 시 즉시 진단 가능.
+
 ### 5-3. 중복 평가 방지 로직 (에이전트가 직접 판정해야 함)
 
 `python -m tads.eval`은 자체적인 "이미 함" 체크가 **없다** (기존 bash wrapper도 마찬가지였음). 호출 전에 에이전트가 판단해야 한다.
 
-새 run-layout (§3-1) + eval history layout (§5-1) 기준 — 셀 한 개에 대해 **다음이 모두 만족**되면 eval 재실행 불필요:
+새 run-layout (§3-1) + eval history layout (§5-1) 기준 — 셀 한 개에 대해 **다음이 모두 만족**되면 eval 재실행 불필요. **§5-2.5 광역 스캔으로 모은 모든 result file을 후보로 본다 (`_latest` 한정 X)**:
 
-1. `${OUTPUT_ROOT}/main_7b/<model>/<method>/_latest`가 가리키는 run의 가장 큰
-   sealed `epoch_N/`(= `_complete` 파일이 있는 것)을 찾는다.
-2. `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest`가 존재하고, 그 안에
-   `_complete` sentinel과 `<experiment_label>-eval_summary.json`이 둘 다 있음.
-3. 그 summary의 mtime이 위 sealed epoch의 mtime보다 **나중**.
+1. `${OUTPUT_ROOT}/main_7b/<model>/<method>/_latest`가 가리키는 run의 가장 큰 sealed `epoch_N/`(= `_complete` 파일이 있는 것)을 찾는다.
+2. 광역 스캔(§5-2.5)으로 찾은 모든 `<label>-<bench>.json` 후보 중 **mtime이 위 sealed epoch보다 나중인 file이 1개 이상** 존재.
+3. 그 file의 sentinel 상태 (정상 path 우선 §5-2.5 (c)) 또는 mtime 최신값을 셀 값으로 사용.
 
 세 가지 모두 만족하지 않으면 NEED-EVAL → 다음 tick에 재평가 큐잉.
 
-`_latest` 포인터가 갱신됐다는 건:
-- 학습 측 `_latest` 갱신 → 새 ckpt가 sealed됐다 → eval 측 `_latest`의 summary mtime이 sealed보다 옛날이면 자동으로 NEED-EVAL.
-- eval 측 `_latest` 갱신 → 새 평가가 완료됐다 → DONE으로 전환, 점수는 새 `_latest/`에서 다시 읽기.
+광역 스캔 정책 덕분에:
+- 학습 측 `_latest` 갱신 → 새 ckpt sealed → 광역 스캔의 모든 후보 mtime이 sealed보다 옛날이면 자동으로 NEED-EVAL.
+- eval 측 어디에든 (= `_latest`든 `runs/<tag>` 든 flat이든) 새 결과 떨어지면 → mtime 비교로 즉시 DONE 전환.
+- 사용자가 수동 BBH launch로 `--flat` 결과 떨어뜨려도 광역 스캔이 잡아 점수표 자동 반영.
 
 **`runs/<tag>/`의 다른 과거 eval run들은 점수 표 갱신 대상이 아니다** (단, `--eval_tag <과거 tag>`로 사용자가 명시적으로 그걸 다시 promote할 수는 있음 → 그러면 `_latest`가 그쪽을 가리키고 자동으로 그 점수가 표에 반영). §0-6 HISTORY.md에는 모든 run의 점수 변동을 기록.
 
