@@ -125,7 +125,7 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
         limit: Optional[int] = None,
         prompt_style: str = "alpaca_default",
         data_dir: Optional[str] = None,
-        max_new_tokens: int = 256,
+        max_new_tokens: int = 512,
         n_samples: int = 20,
         n_samples_per_batch: int = 4,
         temperature: float = 0.8,
@@ -212,6 +212,13 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             n_calls = 1
             per_call = 1
 
+        # Telemetry for max-tokens truncation. If completions consistently hit
+        # max_new_tokens with no natural stop (no EOS, no stop_sequence match),
+        # bump max_new_tokens higher and re-run. Logged in summary so a
+        # systematically-underscoring run is diagnosable from the JSON alone.
+        n_truncated_samples = 0
+        n_total_samples = 0
+
         completions: Dict[str, list] = {}
         for i, problem in enumerate(problems):
             prefix = humaneval_generation_prefix(
@@ -247,6 +254,7 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
                 # Token-id slicing — see tydiqa.py comment for why a
                 # `completion[len(prefix):]` char-offset slice can't survive
                 # the tokenizer's BOS auto-prepend + decode strip round-trip.
+                gen_tok_len = out.shape[1] - prefix_tok_len
                 for j in range(out.shape[0]):
                     # Do NOT .strip() here. HumanEval prompts end at the
                     # function-body indent column (typically 4 spaces after
@@ -255,6 +263,19 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
                     raw = tokenizer.decode(
                         out[j, prefix_tok_len:], skip_special_tokens=True,
                     )
+                    # Truncation telemetry: a generation that consumed all
+                    # max_new_tokens AND has no stop-sequence match in the
+                    # raw text never reached a natural end. With sampling
+                    # this happens on long-body problems (loops / recursion)
+                    # and the resulting completion is usually a partial
+                    # function body that fails exec → pass@1=0. Count.
+                    n_total_samples += 1
+                    truncated = (
+                        gen_tok_len >= max_new_tokens
+                        and not any(s in raw for s in _HUMANEVAL_STOP_SEQUENCES)
+                    )
+                    if truncated:
+                        n_truncated_samples += 1
                     completion = _postprocess_completion(raw, entry_point=entry_point)
                     completions.setdefault(problem["task_id"], []).append(completion)
                 remaining -= this_call
@@ -317,16 +338,42 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             except FileNotFoundError:
                 pass
 
+        trunc_pct = (
+            100.0 * n_truncated_samples / n_total_samples
+            if n_total_samples else 0.0
+        )
+        if trunc_pct >= 5.0:
+            logger.warning(
+                "HumanEval: %d/%d samples (%.1f%%) hit max_new_tokens=%d "
+                "without a natural stop — those completions are partial "
+                "function bodies that fail exec. Increase max_new_tokens "
+                "(currently %d) to recover the lost pass@k probability mass.",
+                n_truncated_samples, n_total_samples, trunc_pct,
+                max_new_tokens, max_new_tokens,
+            )
+
         summary = {
             "pass@1": pass_at_k.get("pass@1", 0.0),
             "pass@10": pass_at_k.get("pass@10", 0.0),
             "num_problems": len(problems),
             "benchmark": "humaneval",
+            # Diagnostics — surface in JSON so a low score's cause is visible
+            # without re-reading the eval log.
+            "n_samples": n_samples,
+            "n_total_samples": n_total_samples,
+            "n_truncated_samples": n_truncated_samples,
+            "truncated_pct": round(trunc_pct, 2),
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "prompt_style": prompt_style,
         }
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)
         logger.info(
-            "HumanEval | pass@10: %.4f | pass@1: %.4f | n_samples=%d | problems=%d",
+            "HumanEval | pass@10: %.4f | pass@1: %.4f | n_samples=%d | "
+            "problems=%d | truncated=%d/%d (%.1f%%)",
             summary["pass@10"], summary["pass@1"], n_samples, len(problems),
+            n_truncated_samples, n_total_samples, trunc_pct,
         )
         return summary
