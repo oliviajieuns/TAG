@@ -168,18 +168,28 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 
 값은 `<experiment_label>-eval_summary.json` 또는 벤치별 JSON에서 직접 파싱한 정확도 (%, 소수점 둘째자리까지). **아직 안 돌아간 셀은 `-` 그대로**.
 
-**`experiments.md`의 표 작성 규칙 (terminal 정렬 보존 — 핵심):**
+**MD 파일 표 작성 규칙 (terminal 정렬 보존 — 모든 .md 파일에 적용):**
 
-`experiments.md`는 사용자가 markdown 렌더러 없이 `cat / less / vim / tail -f` 같은 **plain terminal**로 열기도 한다. 그래서 이 파일 안에 들어가는 **모든 표는 예외 없이** 아래 형식이어야 한다:
+이 규칙은 원래 `experiments.md`만 대상이었지만 (2026-05-16 1차), 가이드 문서들도 `cat / less / vim / tail -f`로 열어 빠르게 참고하는 경우가 많아 **모든 `.md` 파일에 확장 적용**한다 (2026-05-16 2차). 대상 = `experiments.md`, `AUTO_EVAL_AGENT.md`, `LLAMA_TUNING.md`, `README.md`, 그리고 앞으로 추가되는 모든 가이드.
 
-1. **코드 펜스(```) 안에 둔다.** 펜스 밖에 markdown 표를 쓰면 terminal에서 `|` 파이프와 셀 값이 한 줄에 뭉개져 보인다.
-2. **컬럼은 monospace 폭으로 고정**하고 행 사이에 단순 공백 정렬 (`Method          mmlu    gsm8k   ...` 같은 식). markdown pipe table (`| ... | ... |`)은 **이 파일에 절대 쓰지 않는다** — pipe table은 가이드 문서 본문(AUTO_EVAL_AGENT.md, LLAMA_TUNING.md 등)에서만 허용.
-3. **컬럼 separator는 `=======`** (등호 7개 이상, 컬럼 폭에 맞춰). markdown의 `|---|---|` 형식 금지.
-4. **CJK 문자는 표시폭 2 cell로 계산**해 패딩 길이를 잡는다 (East Asian Wide). 예: `학습전`은 3글자지만 visual width = 6 → 7-cell 컬럼이면 `학습전 `(공백 1), `eval중`은 visual width = 6 → 같은 컬럼에 `eval중 `, `47.56%`는 6 → `47.56% `. 같은 컬럼 안에서 한·영이 섞여도 column boundary가 한 자리 이상 어긋나지 않아야 한다.
-5. **상태 토큰의 컬럼 폭 표준은 다음 5개를 다 담을 수 있는 최소 폭 = visual 9 cell** (`eval대기` = visual 8 + 여백 1). (1)-(6) 표의 점수 컬럼 = 7 cell (`NN.NN% ` / `학습전  ` / `eval중 `), (5) summary 표의 모델 컬럼 = 10 cell.
-6. **편집 시 컬럼 폭 변경 금지.** 새 행을 추가할 때는 헤더와 separator 라인의 폭을 그대로 카피해 같은 칸 수를 유지한다. 폭이 바뀌어야 하면 그 표 전체를 atomic 교체.
+**핵심 규칙 6항:**
 
-§0-4(1)-(6) 표가 이 규칙의 reference 구현. §0-5 dashboard 표도 동일 규칙으로 출력(아래 참조). 사용자 액션 섹션("필요한 학습 목록")처럼 표가 아닌 bullet list는 코드 펜스 없이 두어도 무방하다.
+1. **표는 가능한 한 코드 펜스(```) 안 + monospace 공백 정렬로 작성**. 코드 펜스 밖의 markdown pipe table (`| ... | ... |`)은 terminal에서 셀이 뭉개지고 `|` 위치도 행마다 어긋난다. 새 표는 기본적으로 이 형식을 따른다.
+2. **컬럼 separator는 `=======`** (등호 7개 이상, 컬럼 폭에 맞춰). markdown의 `|---|---|` 형식은 코드 펜스 안에서는 쓰지 않는다.
+3. **CJK 문자는 표시폭 2 cell로 계산**해 패딩 길이를 잡는다 (East Asian Wide). 예: `학습전`은 3글자지만 visual width = 6 → 9-cell 컬럼이면 `학습전   `(공백 3), `eval중`은 visual width = 6 → 같은 컬럼에 `eval중   `, `47.56%`는 6 → `47.56%   `. 같은 컬럼 안에서 한·영이 섞여도 column boundary가 한 자리 이상 어긋나지 않아야 한다.
+4. **상태 토큰의 컬럼 폭 표준 = visual 9 cell** (`eval대기` visual 8 + 여백 1). 점수 컬럼은 visual 7 cell (`NN.NN% ` / `학습전  ` / `eval중 `), 모델/메서드 컬럼은 visual 26 cell (`deepseek / data_agent_10` = 24자 + 여백 2), summary 표의 모델 컬럼 = 10 cell.
+5. **편집 시 컬럼 폭 변경 금지.** 새 행을 추가할 때는 헤더와 separator 라인의 폭을 그대로 카피해 같은 칸 수를 유지한다. 폭이 바뀌어야 하면 그 표 전체를 atomic 교체.
+6. **`**bold**` markdown 강조는 표 셀에 금지** (terminal에서 별표 그대로 보여 정렬이 깨짐). 강조가 필요하면 ASCII 마커(`<...>`)를 쓰거나 별도 주석 라인에 표기.
+
+**예외 — markdown pipe table을 허용하는 경우** (가이드 문서 본문 한정):
+- **2~3컬럼이면서 폭이 좁은 표** (예: §0-1 "축 × 개수 × 값" 표, §0-2 baseline 비교 표). 단순한 정의/약어 매핑 류는 pipe table이 markdown 렌더러에서 더 깔끔하고 terminal에서도 견딜 만함.
+- **4컬럼 이상이거나 한 셀이라도 긴 문자열을 담는 표**(예: §0-3 16-cell 매트릭스 표 — Config 열, 비교 대상 열 등)는 markdown 렌더러에서 가로 스크롤이 생기고 terminal에서는 한 줄로 폭주한다. 이 경우 pipe table 대신 **bullet list 또는 코드 펜스 표**로 작성.
+
+**experiments.md는 더 엄격**:
+- 위 규칙 6항을 **예외 없이** 따른다. markdown pipe table 절대 금지 (좁은 표라도).
+- `experiments.md`는 점수 표 에이전트가 atomic으로 마커 사이 영역만 교체하는 live document라, 형식 가변성을 최소화해야 한다.
+
+§0-4(1)-(6) 표와 §0-5 dashboard가 이 규칙의 reference 구현. 사용자 액션 섹션("필요한 학습 목록")처럼 표가 아닌 bullet list는 코드 펜스 없이 두어도 무방하다.
 
 #### (1) llama2
 
@@ -521,6 +531,125 @@ OOM 특화 처리:
 | 학습 새로 끝남 (sealed epoch 증가) | `learn complete <date> · eval큐` |
 
 원인 태그는 `HISTORY.md`의 가장 최근 `[param]` 또는 `[train]` 엔트리에서 유추 (없으면 `재학습`).
+
+### 0-7. Log-Tail Polling — 로컬 로그 파일을 매 tick 읽어서 상태 최신화
+
+**원칙**: 파일 시스템 state(체크포인트 sealed 여부, summary JSON 존재)만으로는 "현재 학습이 잘 돌고 있는지 / eval이 어디까지 갔는지 / 방금 OOM 났는지" 알 수 없다. 에이전트는 **매 tick마다 로컬 로그 파일들을 tail해서** 그 정보를 §0-5 dashboard / §0-6 HISTORY.md에 반영해야 한다.
+
+#### (a) 로그가 사는 위치 (모두 polling 대상)
+
+| 로그 종류 | 경로 | 만들어지는 곳 |
+|---|---|---|
+| **학습 (script 기준, append)** | `logs/main_7b_<model>_<method>.log` | `scripts/run_main_7b.sh` (`tee -a`) |
+| **학습 (per-run)** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/runs/<tag>/logs/train_<method>_<ts>_r<rank>.log` | `tads/train.py` (DDP rank마다 1개) |
+| **학습 (per-run, _latest 경유)** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/_latest/logs/` | 위와 같은 파일, _latest로 접근 |
+| **평가 (script 기준, append)** | `logs/eval_main_7b_<model>_<method>.log` | `scripts/run_eval_main_7b.sh` (`tee -a`) |
+| **평가 (per-run, _latest 경유)** | `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log` | `tads/eval.py` (history layout) |
+| **평가 (per-run, snapshot)** | `${EVAL_RESULTS_ROOT}/<model>/<method>/runs/<eval_tag>/logs/` | 위와 같은 파일 (과거 run audit용) |
+| **cron tick 로그** | `${EVAL_RESULTS_ROOT}/.auto_eval_logs/tick_*.log` | §9-3 의 tick 스크립트가 만들 것 |
+
+> script-side 로그 (`logs/main_7b_*`, `logs/eval_main_7b_*`)는 **계속 append**되어 한 셀에서 여러 run을 거치면 누적된다. 최신 run만 보려면 mtime 가장 최근의 `runs/<tag>/logs/...`를 보는 게 정확. 단, 사용자가 종종 `tail -f logs/main_7b_llama2_tads_10.log`로 모니터링하므로 둘 다 살아있는 게 정상.
+
+#### (b) 매 tick 로그에서 뽑아야 하는 신호 (필수)
+
+각 (model, method) 셀의 가장 최근 train 로그 + 가장 최근 eval 로그에 대해, 아래 7가지 signal을 추출:
+
+```bash
+# 셀의 최신 학습 로그 1개 (latest run의 rank 0)
+TRAIN_LOG=$(ls -t "${OUTPUT_ROOT}/main_7b/${model}/${method}/_latest/logs/train_"*_r0.log 2>/dev/null | head -1)
+# 셀의 최신 평가 로그 1개
+EVAL_LOG=$(ls -t "${EVAL_RESULTS_ROOT}/${model}/${method}/_latest/logs/eval_"*.log 2>/dev/null | head -1)
+```
+
+| Signal | grep / tail 패턴 | 사용처 |
+|---|---|---|
+| **1. SFT 진행** | `grep -E "SFT \| epoch=[0-9]+ \| step=" "$TRAIN_LOG" \| tail -1` | dashboard Status (`step=N/T loss=X`) |
+| **2. PCA / anchor 진행** | `grep -E "TrajectoryAnchor.update\|collect_episode" "$TRAIN_LOG" \| tail -3` | tads/data_agent의 selection phase 정체 감지 |
+| **3. epoch sealed 마커** | `grep -E "Checkpoint saved \+ sealed\|_latest -> runs/" "$TRAIN_LOG" \| tail -2` | "학습 N/M epoch 끝남" 표기 |
+| **4. eval 벤치 진행** | `grep -E "Progress:\|Eval start\|Benchmark .* failed" "$EVAL_LOG" \| tail -5` | dashboard "eval중" 셀의 현재 bench |
+| **5. eval 완료 마커** | `grep -E "Eval run sealed:\|_latest -> runs/.* under " "$EVAL_LOG" \| tail -2` | 신규 _latest 갱신 즉시 감지 (mtime 동기화 전에도) |
+| **6. 오류 / 경고** | `grep -iE "(out of memory\|OOM\|CUDA error\|RuntimeError\|Killed\|Traceback)" "$LOG" \| tail -10` | §0-6 (c) HISTORY.md `[eval]` 또는 `[train]` 오류 엔트리 |
+| **7. 마지막 활동 시점** | `stat -c %Y "$LOG"` (mtime) | hang 감지 (아래 (d) 참조) |
+
+전부 한 셀당 ~수십 KB grep — 매 tick 16 셀 × (train + eval) = 32개 grep, 1초 이내.
+
+#### (c) Status 컬럼에 반영하는 패턴
+
+§0-6 (a)에서 정의한 Status facet들을 **이 신호들로 갱신**:
+
+| 신호 추출 결과 | Status 표기 |
+|---|---|
+| Signal 1 매치 + 학습 프로세스 alive → `SFT \| epoch=2 \| step=350/2031 \| loss=1.84` | dashboard cell `학습중`, Status에 `epoch 2 step=350/2031 loss=1.84` |
+| Signal 4 매치 → `Progress: 60/164 (n_samples=20, chunks=5×4)` | dashboard cell `eval중`, Status에 `humaneval 60/164` |
+| Signal 6 매치 (예: OOM) | Status 즉시 `OOM ×N retry pending · last <score>` 갱신 + §0-6 (c) HISTORY.md `[eval] OOM` 엔트리 작성 (log tail 25줄 포함) |
+| Signal 5 매치 (방금 _latest sealed) | 점수 파싱을 다음 tick까지 기다리지 말고 즉시 §0-4 점수 표 + HISTORY.md `[eval] done` 갱신 (선제 동기화) |
+| Signal 3 매치 (방금 sealed epoch 증가) | Status `learn complete <date> · eval큐` + 해당 셀을 NEED-EVAL 큐에 즉시 enqueue (다음 tick 안 기다림) |
+
+#### (d) Hang 감지 — log mtime이 N분 이상 안 움직이는데 프로세스가 살아있음
+
+특히 다음 두 케이스가 흔하다:
+- 학습 collect_episode 진입(`[trace] rank=0 BEFORE collect_episode`) 이후 30분+ 무응답 → PCA 또는 DataLoader 워커 wedge.
+- eval HumanEval 중 한 문제에서 generate가 ∞ loop.
+
+**탐지 로직**:
+```bash
+# 학습이 5분 이상 로그를 안 쓰면 의심, 30분 이상이면 hang 확정
+now=$(date +%s)
+mtime=$(stat -c %Y "$TRAIN_LOG")
+elapsed=$(( now - mtime ))
+if pgrep -af "python.*tads.train.*${model}/${method}\.yaml" >/dev/null; then
+  if [ "$elapsed" -ge 1800 ]; then
+    # 30분+ idle → HANG. Status 컬럼에 표시, HISTORY.md에 기록.
+    # 자동 kill 하지 말 것 — 사용자가 결정. 단 Status는 `HANG ${elapsed}s · last <signal>` 갱신.
+    :
+  elif [ "$elapsed" -ge 300 ]; then
+    # 5~30분 → STALLED 의심. Status에 `(slow ${elapsed}s)` 표기만, 알람 NO.
+    :
+  fi
+fi
+```
+
+자동 복구는 §10 cleanup 절차의 트리거 조건과 연동. **자동 kill / restart 금지** (학습 1잡 = 사용자 정책 영역). 에이전트는 보고만.
+
+#### (e) 채팅 보고 시 로그 인용 규칙
+
+사용자에게 매 tick 메시지를 보낼 때 로그 raw dump는 금지. 다음 형식만:
+
+- 변경된 셀 1줄 요약: `[#4 llama2/tads_10] 학습중 → eval대기 (sealed epoch 4/4, ${OUTPUT_ROOT}/.../runs/20260516_120000/)`
+- 오류 셀 1줄 요약 + log 경로: `[#7 qwen25/data_agent_10] OOM at eval mmlu (log: ${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/_latest/logs/eval_20260516_180000_r0.log:142-167)`
+
+전체 로그 인용은 HISTORY.md에만. 사용자 메시지는 핵심 정보 + 파일 경로 + line range만.
+
+#### (f) tick 진입 시 로그 polling 순서 (의사 코드)
+
+```python
+def tick():
+    for model, method in ALL_16_CELLS:
+        train_log = newest("${OUTPUT_ROOT}/main_7b/" + model + "/" + method
+                           + "/_latest/logs/train_*_r0.log")
+        eval_log  = newest("${EVAL_RESULTS_ROOT}/" + model + "/" + method
+                           + "/_latest/logs/eval_*.log")
+        # script-side append 로그는 보조 (per-run 로그가 source of truth)
+        train_log_aux = "logs/main_7b_" + model + "_" + method + ".log"
+        eval_log_aux  = "logs/eval_main_7b_" + model + "_" + method + ".log"
+
+        # (b) Signal 1~7 추출. train_log가 없으면 train_log_aux, eval도 마찬가지.
+        signals = extract_signals(train_log or train_log_aux,
+                                  eval_log  or eval_log_aux)
+
+        # (d) hang 체크 — 가장 최신의 살아있는 로그 기준
+        if signals.train_running and signals.train_mtime_age > 1800:
+            mark_hang(model, method, signals)
+
+        # (c) Status / HISTORY.md / 점수표 동기화
+        update_status_column(model, method, signals)
+        if signals.new_oom_or_error:
+            append_history_md(model, method, signals)
+        if signals.new_sealed_eval:
+            sync_score_board_now(model, method)  # 다음 tick 안 기다림
+```
+
+§7 의사 코드와 §9-3 tick 스크립트는 위 polling pass를 **classify pass보다 먼저** 실행해야 한다 (signals이 classify의 입력이기 때문). 다음 §7 / §9-3 갱신본 참조.
 
 ---
 
@@ -946,6 +1075,26 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 ```
 1. cd /home/jieun/kms/tads
 2. source scripts/setup_env.sh   # 매 쉘마다 한 번
+
+2.5 log-tail polling pass (§0-7) — classify보다 먼저
+   for model in {llama2, qwen25, mistral, deepseek}:
+     for method in {full_100, random_10, data_agent_10, tads_10}:
+         train_log = newest("${OUTPUT_ROOT}/main_7b/${model}/${method}/_latest/logs/train_*_r0.log")
+         eval_log  = newest("${EVAL_RESULTS_ROOT}/${model}/${method}/_latest/logs/eval_*.log")
+         # script append 로그도 fallback으로 검사
+         train_log = train_log or "logs/main_7b_${model}_${method}.log"
+         eval_log  = eval_log  or "logs/eval_main_7b_${model}_${method}.log"
+         signals[(model, method)] = extract_signals(train_log, eval_log)  # §0-7 (b)
+         # signals: sft_progress, anchor_progress, sealed_epoch_event,
+         # eval_bench_progress, eval_sealed_event, errors, log_mtime_age
+         if signals.hang_suspect:           # §0-7 (d): mtime > 30분 + alive
+             mark_hang(model, method, signals)
+         if signals.new_oom_or_error:
+             append_history_md(model, method, signals)   # §0-6 (c)
+         if signals.new_sealed_eval:
+             sync_score_board_now(model, method)         # 다음 tick 안 기다리고 표 갱신
+         update_status_column(model, method, signals)     # §0-5/§0-6 (a)
+
 3. classify pass — NEED-EVAL 큐 만들기
    for model in {llama2, qwen25, mistral, deepseek}:
      for method in {full_100, random_10, data_agent_10, tads_10}:
@@ -1084,6 +1233,80 @@ largest_sealed_epoch() {
   done | tail -n 1
 }
 
+# ---------------- §0-7: log-tail polling pass (classify보다 먼저) ---------------
+# 각 셀의 가장 최근 train + eval 로그를 tail해서 Status / HISTORY.md / 점수표를
+# 선제 동기화. 이 단계는 실패해도 아래 classify는 그대로 돈다 (best-effort).
+poll_log_signals() {
+  local model=$1 method=$2
+  local ckpt_base="${OUTPUT_ROOT}/main_7b/${model}/${method}"
+  local eval_base="${EVAL_RESULTS_ROOT}/${model}/${method}"
+
+  # newest per-run log (없으면 script-side append 로그 fallback)
+  local train_log eval_log
+  train_log=$(ls -t "${ckpt_base}/_latest/logs/train_"*_r0.log 2>/dev/null | head -1 \
+              || true)
+  [ -z "$train_log" ] && train_log="${REPO}/logs/main_7b_${model}_${method}.log"
+  eval_log=$(ls -t "${eval_base}/_latest/logs/eval_"*.log 2>/dev/null | head -1 \
+             || true)
+  [ -z "$eval_log" ] && eval_log="${REPO}/logs/eval_main_7b_${model}_${method}.log"
+
+  # §0-7 (b) 7개 signal 추출 — 단순 grep + tail. 결과는 stdout 라인으로 모음.
+  echo "=== signals: ${model}/${method} ==="
+  if [ -f "$train_log" ]; then
+    # 1. SFT 진행
+    grep -E 'SFT \| epoch=[0-9]+ \| step=' "$train_log" 2>/dev/null | tail -1 \
+      | sed 's/^/  [sft]   /'
+    # 2. anchor / collect_episode 진행
+    grep -E 'TrajectoryAnchor.update|collect_episode' "$train_log" 2>/dev/null | tail -3 \
+      | sed 's/^/  [sel]   /'
+    # 3. epoch sealed 이벤트
+    grep -E 'Checkpoint saved \+ sealed|_latest -> runs/' "$train_log" 2>/dev/null | tail -2 \
+      | sed 's/^/  [seal]  /'
+  fi
+  if [ -f "$eval_log" ]; then
+    # 4. eval 벤치 진행 + 실패
+    grep -E 'Progress:|Eval start|Benchmark .* failed' "$eval_log" 2>/dev/null | tail -5 \
+      | sed 's/^/  [eval]  /'
+    # 5. eval sealed 이벤트
+    grep -E 'Eval run sealed:|_latest -> runs/.* under ' "$eval_log" 2>/dev/null | tail -2 \
+      | sed 's/^/  [eseal] /'
+  fi
+  # 6. 오류 — train + eval 양쪽
+  for L in "$train_log" "$eval_log"; do
+    [ -f "$L" ] || continue
+    grep -iE '(out of memory|OOM|CUDA error|RuntimeError|Killed|Traceback)' "$L" \
+        2>/dev/null | tail -5 | sed "s|^|  [err]   ${L##*/}: |"
+  done
+  # 7. mtime age — hang 감지
+  local now=$(date +%s)
+  for kind in train eval; do
+    local L
+    [ "$kind" = train ] && L="$train_log" || L="$eval_log"
+    [ -f "$L" ] || continue
+    local mtime age proc_alive=0
+    mtime=$(stat -c %Y "$L")
+    age=$(( now - mtime ))
+    if pgrep -af "python.*tads.${kind}.*${model}/${method}\.yaml" >/dev/null 2>&1; then
+      proc_alive=1
+    fi
+    if [ "$proc_alive" = 1 ] && [ "$age" -ge 1800 ]; then
+      echo "  [HANG]  ${kind} ${model}/${method} idle ${age}s (log=${L##*/})"
+    elif [ "$proc_alive" = 1 ] && [ "$age" -ge 300 ]; then
+      echo "  [slow]  ${kind} ${model}/${method} idle ${age}s"
+    fi
+  done
+}
+
+# 로그 polling 결과는 tick 로그에 그대로 dump — 에이전트가 그 다음 패스에서
+# 읽어 Status / HISTORY.md / 점수표를 업데이트한다.
+echo "[tick $(date -Is)] === log-tail polling pass ==="
+for model in llama2 qwen25 mistral deepseek; do
+  for method in full_100 random_10 data_agent_10 tads_10; do
+    poll_log_signals "$model" "$method"
+  done
+done
+
+# --------------------------------- §7-3 classify pass -------------------------
 need=()
 for model in llama2 qwen25 mistral deepseek; do
   for method in full_100 random_10 data_agent_10 tads_10; do
