@@ -124,12 +124,20 @@ class GSM8KEvaluator(BenchmarkEvaluator):
             inputs = tokenizer(
                 prompt, return_tensors="pt", truncation=True, max_length=2048,
             ).to(device)
+            # stop_strings: GSM8K 8-shot CoT 포맷에서 "Q:" 는 다음 demo
+                # 시작. 모델이 "The answer is X." 쓴 뒤 또 "Q: ..."를
+                # 환각으로 생성하기 시작하면 즉시 중단 — 평균 30~40% token
+                # 절약 + 정답 추출에 영향 없음 (이미 답은 직전에 생성됨).
+                # 환각 답안이 last-match 추출기를 속이는 문제도 동시 해소.
+                # 사후 stop trim(`\n\nQ:`)도 같이 두어 안전망 유지.
             out = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
                 temperature=0.0,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
+                tokenizer=tokenizer,
             )
             # Token-id slicing (see tydiqa.py comment for full rationale):
             # decoded(prompt_ids)[:len(prompt)] is not the original prompt

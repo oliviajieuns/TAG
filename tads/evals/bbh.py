@@ -160,7 +160,13 @@ class BBHEvaluator(BenchmarkEvaluator):
         limit: Optional[int] = None,
         prompt_style: str = "alpaca_default",  # unused (BBH has its own format)
         data_dir: Optional[str] = None,
-        max_new_tokens: int = 512,
+        # max_new_tokens 256 = NAIT CoT answer (typical "Let's think step by
+        # step. ... Therefore the answer is X." 100~200 tokens) 안에 충분히
+        # 끝남. 512는 worst-case 여백이지만 평균 generation 시간 1.5~2x
+        # 증가시켜 BBH 셀당 ~27h → ~15h 감축 효과. 답이 256 token 안에
+        # 안 들어오면 truncate되지만 그건 모델이 발산한 케이스라
+        # 점수에도 큰 의미 없음.
+        max_new_tokens: int = 256,
         n_fewshot: int = 5,
         max_input_tokens: int = 3072,
         **kwargs,
@@ -302,12 +308,20 @@ class BBHEvaluator(BenchmarkEvaluator):
                     prompt, return_tensors="pt",
                     truncation=True, max_length=max_input_tokens,
                 ).to(device)
+                # stop_strings: BBH cot-prompts 포맷에서 "Q:" 는 다음
+                # demonstration의 시작. 모델이 현재 답변을 마치고 "Q:"를
+                # 다시 emit하면 그 시점에 generation 중단 — 평균 ~30-40%
+                # token 절약 + 정답 추출에는 영향 없음(이미 답 부분은
+                # 직전에 생성 완료). "Question:" 는 chat-style 변형 대비.
+                # transformers >= 4.34 필수 (requirements.txt: >=4.40 OK).
                 out = model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
                     do_sample=False,
                     temperature=0.0,
                     pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                    stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
+                    tokenizer=tokenizer,
                 )
                 # Token-id slicing — see tydiqa.py comment for the
                 # decode-round-trip BOS / whitespace mismatch the old

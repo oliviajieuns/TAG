@@ -59,6 +59,10 @@
             없는 facet 자리에는 placeholder(`(no DONE yet)` / `no err` /
             `baseline` / `no score`)를 넣어 facet 3개 유지. 한 facet만
             적고 끝내는 패턴 = 위반 (자주 발생).
+[CHECK 14] (6)/(7)/(8) 16-행 표에서 모델 그룹 사이에 빈 줄 1개로 시각적
+            구분: llama2 4행 → 빈 줄 → qwen25 4행 → 빈 줄 → mistral 4행 →
+            빈 줄 → deepseek 4행 (총 빈 줄 3개). 그룹 안은 빈 줄 없음.
+            terminal `cat`/`less`로 봤을 때 모델 단위 시각적 chunking.
 ```
 
 **한 항목이라도 fail이면 절대 사용자에게 'tick 완료'로 보고하지 말 것.** 누락된 섹션 / 잘못된 셀 / 빠진 컬럼을 §0-4 (6)/(7)/(8)/(9) 템플릿대로 다시 채워서 atomic 교체. 3회 재시도 후에도 fail이면 보고 중단하고 "표 구조 깨짐 — 사용자 확인 필요" 알람만 보냄.
@@ -319,6 +323,7 @@ ${EVAL_RESULTS_ROOT}/experiments.md
     * `NN.NN%` → `학습중` (재학습 시작): (6)만 학습중으로, (7)/(8) 그대로, (9) append.
     * 그 외 상태 토큰 전환 (eval대기 → eval중 등): (6)만 갱신, (9) append.
 - 셀의 가장 최근 학습 run의 cfg.json snapshot이 바뀌면 (6) Params 컬럼만 갱신. (7) Params는 마지막 DONE 시점 cfg 그대로, (8) Params는 best run cfg 그대로.
+- **모델 그룹 사이에 빈 줄 1개로 시각적 구분** (16-행 표 (6)/(7)/(8) 공통): llama2 4행 → 빈 줄 → qwen25 4행 → 빈 줄 → mistral 4행 → 빈 줄 → deepseek 4행. 그룹 내부는 빈 줄 없음. terminal `cat`/`less`로 열어 한 눈에 모델 단위로 chunking되도록. atomic 교체 시에도 빈 줄 보존 (PRE-FLIGHT CHECK 14 참조).
 
 **🚨 셀 값 어휘 — 매우 엄격 (자주 위반되니 주의):**
 
@@ -484,14 +489,17 @@ tads_10         -          -          -          -
  2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+
  5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+
  9  mistral / full_100         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 10  mistral / random_10        학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+
 13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
@@ -743,14 +751,17 @@ def status_cell(model, method, bench):
  2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전
  3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전
  4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전
+
  5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전
  6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전
  7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전
  8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전
+
  9  mistral / full_100         학습전    학습전    학습전    학습전    학습전
 10  mistral / random_10        학습전    학습전    학습전    학습전    학습전
 11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전
 12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전
+
 13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전
 14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전
 15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전
@@ -770,6 +781,7 @@ def status_cell(model, method, bench):
  2  llama2 / random_10         47.14%    14.13%    eval중    eval대기  eval대기
  3  llama2 / data_agent_10     학습중    학습중    학습중    학습중    학습중
  4  llama2 / tads_10           학습중    학습중    학습중    학습중    학습중
+
  5  qwen25 / full_100          eval중    eval대기  eval대기  eval대기  eval대기
  ...
 16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전
@@ -2300,14 +2312,17 @@ llama2 / random_10         47.14%    14.13%    25.55%    44.16%    39.21%
 llama2 / full_100          -         -         -         -         -
 llama2 / data_agent_10     -         -         -         -         -
 llama2 / tads_10           -         -         -         -         -
+
 qwen25 / full_100          -         -         -         -         -
 qwen25 / random_10         -         -         -         -         -
 qwen25 / data_agent_10     -         -         -         -         -
 qwen25 / tads_10           -         -         -         -         -
+
 mistral / full_100         -         -         -         -         -
 mistral / random_10        -         -         -         -         -
 mistral / data_agent_10    -         -         -         -         -
 mistral / tads_10          -         -         -         -         -
+
 deepseek / full_100        -         -         -         -         -
 deepseek / random_10       -         -         -         -         -
 deepseek / data_agent_10   -         -         -         -         -
