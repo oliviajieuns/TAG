@@ -5,4 +5,5 @@ defaults:
   - configs/modes/full_ft.yaml
 
 output_subdir: main_7b/qwen25/full_100
-train_epochs: 3
+# epochs-unify(2026-05-16): 3 → 4. llama2 매트릭스(LLAMA-TUNE 1차)와 동일하게 통일.
+train_epochs: 4
