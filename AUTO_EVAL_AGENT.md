@@ -1675,3 +1675,43 @@ nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
 ```
 
 네 줄 다 합리적인 출력이 나오면 §7 루프(또는 §9 cron tick)를 시작해도 된다.
+
+---
+
+## 13. 기준치 (사용자 입력) — 점수 검증용 reference
+
+사용자가 직접 측정하거나 다른 환경에서 확인한 점수를 여기에 기록한다. 에이전트의 eval 결과가 이 값과 ±2%p 이상 차이나면 **노란불** (학습 / eval 환경 의심), ±5%p 이상이면 **빨간불** (재학습 권장). 점수 신뢰성 baseline 역할.
+
+표 형식 = §0-4 표 작성 규칙(코드 펜스 + 고정폭 정렬). 값은 정확도(%) 둘째 자리. 셀이 비어있으면 (`-`) 사용자가 아직 측정하지 않았다는 뜻 (이 표는 에이전트가 자동 갱신하지 않으므로 `-` 사용 OK — 점수 표가 아니라 reference 표).
+
+```
+Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh
+========================== ========= ========= ========= ========= =========
+llama2 / random_10         47.14%    14.13%    25.55%    44.16%    39.21%
+llama2 / full_100          -         -         -         -         -
+llama2 / data_agent_10     -         -         -         -         -
+llama2 / tads_10           -         -         -         -         -
+qwen25 / full_100          -         -         -         -         -
+qwen25 / random_10         -         -         -         -         -
+qwen25 / data_agent_10     -         -         -         -         -
+qwen25 / tads_10           -         -         -         -         -
+mistral / full_100         -         -         -         -         -
+mistral / random_10        -         -         -         -         -
+mistral / data_agent_10    -         -         -         -         -
+mistral / tads_10          -         -         -         -         -
+deepseek / full_100        -         -         -         -         -
+deepseek / random_10       -         -         -         -         -
+deepseek / data_agent_10   -         -         -         -         -
+deepseek / tads_10         -         -         -         -         -
+```
+
+기록 시점 / 출처:
+- `llama2 / random_10` — 2026-05-16 사용자 직접 입력 (이전 환경 재현 값).
+
+사용법:
+- 에이전트는 매 tick에서 새로 산출된 `NN.NN%`를 위 reference와 비교.
+- delta ≥ +2%p 또는 ≤ −2%p → §0-6 (a) Status 컬럼에 `(ref ±X.XX)` 부기 (예: `47.56% (ref +0.42)`).
+- delta ≥ +5%p 또는 ≤ −5%p → §0-6 (c) HISTORY.md `[eval]` 엔트리에 reference 불일치 명시 + 사용자에게 즉시 보고 (학습/eval 환경 차이 의심).
+- reference 셀이 `-`이면 그 셀에 대한 비교는 건너뜀 (조용히 통과, 알람 없음).
+
+추가 입력 방법: 사용자가 새 reference 값을 알려주면 위 표의 해당 셀을 `-`에서 `NN.NN%`로 교체 (atomic 편집). 가이드 문서의 표는 에이전트가 자동으로 안 건드린다 — 사용자 명시적 요청 시에만 갱신.
