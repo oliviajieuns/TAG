@@ -7,17 +7,25 @@
 
 ## 0. Mission
 
-**학습은 사용자가 직접 돌린다. 에이전트는 어떤 경우에도 학습을 실행하지 않는다.**
-에이전트의 유일한 자동 실행 권한은 **eval**이다.
+**학습도, eval도 사용자가 직접 돌린다. 에이전트는 어떤 명령도 자동 실행하지 않는다** (2026-05-16 정책 변경 — 이전엔 eval만은 에이전트가 auto-launch했었음).
+에이전트의 역할은 **상태 모니터링 + 점수 보드 갱신 + 보고**다.
 
 에이전트가 해야 할 일:
 
-1. 사용자가 학습으로 떨군 새 체크포인트를 감지하고,
-2. 해당 체크포인트에 대해 멀티 벤치마크 evaluation을 돌리고,
-3. 결과 디렉터리(`${EVAL_RESULTS_ROOT}`) 및 score board(`experiments.md`)에 기록하고,
-4. **체크포인트가 아예 없는 셀(= 학습이 아직 안 된 셀)을 별도로 표기해서 보고**한다 — "이 셀은 사용자가 학습을 돌려야 한다"는 신호. 직접 학습 명령(`run_main_7b.sh`, `tads.train`, `torchrun` 등) 실행은 **금지**.
+1. 매 tick (§9 cron) 마다 16 × 5 = 80개 셀 전체의 상태를 분류 (§5-4 / §0-5)
+2. 분류는 **2가지 신호의 합성**으로 한다:
+   - **filesystem state** (sealed epoch / `_latest/_complete` / summary mtime)
+   - **process state + log tail** (`pgrep` + §0-7 log polling) — 특히 `eval대기` vs `eval중` 구분은 반드시 이 두 신호로 확정
+3. 결과를 `experiments.md` 점수 표 (§0-4) + status dashboard (§0-5) + per-cell HISTORY.md (§0-6)에 atomic으로 기록
+4. **체크포인트가 없는 셀(`학습전`) + eval 안 돌아간 셀(`eval대기`)** 양쪽 다 사용자에게 명시적으로 보고 — "이 셀은 사용자가 (학습 or eval) 직접 실행해야 한다"는 신호.
 
-이미 평가된 체크포인트는 건너뛴다.
+에이전트가 **절대 실행하지 않는** 명령:
+- 학습 (`run_main_7b.sh`, `python -m tads.train`, `torchrun ... -m tads.train` 등)
+- eval (`python -m tads.eval`, `run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh` 등) — 새 정책
+- 가중치 / 캐시 / 결과 삭제 (`rm`, `git clean`, `mv runs/*`, `truncate` 등)
+- 환경 수정 (`pip install`, `apt`, `git config`, `crontab -e` 등)
+
+이미 평가된 체크포인트는 건너뛴다 (DONE 판정 후 점수만 표에 반영, 재실행 안 함).
 
 ### 0-1. 최종 결과 매트릭스 (목표 = 80개 셀)
 
@@ -163,10 +171,38 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 **80-cell 표 관리 규약** (§0-4(6) 전용):
 - 위치: `experiments.md`의 **맨 아래** (다른 섹션 추가되더라도 항상 마지막에 위치). `## 80-cell Consolidated Score Table` 헤더로 둘러싸고, 그 안의 코드 펜스(```) 블록만 atomic 교체.
 - 갱신 단위: 셀 1개 (점수 1개). 한 셀이 DONE 되면 (1)-(5) 표와 (6) 표 양쪽을 같은 값으로 동시 갱신.
-- 상태 표기는 아래 "채우는 규칙" 5종 + 초기 템플릿 `-`만 사용: `학습전` / `학습중` / `eval대기` / `eval중` / `47.56%` / `-`.
+
+**🚨 셀 값 어휘 — 매우 엄격 (자주 위반되니 주의):**
+
+매 tick의 출력에 들어갈 수 있는 셀 값은 정확히 **5종**뿐:
+
+1. `학습전` — 체크포인트가 아직 없음 (§5-4 NEED-TRAIN)
+2. `학습중` — 학습 프로세스가 살아있거나 sealed epoch 수 < train_epochs
+3. `eval대기` — 학습 완료, eval 프로세스 안 떴음 (NEED-EVAL)
+4. `eval중` — `python -m tads.eval.*<model>/<method>` 프로세스 살아있음
+5. `NN.NN%` — 점수 산출 완료 (`47.56%` 형식, 둘째 자리 + `%`)
+
+**`-`는 셀 값이 아니다** — 이것은 **본 가이드 문서(AUTO_EVAL_AGENT.md) 안의 빈 템플릿 placeholder**일 뿐이다. `experiments.md`를 **최초 생성하는 순간부터** 모든 셀은 위 5종 중 하나여야 한다. 즉:
+- `experiments.md`를 새로 만들면서 가이드 §0-4의 `-` 채워진 템플릿을 그대로 복사하지 말 것. 복사 후 **첫 tick에서 즉시** 모든 80개 셀을 §5-4 분류로 채워야 한다. `experiments.md`에 `-`가 단 하나라도 남아있다면 그건 미완성 출력이고 에이전트가 다시 채워야 한다.
+- 학습이 아직 시작 안 된 셀? → `학습전`이 정답 (`-` 아님).
+- 학습은 끝났는데 eval 안 돌린 셀? → `eval대기`가 정답 (`-` 아님).
+- 옛 포맷 점수 / LEGACY / 부분 실패? → 위 5종 중 가장 가까운 것으로 매핑 (§0-4 채우는 규칙 표 참조).
+
+**셀프 체크 — 매 tick의 표 작성 직후 반드시 수행:**
+```bash
+# experiments.md의 §0-4(6) 80-cell 표 안에서 `-` 카운트
+n_dash=$(awk '/^## 80-cell Consolidated Score Table/,/^```$/' experiments.md \
+         | grep -oE '\s-\s' | wc -l)
+if [ "$n_dash" -gt 0 ]; then
+  echo "[FAIL] 80-cell 표에 dash($n_dash개)가 남아있음 — 5종 어휘로 재분류 필요"
+  exit 1
+fi
+```
+이 체크가 fail이면 그 tick의 출력은 **사용자에게 보고하지 말고 재분류 후 다시 시도**할 것. dash가 남아있는 표는 잘못된 표다.
+
 - 80개 셀 전체가 `NN.NN%`로 채워지면 = 실험 완료. 이 시점에 §0-2 발산 알람 최종 평가를 별도 섹션 `## 최종 발산 알람 요약`으로 (6) 표 바로 위에 추가.
 
-값은 `<experiment_label>-eval_summary.json` 또는 벤치별 JSON에서 직접 파싱한 정확도 (%, 소수점 둘째자리까지). **아직 안 돌아간 셀은 `-` 그대로**.
+값은 `<experiment_label>-eval_summary.json` 또는 벤치별 JSON에서 직접 파싱한 정확도 (%, 소수점 둘째자리까지).
 
 **MD 파일 표 작성 규칙 (terminal 정렬 보존 — 모든 .md 파일에 적용):**
 
@@ -274,15 +310,24 @@ tads_10         -          -          -          -
 
 채우는 규칙 (§5-4의 4-state 분류를 그대로 반영) — **모든 표 ((1)-(6))에 동일한 5가지 표기만 사용**:
 
-| 상태 | 셀 표기 | 비고 |
+| 상태 | 셀 표기 | 판정 신호 (정확히 이렇게) |
 |---|---|---|
-| **NO-CKPT** | `학습전` | 체크포인트 없음. 한 행 전체를 이 마커로 채움 (벤치 컬럼 5개 + avg). 사용자에게 별도 "학습이 필요한 셀 목록" 보고. |
-| **TRAINING** | `학습중` | 학습 잡이 살아있거나 sealed epoch 수 < `train_epochs`. 한 행 전체 5개 컬럼 모두 이 표기. |
-| **NEED-EVAL** | `eval대기` | 학습은 끝났는데 아직 eval 안 돌아간 셀. 곧 자동 eval 됨. |
-| **EVAL-RUNNING** | `eval중` | `python -m tads.eval` 프로세스가 떠 있음. |
-| **DONE** | `NN.NN%` 예: `47.56%` | 정확도(%) 소수점 둘째자리 + `%`. humaneval은 pass@1. |
+| **NO-CKPT** | `학습전` | `_latest`도 `_latest.txt`도 legacy flat `epoch_*`도 없음. 행 전체 5컬럼 동일. 사용자에게 "학습이 필요한 셀 목록" 보고. |
+| **TRAINING** | `학습중` | 학습 프로세스 alive **또는** sealed epoch < `train_epochs`. 행 전체 5컬럼 동일. |
+| **NEED-EVAL** | `eval대기` | (a) 학습 끝남 (sealed == train_epochs) AND (b) `_latest/_complete` + `_latest/<label>-eval_summary.json` 부재 또는 stale AND **(c) `python -m tads.eval.*<model>/<method>` 프로세스 부재 AND (d) eval 로그 mtime > 5분 (= 진짜 idle)**. 사용자가 직접 실행할 셀. |
+| **EVAL-RUNNING** | `eval중` | `python -m tads.eval.*<model>/<method>` 프로세스 alive **또는** eval 로그 mtime < 5분 이내 활동 (pgrep이 잠시 놓쳤어도 로그가 움직이면 살아있는 것). |
+| **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. humaneval은 pass@1. |
 
-> **표기는 위 5종 + 초기 템플릿 `-`이 전부**. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 5종 중 하나로 매핑해서 쓸 것: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
+> **`eval대기` vs `eval중` 구분 — 매 tick 반드시 재판정** (이전 tick 값을 캐싱하지 말 것):
+> 1. `pgrep -af "python -m tads.eval.*<model>/<method>\.yaml"` → 1개 이상 → `eval중`.
+> 2. pgrep 0개여도 `<EVAL_RESULTS_ROOT>/<model>/<method>/_latest/logs/eval_*.log` 파일이 있고 `mtime` 이 현재 시각 −5분 이내 → `eval중` (프로세스가 grep 사이 잠시 안 잡힌 케이스).
+> 3. pgrep 0개 + 로그 mtime > 5분 (또는 로그 없음) → `eval대기`. **사용자가 직접 launch할 때까지 그대로 둘 것 — 에이전트는 절대 자동 launch하지 않는다 (§0).**
+> 4. pgrep 0개 + 로그 mtime > 30분 + sealed_epoch < train_epochs → 학습이 끝나지 않음 → `학습중`으로 분류 (eval과 무관). `eval대기` 분류 전에 학습 종료 여부를 먼저 확인.
+> 5. (특수) eval 로그에 OOM/CUDA error/Traceback이 마지막 50줄 안에 있고 프로세스도 죽음 → `eval대기` (재시도 큐). §0-6 (c)에 따라 HISTORY.md에 실패 엔트리 작성 + `.fail_count` 증가.
+
+> **표기는 위 5종만 허용**. `-`는 본 가이드 문서 안의 placeholder일 뿐 `experiments.md`의 셀 값으로는 **절대 쓰지 말 것** — `experiments.md`를 최초 생성할 때부터 §5-4 분류를 돌려 5종 중 하나를 채운다. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 5종 중 하나로 매핑: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
+>
+> 흔한 실수: 가이드 §0-4(6) 코드 블록의 `-`로 채워진 행을 그대로 `experiments.md`에 복사하고 끝내는 것. 이건 잘못된 출력이다. **복사 직후 같은 tick에서 분류해서 5종 어휘로 덮어써야 매 tick이 마무리된다.**
 
 추가 규칙:
 - treatment 행이 DONE이면 옆에 §0-2의 발산 알람을 인라인으로 붙일 것. 예: `tads_10  41.20% (RED < random_10)`
@@ -294,6 +339,15 @@ tads_10         -          -          -          -
   - mistral / random_10
   ...
   ```
+- **`eval대기` 셀도 동일하게 별도 섹션을 `experiments.md` 상단에 추가** (학습전 섹션 바로 아래). 사용자가 직접 실행할 큐이기 때문 (§0 — 에이전트 auto-launch 금지). 형식:
+  ```
+  ## 사용자 액션 필요 — eval 미실행 셀 (eval대기)
+  - llama2 / random_10        (epoch 4 sealed at 2026-05-16 18:00; eval 로그 없음)
+  - qwen25 / data_agent_10    (epoch 4 sealed at 2026-05-16 17:30; 직전 eval 5h 전 idle)
+  - mistral / tads_10         (epoch 4 sealed at 2026-05-16 16:15)
+  ...
+  ```
+  각 줄에는 ckpt sealed 시각과 (있다면) 직전 eval 활동 시각을 짧게 부기 — 사용자가 어느 셀부터 launch할지 우선순위 정할 때 참고.
 - 옛 포맷에서 추출한 점수도 그대로 `NN.NN%`로 표기하되, 발산 알람은 다음 tick 재평가로 DONE 전환될 때까지 회색(`(provisional)`)으로 표기.
 
 ### 0-5. Status Dashboard — **5×16 한눈 보기 표 (의무 출력)**
@@ -749,71 +803,50 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/
 
 ---
 
-## 4. Eval 실행 — **per-GPU per-experiment** (의무 형식)
+## 4. Eval 실행 — **사용자가 직접 실행, 에이전트는 모니터링만** (2026-05-16 정책 변경)
 
-**원칙**: 셀 1개(`<model>/<method>`) = GPU 1장 = 백그라운드 프로세스 1개.
-에이전트는 매 tick에서 `nvidia-smi`로 **사용 중이지 않은 GPU**를 발견하면 NEED-EVAL
-큐에서 한 셀을 골라 그 GPU에 곧바로 launch한다. 다음 tick에서 다시 빈 GPU를
-찾고 큐의 다음 셀을 또 launch — 큐가 빌 때까지 반복.
+**원칙**: 에이전트는 **eval을 자동으로 launch하지 않는다**. NEED-EVAL 셀이 발견되면 §0-4의 "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 명시적으로 보고하고, 사용자가 직접 launch할 때까지 그대로 둔다. 매 tick은 (1) 진행 중인 잡 상태 추적, (2) 새로 sealed된 결과 흡수, (3) eval대기 목록 갱신만 수행.
 
-### 4-1. 한 셀 launch — 정식 명령 형태
-
-bash 스크립트 wrapper(`run_eval_main_7b.sh`)는 더 이상 사용하지 않는다.
-**`python -m tads.eval`을 직접 호출**하고 `CUDA_VISIBLE_DEVICES`로 GPU를 핀한다.
+### 4-1. 사용자가 셀 한 개 eval할 때의 정식 명령 (참고용 — 에이전트가 직접 실행하지는 않음)
 
 ```bash
-CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval \
+# 단일 GPU, 단일 셀 — 한 번에 한 (model, method)에 5개 벤치 모두
+CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
     --config configs/experiments/main_7b/<model>/<method>.yaml \
     --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
     >> logs/eval_<model>_<method>.log 2>&1 &
 ```
 
-`--ckpt`는 **생략**한다 — `tads.eval`이 `<output_dir>/_latest`에서 마지막 sealed
-epoch을 자동 resolve하므로 (§3-1 참고). `--out_dir`도 생략하면 자동으로
-`<ckpt>/eval/` 옆에 결과가 떨어진다.
+요점:
+- `--ckpt` 생략 → `<output_dir>/_latest`에서 자동 resolve (§3-1).
+- `--out_dir` 명시 → 점수표 에이전트가 보는 표준 경로(`${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/`)로 결과가 떨어짐. 생략하면 기본값이 `<ckpt>/eval/`이라 점수표가 못 찾음.
+- `tads.eval`이 자동으로 `runs/<eval_tag>/` 생성 + `_complete` sentinel + `_latest` 갱신 (§5-1 history layout).
+- 학습 중인 GPU는 피할 것 (OOM).
 
-> **`CUDA_VISIBLE_DEVICES`는 1개 GPU만 지정**할 것. 2개 이상 주면 그 잡이 두 GPU를
-> 모두 점유해 다음 셀이 launch될 자리가 사라진다. `--cuda_device 0`은 잡 내부
-> 인덱스이므로 항상 0 (CUDA_VISIBLE_DEVICES로 이미 1개로 좁혀진 상태).
+### 4-2. 에이전트가 매 tick 할 일 — eval **모니터링** (실행 아님)
 
-### 4-2. 빈 GPU 찾기 — 결정 규칙
+매 tick 시작 시:
+1. §0-7 (b) log-tail polling으로 각 셀의 eval 로그 상태 확인.
+2. §5-4 표의 5가지 판정 신호로 셀별 상태 결정 (특히 `eval대기` vs `eval중` 구분 — `pgrep` + log mtime 5분 룰).
+3. 결과를 `experiments.md` §0-4 점수표 + §0-5 dashboard + §0-6 HISTORY.md에 atomic 반영.
+4. 새로 sealed된 eval(`_latest/_complete` 등장 + summary mtime > sealed epoch)은 즉시 `NN.NN%`로 전환.
+5. `eval대기` 셀은 §0-4 "사용자 액션 필요 — eval 미실행 셀" 섹션에 추가/유지.
+6. 학습 중인 GPU / 사용자가 launch해둔 eval 잡은 모두 그대로 둠. **kill / restart / dispatch 금지.**
 
-```bash
-# 사용 가능한 GPU 목록 (memory.used < 2 GB AND compute-process 없음 = 비어있음)
-nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits \
-  | awk -F', *' '$2 < 2000 {print $1}'
-```
+### 4-3. eval대기 vs eval중 — 매 tick 재판정 (캐싱 금지)
 
-추가 안전장치:
-1. **학습 중인 잡의 GPU는 절대 건드리지 말 것**:
-   ```bash
-   nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name --format=csv,noheader \
-     | grep -E 'python.*tads\.(train|eval)' || true
-   ```
-2. **우리 평가 잡 자체가 이미 그 GPU에 떠있는지** 체크:
-   ```bash
-   pgrep -af "python -m tads.eval.*<model>/<method>" >/dev/null && echo "already running"
-   ```
-3. 같은 셀이 이미 큐 안에 있으면 새로 enqueue 금지 (중복 lauch 방지).
+§5-4 표의 판정 신호를 그대로 사용. 핵심 5단계 우선순위:
 
-### 4-3. 한 tick의 알고리즘 (실행 순서)
+1. `pgrep -af "python -m tads.eval.*<model>/<method>\.yaml"` ≥ 1 → **`eval중`**.
+2. pgrep 0개 + eval 로그 mtime < 5분 → **`eval중`** (grep 사이 잠시 안 잡힌 케이스 대비).
+3. pgrep 0개 + 로그 mtime ≥ 5분 + 로그 마지막 50줄에 OOM/CUDA/Traceback **있음** → **`eval대기`** + `.fail_count` 증가 + HISTORY.md `[eval]` 오류 엔트리.
+4. pgrep 0개 + 로그 mtime ≥ 5분 + 오류 없음 + sealed `_complete` 있고 summary mtime > sealed epoch → **`NN.NN%`** (DONE).
+5. 위에 다 해당 안 되고 sealed_epoch < train_epochs면 → **`학습중`**, 그 외 학습 끝났는데 eval 결과 없음 → **`eval대기`**.
 
-```
-1. NEED-EVAL 큐 = §5-4의 classify_cell()로 결정 (DONE/LEGACY/NEED-TRAIN 제외)
-2. 빈 GPU 리스트 = nvidia-smi 기반 §4-2
-3. for gpu in 빈 GPU:
-       if NEED-EVAL 큐 비었으면 break
-       cell = NEED-EVAL 큐.pop_front()
-       if 그 cell이 이미 어떤 GPU에서 돌고 있으면 skip (다른 cell pop)
-       launch §4-1 명령으로 (CUDA_VISIBLE_DEVICES=gpu)
-       0.5 sec sleep (CUDA init race 회피)
-4. 큐가 남아있어도 빈 GPU 없으면 다음 tick까지 대기
-5. 매 tick 시작에서 끝난 잡(=프로세스 종료) 확인 → DONE/FAIL 분류 → 보고
-```
+이전 tick의 분류 값을 그대로 들고 오지 말 것 — 매 tick에서 위 5단계를 처음부터 다시 돌릴 것. 사용자가 tick 사이에 eval을 launch하면 1번에서 잡혀야 표가 정확해진다.
 
-이 알고리즘은 §9 cron tick 스크립트 안에 그대로 들어있다 (§9-3 참고).
-
-### 4-4. 필터 / 제한
+### 4-4. 필터 / 제한 (사용자 수동 실행 시 참고)
 
 ```bash
 # 한 셀만 강제 실행 (테스트용)
@@ -1095,64 +1128,67 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
              sync_score_board_now(model, method)         # 다음 tick 안 기다리고 표 갱신
          update_status_column(model, method, signals)     # §0-5/§0-6 (a)
 
-3. classify pass — NEED-EVAL 큐 만들기
+3. classify pass — 모든 80개 셀에 §5-4 표의 5종 어휘 부여
    for model in {llama2, qwen25, mistral, deepseek}:
      for method in {full_100, random_10, data_agent_10, tads_10}:
          ckpt_root = ${OUTPUT_ROOT}/main_7b/${model}/${method}
-         latest_run = resolve_latest_run(ckpt_root)         # §4-2의 함수
-         if not latest_run: continue                        # NEED-TRAIN
-         latest = largest_sealed_epoch(latest_run)          # _complete 있는 max N
-         if not latest: continue
          eval_base = ${EVAL_RESULTS_ROOT}/${model}/${method}
-         # eval 측 _latest 안의 sealed run + summary 검사 (§5-3의 3-조건)
-         eval_latest = resolve_latest_run(eval_base)        # 같은 helper 재사용
-         label = "${model}_${method}"
-         if eval_latest \
-            AND exists(${eval_latest}/_complete) \
-            AND exists(${eval_latest}/${label}-eval_summary.json) \
-            AND mtime(${eval_latest}/${label}-eval_summary.json) > mtime(latest):
-             continue                                       # DONE — skip
-         # 같은 (model, method)가 이미 어디 GPU에서 돌고 있으면 skip
-         if pgrep -af "python -m tads.eval.*${model}/${method}\.yaml" > /dev/null: continue
-         queue.append((model, method))
+         label     = "${model}_${method}"
+         sig       = signals[(model, method)]   # 2.5 polling 결과
 
-4. dispatch pass — 빈 GPU만큼 launch
-   free_gpus = nvidia-smi 기반, memory.used < 2GB AND tads.train 프로세스 없음
-   while queue and free_gpus:
-     gpu  = free_gpus.pop()
-     cell = queue.pop(0)
-     launch:
-       CUDA_VISIBLE_DEVICES=${gpu} nohup python -m tads.eval \
-         --config configs/experiments/main_7b/${cell.model}/${cell.method}.yaml \
-         --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
-         --out_dir ${EVAL_RESULTS_ROOT}/${cell.model}/${cell.method} \
-         >> logs/eval_${cell.model}_${cell.method}.log 2>&1 &
-     log "launched ${cell} on GPU ${gpu} (pid=$!)"
-     sleep 0.5   # CUDA init race buffer
+         # 1) ckpt 측 결정
+         latest_run = resolve_latest_run(ckpt_root)
+         if not latest_run:
+             status[(model, method)] = "학습전"
+             continue
+         latest_epoch = largest_sealed_epoch(latest_run)
+         train_alive  = pgrep_alive(f"python.*tads.train.*{model}/{method}\\.yaml")
+         cfg          = json.load(latest_run + "/cfg.json")
+         target_epochs = int(cfg.get("train_epochs", 3))
+         sealed_count  = count(latest_run + "/epoch_*/_complete")
+         if train_alive or sealed_count < target_epochs:
+             status[(model, method)] = "학습중"
+             continue
 
-   # --out_dir 명시 이유: 기본값은 <ckpt>/eval/ (OUTPUT_ROOT 아래)인데, 점수 표
-   # 에이전트는 EVAL_RESULTS_ROOT/<model>/<method>/_latest/ 만 본다. 두 경로를
-   # 일치시키지 않으면 eval은 돌지만 표는 NEED-EVAL로 남는다.
-   # eval.py가 자동으로 ${out_dir}/runs/<eval_tag>/에 결과를 떨구고 _latest를
-   # atomic 갱신한다. eval_tag는 호출 시각의 YYYYMMDD_HHMMSS.
+         # 2) eval 측 결정 — §5-4 표의 5단계 우선순위 + log 기반
+         eval_alive   = pgrep_alive(f"python.*tads.eval.*{model}/{method}\\.yaml")
+         eval_latest  = resolve_latest_run(eval_base)
+         summary      = eval_latest + f"/{label}-eval_summary.json" if eval_latest else None
+         sentinel_ok  = eval_latest and exists(eval_latest + "/_complete")
 
-5. monitor pass — 끝난 잡 회수 (sentinel은 eval.py가 자체 작성)
-   for proc in 우리가 launch한 프로세스들 (pidfile / pgrep로 추적):
-     if exited 0:
-        # eval.py가 ${eval_base}/runs/<eval_tag>/_complete를 이미 atomic으로
-        # 작성하고 _latest를 거기로 갱신했음. 에이전트가 별도 touch 필요 없음.
-        log "done: ${cell.model}/${cell.method}"
-     if exited !=0:
-        log 끝 30줄 캡처 → 보고
-        ${eval_base}/.fail_count 증가 (§10-3)
+         if eval_alive or sig.eval_log_mtime_age < 300:    # 5분
+             status[(model, method)] = "eval중"
+             continue
+         if sentinel_ok and exists(summary) and mtime(summary) > mtime(latest_epoch):
+             status[(model, method)] = f"{parse_score(summary):.2f}%"     # DONE
+             continue
+         if sig.recent_oom_or_traceback:
+             append_history_md(model, method, "[eval] failure", sig)
+             increment_fail_count(eval_base)
+             status[(model, method)] = "eval대기"
+             continue
+         status[(model, method)] = "eval대기"
 
-6. 큐가 비지 않았으면 다음 tick에서 4번 부터 재시도 (epoch당 한 번 dispatch가 정상)
+4. report pass — experiments.md + dashboard + 사용자 액션 섹션 atomic 갱신
+   #  학습/eval auto-launch 없음 (§0 정책).
+   - §0-4 (1)-(6) 표 + §0-5 dashboard 코드 펜스 안만 atomic 교체
+   - §0-4 (6) 80-cell 표에 `-`가 단 하나도 남지 않도록 dash-self-check 수행
+     (§0-4 셀프 체크 bash). 통과 못 하면 그 tick의 출력은 사용자에게
+     보고하지 않고 분류를 재돌릴 것.
+   - 학습전 / eval대기 셀이 1개 이상이면 experiments.md 상단에 "사용자 액션
+     필요" 섹션 2개(학습 미실행, eval 미실행) 갱신.
+   - 채팅 보고: 변경된 행만 1줄 요약(§0-7 (e) 형식). raw 표 dump 금지.
+
+5. 종료. 다음 cron tick에서 1번부터 다시 시작.
+   에이전트는 자기 자신을 무한 루프로 띄우지 말 것 — cron이 idempotent하게
+   호출.
 ```
 
 ---
 
 ## 8. 금지 사항 / 함정
 
+- **eval / 학습을 자동 launch하지 말 것** (§0 정책). NEED-EVAL 셀은 `experiments.md` 상단 "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 보고만 하고 사용자가 직접 launch할 때까지 그대로 둔다. `nohup python -m tads.eval ...`, `torchrun`, `run_main_7b.sh`, `run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh` 호출 일체 금지.
 - **HF offline 모드를 끄지 말 것**. `setup_env.sh`가 `HF_DATASETS_OFFLINE=1` 등을 강제하는 이유는 클러스터 노드가 outbound HTTPS가 없어서 켜면 캐시락이 깨지기 때문.
 - **체크포인트를 절대 자동 삭제하지 말 것**. legacy 스크립트의 `CLEANUP_EARLY_EPOCHS` 옵션은 **opt-in이고 기본값 0**. 에이전트는 건드리지 말 것.
 - **`OUTPUT_ROOT`와 `EVAL_RESULTS_ROOT`를 혼동하지 말 것**. checkpoint는 `OUTPUT_ROOT/main_7b/...`, 결과는 `EVAL_RESULTS_ROOT/<model>/<method>` (접두어 없음).
@@ -1372,40 +1408,24 @@ if [ ${#free_gpus[@]} -eq 0 ]; then
   echo "[tick $(date -Is)] no free GPU — ${#need[@]} cells stay queued for next tick"
   exit 0
 fi
-echo "[tick $(date -Is)] free GPUs: ${free_gpus[*]}  |  queue: ${need[*]}"
+echo "[tick $(date -Is)] free GPUs (참고용): ${free_gpus[*]}  |  eval대기 큐: ${need[*]}"
 
-# Dispatch pass: 빈 GPU 1장에 셀 1개를 nohup 백그라운드로 launch.
-# bash wrapper(run_eval_main_7b.sh)는 의도적으로 사용하지 않음 — 한 번에 여러 셀을
-# 병렬 dispatch하려면 wrapper가 가진 sequential vs --parallel 모드와 우리 큐
-# 알고리즘이 충돌. 그냥 `python -m tads.eval`을 직접 부르는 게 가장 단순.
-launched_pids=()
-for gpu in "${free_gpus[@]}"; do
-  [ ${#need[@]} -eq 0 ] && break
-  cell="${need[0]}"; need=("${need[@]:1}")
-  model="${cell%/*}"; method="${cell#*/}"
-  cfg="configs/experiments/main_7b/${model}/${method}.yaml"
-  log="${LOG_DIR}/eval_${model}_${method}.log"
-  echo "[tick $(date -Is)] dispatch ${cell} -> GPU ${gpu}" | tee -a "$log"
-  CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tads.eval \
-      --config "$cfg" \
-      --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
-      --out_dir "${EVAL_RESULTS_ROOT}/${model}/${method}" \
-      >> "$log" 2>&1 &
-  launched_pids+=("$!:${cell}")
-  sleep 0.5
+# **DO NOT LAUNCH** — 2026-05-16 정책 변경 (§0). 에이전트는 eval을 자동
+# 실행하지 않는다. 사용자가 직접 launch할 셀 목록을 experiments.md 상단
+# "사용자 액션 필요 — eval 미실행 셀 (eval대기)" 섹션에 출력하는 것까지만
+# 한다. 아래 dispatch pass는 의도적으로 비워둠 — 향후 정책이 다시 바뀌어
+# auto-launch가 필요해지면 이 자리에 복원.
+launched_pids=()    # 항상 비어있음 — 호환성 위해 변수만 유지
+
+echo "[tick $(date -Is)] eval대기 ${#need[@]} cells — 사용자 수동 launch 대기:"
+for cell in "${need[@]}"; do
+  echo "  - $cell"
 done
 
-# 이 tick에서 launch만 하고 종료 — 잡들은 백그라운드에서 계속 돈다.
-# 다음 tick에서 (a) 끝난 잡은 ${eval_base}/runs/<eval_tag>/_complete를 eval.py가
-# atomic으로 작성하고 _latest를 거기로 갱신해 둘 것, (b) §5-3의 3-조건이 만족돼
-# DONE 분류되어 큐가 자동으로 줄어든다. 별도 .eval_done 같은 외부 마커는 만들지 말 것.
-echo "[tick $(date -Is)] launched: ${launched_pids[*]}"
-
-# OPTIONAL: 직전 tick에서 launch했던 잡의 종료 회수 — exit code 0이면 그냥 두면
-# 되고(eval.py가 sentinel과 _latest까지 다 처리함), 0이 아니면 .fail_count 증가.
-# 이걸 모니터링하려면 tick 자체가 길게 살아야 해서 cron 모델과 안 맞음 — 권장은
-# launch만 하고 다음 tick에 결과 확인하는 것. eval.py의 _latest/_complete가
-# 충분한 sentinel이라 별도 .eval_done은 필요 없다.
+# 직전 tick에 사용자가 띄운 eval 잡들의 종료 회수: 별도 pidfile 관리 없이
+# §5-4 표 5단계로 매 tick 재판정해서 표 갱신한다. eval.py가 sentinel +
+# _latest를 자체 처리하므로 외부 마커 작성 불필요. exit !=0인 잡은 다음
+# 분류 pass에서 로그 tail에 OOM/Traceback이 잡혀 .fail_count 증가 (§10-3).
 ```
 
 ### 9-4. cron 디버깅 체크리스트
