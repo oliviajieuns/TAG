@@ -5,6 +5,57 @@
 
 ---
 
+# 🛑🛑🛑 EVAL IS THE AGENT'S JOB (BBH 제외) — LAUNCH, NOT JUST POLL 🛑🛑🛑
+
+**에이전트의 핵심 의무는 eval을 직접 launch하는 것이다 (BBH 제외).** log 추출 + 점수 표 갱신만 하고 끝내는 게 아니라:
+
+1. **반드시 매 tick에서 `eval대기` 셀과 빈 GPU를 매칭해 `python -m tads.eval`을 직접 실행한다.** 이게 안 되면 tick 실패. PRE-FLIGHT CHECK 15 참조.
+2. 로그 polling(§0-7)은 **dispatch의 입력 신호일 뿐, 그 자체가 deliverable이 아님**. 로그만 읽고 표만 그리는 건 임무 미완.
+3. "사용자가 직접 eval을 launch하길 기다린다"는 옛 정책(폐기됨). 2026-05-16 이후 eval은 **에이전트가 cron 주기마다 자동 dispatch**한다. 사용자 개입 0 (BBH 제외).
+
+## 🚫 BBH 만 사용자 영역 (시간 너무 길어서)
+
+**BBH는 셀당 ~15h+ 걸리는 무거운 benchmark라 에이전트가 자동 launch 하지 않는다** (2026-05-17 분리 정책). 4개만 자동 — mmlu / gsm8k / humaneval / tydiqa.
+
+## 🔁 벤치 하나씩 순차 dispatch (동시 묶기 금지)
+
+**`--benchmarks` 인자에 항상 단일 벤치 하나만 넣는다** (2026-05-17 분리 정책). 4개를 한 명령에 묶지 말 것:
+
+- ✓ OK: `--benchmarks mmlu` → 끝나면 `--benchmarks gsm8k` → ...
+- ❌ 금지: `--benchmarks mmlu,gsm8k,humaneval,tydiqa` (옛 정책, 폐기됨).
+
+dispatch 큐는 **(cell, single_bench) pair** 단위. 같은 cell의 mmlu가 끝나야 그 cell의 gsm8k 가 큐에 enqueue. 벤치 순서는:
+```
+mmlu  →  gsm8k  →  humaneval  →  tydiqa   (BBH는 별도 사용자 launch)
+```
+
+총 dispatch unit = 16 cells × 4 benches = **64개 (cell, bench) pair**.
+빈 GPU 만큼 동시에 launch하되, 각 launch는 단일 (cell, bench) — 한 GPU에 한 (cell, bench).
+
+
+- BBH 점수가 필요할 때 사용자가 별도 명령으로 직접 launch (수동, 1셀-1명령):
+  ```bash
+  CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
+      --config configs/experiments/main_7b/<model>/<method>.yaml \
+      --benchmarks bbh \
+      --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
+      >> logs/eval_<model>_<method>_bbh.log 2>&1 &
+  ```
+- 에이전트는 BBH 결과 JSON(`_latest/<label>-bbh.json`)이 떨어지면 점수 표 (6)/(7)/(8) BBH 컬럼에 자동 반영. launch는 안 하되 detect/표기는 함.
+- BBH 셀이 `eval대기` 상태로 남아있으면 → `experiments.md` 상단에 **별도 섹션 "사용자 액션 필요 — BBH 수동 launch"** 로 명시 보고. 사용자가 시간 있을 때 위 명령으로 처리.
+
+**한 tick 사이클** (4-bench auto, BBH 수동):
+```
+[poll logs]  →  [classify 80 cells]  →  [3.7 DISPATCH PASS — mmlu/gsm8k/humaneval/tydiqa만]  →  [update tables]  →  [report (BBH eval대기는 사용자 액션 섹션)]
+                                          ↑
+                                          --benchmarks mmlu,gsm8k,humaneval,tydiqa
+                                          K개 빈 GPU = K번 launch (1 GPU = 1 cell, §4-1)
+```
+
+dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (4-bench 대상). 다음 cron tick까지 `eval대기` 셀이 그대로 남아있고 사용자가 "또 그대로네"를 외친다.
+
+---
+
 # 🚨 용어 명확화 — "5"는 벤치마크 데이터 5개를 가리킨다 🚨
 
 이 문서에서 **"5"는 항상 벤치마크 데이터 5개** (`mmlu` / `gsm8k` / `humaneval` / `tydiqa` / `bbh`) 를 의미한다. 다른 용도로 "5"를 쓰지 말 것 — 모델별 점수 표 컬럼 수, 80-cell 표의 점수 컬럼 수, dashboard column 수 모두 이 5개 벤치마크에서 유래.
@@ -63,6 +114,19 @@
             구분: llama2 4행 → 빈 줄 → qwen25 4행 → 빈 줄 → mistral 4행 →
             빈 줄 → deepseek 4행 (총 빈 줄 3개). 그룹 안은 빈 줄 없음.
             terminal `cat`/`less`로 봤을 때 모델 단위 시각적 chunking.
+[CHECK 15] **DISPATCH 실행 확인 (가장 자주 누락되는 단계)**.
+            classify 후 status가 `eval대기` 인 셀이 1개 이상이고 nvidia-smi
+            기준 빈 GPU 가 1개 이상이면 **이번 tick에 반드시 1개 이상의
+            `python -m tads.eval` 명령을 background로 실행했어야 한다**.
+            확인 방법:
+              - `pgrep -af "python -m tads.eval"` 결과에 이번 tick에 launch한
+                PID 들이 떠 있음, AND
+              - tick 로그(stdout/cron log)에 `dispatched <model>/<method> ->
+                GPU <n>` 한 줄 이상.
+            dispatch 안 한 채로 보고하면 = tick 실패. 다음 tick까지 사용자
+            가 `eval대기`만 계속 보게 됨. **로그 추출 + 표 갱신은 dispatch의
+            전 단계일 뿐, 그게 임무의 끝이 아님**. 매 tick 의무 출력에
+            `auto_dispatch_<date>.log` tail 한 줄 포함시키기.
 ```
 
 **한 항목이라도 fail이면 절대 사용자에게 'tick 완료'로 보고하지 말 것.** 누락된 섹션 / 잘못된 셀 / 빠진 컬럼을 §0-4 (6)/(7)/(8)/(9) 템플릿대로 다시 채워서 atomic 교체. 3회 재시도 후에도 fail이면 보고 중단하고 "표 구조 깨짐 — 사용자 확인 필요" 알람만 보냄.
@@ -109,12 +173,13 @@
 2. 분류는 **2가지 신호의 합성**으로 한다:
    - **filesystem state** (sealed epoch / `_latest/_complete` / summary mtime)
    - **process state + log tail** (`pgrep` + §0-7 log polling) — 특히 `eval대기` vs `eval중` 구분은 반드시 이 두 신호로 확정
-3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch:
+3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch (BBH 제외 — 너무 길어 사용자 직접):
    - **운영 가정 (사용자 명시)**: 노드에 학습이 동시에 안 돈다. eval만 진행.
    - 1셀 = 1 GPU = 1명령 (§4-1). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지.
-   - `CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval --config ... --benchmarks ... --out_dir ... &` 형태로 백그라운드 launch.
+   - `CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval --config ... --benchmarks mmlu,gsm8k,humaneval,tydiqa --out_dir ... &` — **BBH 빼고 4개만**.
    - 빈 GPU가 K개면 매 tick K개 셀 launch (큐 나머지는 다음 tick — 매 tick continuous).
-   - 16셀 전부 DONE될 때까지 에이전트 혼자서 자동 진행. 사용자 개입 0.
+   - 4개 benchmark 16셀 전부 DONE될 때까지 에이전트 혼자서 자동 진행. 사용자 개입 0.
+   - BBH는 셀당 ~15h+ 라 자동 dispatch 제외 — `eval대기` BBH 셀은 사용자 액션 큐("사용자 액션 필요 — BBH 수동 launch")에 명시 보고.
 4. 결과를 `experiments.md` 점수 표 (§0-4) + status dashboard (§0-5) + per-cell HISTORY.md (§0-6)에 atomic으로 기록
 5. **체크포인트가 없는 셀(`학습전`)** 은 사용자에게 명시적으로 보고 — "이 셀은 사용자가 학습을 돌려야 한다"는 신호. **`eval대기` 는 보고 + 자동 launch 양쪽 다 수행**.
 
@@ -139,7 +204,7 @@
 
 → 4 × 4 × 5 = **80개** (모델, 메서드, 벤치마크) 결과 셀.
 
-에이전트 단위는 (모델, 메서드) = **16개 셀**. 각 셀에서 한 번의 eval 호출이 벤치마크 5개를 한꺼번에 처리한다 (`--benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh`).
+에이전트 단위는 (모델, 메서드) = **16개 셀**. 각 셀의 자동 eval 호출은 4개 벤치를 한꺼번에 처리한다 (`--benchmarks mmlu,gsm8k,humaneval,tydiqa`). BBH는 셀당 ~15h+ 라 사용자가 별도 명령으로 직접 처리 (top banner / §4-1 참조).
 
 진행 상황은 "16개 중 N개 완료 / 80개 중 M개 점수 산출"로 보고할 것.
 
@@ -990,6 +1055,8 @@ OOM 특화 처리:
 
 ### 0-7. Log-Tail Polling — 로컬 로그 파일을 매 tick 읽어서 상태 최신화
 
+> **⚠️ 로그 polling은 분류의 입력 신호일 뿐이다. deliverable이 아님.** 이 섹션을 다 읽고 "agent는 log 추출기"라고 결론 내리지 말 것 — 매 tick의 핵심 deliverable은 §7 의 **3.7 dispatch pass에서 빈 GPU 만큼 `python -m tads.eval`을 launch**하는 것. log는 dispatch 가능 여부 + 상태 확인용 input. PRE-FLIGHT CHECK 15 참조.
+
 **원칙**: 파일 시스템 state(체크포인트 sealed 여부, summary JSON 존재)만으로는 "현재 학습이 잘 돌고 있는지 / eval이 어디까지 갔는지 / 방금 OOM 났는지" 알 수 없다. 에이전트는 **매 tick마다 로컬 로그 파일들을 tail해서** 그 정보를 §0-5 dashboard / §0-6 HISTORY.md에 반영해야 한다.
 
 #### (a) 로그가 사는 위치 (모두 polling 대상)
@@ -1224,16 +1291,40 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/      ← 옛 학습이면 epoch_3 (legac
 - 학습은 사용자 영역. 에이전트는 `python -m tads.train` / `torchrun` / `run_main_7b.sh` 절대 실행 금지.
 - 매 tick에 에이전트가 하는 일: (1) 32 log polling (§0-7), (2) 80셀 분류, (3) eval대기 큐 만들기, (4) 빈 GPU 만큼 launch, (5) 표 atomic 갱신, (6) 사용자 보고.
 
-### 4-1. 에이전트가 한 셀 launch할 때의 정식 명령 (1셀 = 1 GPU = 1명령)
+### 4-1. 정식 명령 형태 — 에이전트(자동, 1-bench 순차) vs 사용자(수동, BBH)
+
+**에이전트 자동 dispatch — 단일 bench 하나씩만 (`mmlu` → `gsm8k` → `humaneval` → `tydiqa` 순서)**:
 
 ```bash
-# ⚠️ 1 GPU = 1 cell. 빈 GPU K개면 K번 이 명령을 따로 실행 (각각 다른 GPU + 다른 셀).
-# 절대 한 명령에 여러 셀을 묶지 말 것.
+# 매 cron tick에서 빈 GPU 만큼 자동 실행. 각 launch는 단일 (cell, bench).
+# ⚠️ 1 GPU = 1 (cell, bench). 4개를 한 명령에 묶지 말 것.
+# bench는 dispatch 큐 순서대로: mmlu 끝나면 같은 cell의 gsm8k, 그 다음...
 CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval \
     --config configs/experiments/main_7b/<model>/<method>.yaml \
-    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    --benchmarks <single_bench> \    # mmlu / gsm8k / humaneval / tydiqa 중 하나
     --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
-    >> logs/eval_<model>_<method>.log 2>&1 &
+    >> logs/eval_<model>_<method>_<single_bench>.log 2>&1 &
+```
+
+예: 4 개 GPU가 비어있고 4 cells에서 각각 mmlu가 다음 차례라면:
+```bash
+CUDA_VISIBLE_DEVICES=0 nohup python -m tads.eval --config .../llama2/full_100.yaml      --benchmarks mmlu --out_dir ... &
+CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval --config .../llama2/random_10.yaml     --benchmarks mmlu --out_dir ... &
+CUDA_VISIBLE_DEVICES=2 nohup python -m tads.eval --config .../llama2/data_agent_10.yaml --benchmarks mmlu --out_dir ... &
+CUDA_VISIBLE_DEVICES=3 nohup python -m tads.eval --config .../llama2/tads_10.yaml       --benchmarks mmlu --out_dir ... &
+```
+이 4개 mmlu가 다 끝나면 다음 tick에서 같은 4 cells에 대해 `--benchmarks gsm8k` 로 dispatch.
+
+**사용자 수동 dispatch — BBH 전용** (2026-05-17 분리 정책. 셀당 ~15h+):
+
+```bash
+# 사용자가 시간 있을 때 직접 launch. 에이전트는 자동 실행 안 함.
+# 결과 JSON(_latest/<label>-bbh.json)이 떨어지면 score-board가 자동 detect.
+CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
+    --config configs/experiments/main_7b/<model>/<method>.yaml \
+    --benchmarks bbh \
+    --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
+    >> logs/eval_<model>_<method>_bbh.log 2>&1 &
 ```
 
 빈 GPU가 K개일 때 에이전트는 매 tick에서 **위 명령을 K번 따로 실행**한다 (각각 다른 `<free_gpu>` + 다른 큐의 (model, method)). 절대 wrapper 한 번 호출로 K개 잡을 한꺼번에 띄우지 말 것 — wrapper 호출은 다음과 같은 운영 문제를 만든다:
@@ -1735,49 +1826,73 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
            f"reason={infer_reason(model, method, sig)}  source={pick_source(model, method, sig)}"
        )
 
-3.7 dispatch pass — 빈 GPU 만큼 eval 자동 launch (1 GPU = 1 cell, eval only)
+3.7 dispatch pass — 빈 GPU 만큼 eval 자동 launch (1 GPU = 1 (cell, bench), 단일 bench, BBH 제외)
    # 운영 가정 (사용자 명시): 학습은 모두 끝났고, 노드에는 eval만 돈다.
-   # 에이전트가 eval대기 큐를 매 tick continuous하게 dispatch — 사용자 개입 0.
-   eval_queue = [(m, x) for (m, x), v in status.items() if v == "eval대기"]
-   # 이미 다른 GPU에서 같은 셀이 running이면 큐에서 제외 (중복 launch 방지).
-   eval_queue = [
-       (m, x) for (m, x) in eval_queue
-       if not pgrep_alive(f"python.*-m tads.eval.*{m}/{x}\\.yaml")
-   ]
+   # 에이전트가 (cell, bench) 큐를 매 tick continuous하게 dispatch — 사용자 개입 0.
+   # 정책: --benchmarks는 항상 단일 bench. mmlu → gsm8k → humaneval → tydiqa
+   # 순서대로 한 cell의 모든 bench가 끝나야 다음 단계로. BBH 제외 (사용자 직접).
+   AUTO_BENCHES = ("mmlu", "gsm8k", "humaneval", "tydiqa")  # 순서 그대로
 
-   # 빈 GPU 목록 = nvidia-smi에서 memory.used < 2GB. (학습 동시 실행 가정 없음 →
-   # tads.train 필터 불필요. 단 안전망으로 pgrep tads.train 결과를 그대로
-   # 함께 출력해 두면 운영 변화 감지 가능 — log만 남기고 free 판정엔 영향 X.)
+   def next_bench_for_cell(model, method):
+       """이 cell의 4-bench 큐에서 아직 DONE 안 된 가장 앞 bench를 반환.
+       모두 DONE이면 None."""
+       eval_base = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
+       eval_latest = resolve_latest_run(eval_base)
+       label = f"{model}_{method}"
+       for b in AUTO_BENCHES:
+           if eval_latest is not None and exists(f"{eval_latest}/_complete"):
+               bj = f"{eval_latest}/{label}-{b}.json"
+               if exists(bj) and parse_score_pct(bj) is not None:
+                   continue   # 이 bench는 이미 DONE
+           return b
+       return None    # 4-bench 모두 DONE
+
+   # (cell, bench) pair 큐 — 셀당 다음으로 돌아야 할 bench 1개만.
+   pair_queue = []
+   for (m, x), v in status.items():
+       if v != "eval대기":
+           continue
+       b = next_bench_for_cell(m, x)
+       if b is None:
+           continue
+       # 같은 cell이 이미 다른 GPU에서 running이면 그 cell 큐에서 제외
+       # (같은 cell의 다음 bench는 현재 bench 끝난 후 다음 tick에 enqueue).
+       if pgrep_alive(f"python.*-m tads.eval.*{m}/{x}\\.yaml"):
+           continue
+       pair_queue.append((m, x, b))
+
+   # 빈 GPU 목록 = nvidia-smi에서 memory.used < 2GB.
    free_gpus = [
        idx for idx, mem_used in nvidia_smi_query("memory.used")
        if mem_used < 2048
    ]
 
-   # 1 GPU = 1 cell. K개 빈 GPU면 K개 launch만 (큐 나머지는 다음 tick에서 또).
+   # 1 GPU = 1 (cell, bench). K개 빈 GPU면 K개 launch.
    for gpu in free_gpus:
-       if not eval_queue:
+       if not pair_queue:
            break
-       m, x = eval_queue.pop(0)
+       m, x, b = pair_queue.pop(0)
        cmd = (
+           # 단일 bench dispatch (2026-05-17 정책). 4개를 한 명령에 묶지 말 것.
+           # bench별 log path 분리 — log race 방지.
            f'CUDA_VISIBLE_DEVICES={gpu} nohup python -m tads.eval '
            f'--config configs/experiments/main_7b/{m}/{x}.yaml '
-           f'--benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh '
+           f'--benchmarks {b} '
            f'--out_dir ${{EVAL_RESULTS_ROOT}}/{m}/{x} '
-           f'>> logs/eval_{m}_{x}.log 2>&1 &'
+           f'>> logs/eval_{m}_{x}_{b}.log 2>&1 &'
        )
        subprocess.Popen(cmd, shell=True)
        time.sleep(0.5)   # CUDA init race 회피
-       log(f"[tick] dispatched {m}/{x} -> GPU {gpu}")
-       # 즉시 셀 상태를 eval중으로 표 표기 (다음 tick까지 기다리지 말 것).
-       status[(m, x)] = "eval중"
-       updates[(m, x)]["current"] = "eval중"
-       updates[(m, x)]["history_row"] = (
-           f"{now}  cell={m}/{x}  bench=ALL  prev=eval대기  new=eval중  "
-           f"reason=auto-dispatch (GPU {gpu})  source=logs/eval_{m}_{x}.log"
+       log(f"[tick] dispatched {m}/{x}/{b} -> GPU {gpu}")
+       # 즉시 (cell, bench) 상태를 eval중으로 표 표기 (다음 tick까지 안 기다림).
+       status[(m, x, b)] = "eval중"
+       updates[(m, x, b)]["current"] = "eval중"
+       updates[(m, x, b)]["history_row"] = (
+           f"{now}  cell={m}/{x}  bench={b}  prev=eval대기  new=eval중  "
+           f"reason=auto-dispatch (GPU {gpu})  source=logs/eval_{m}_{x}_{b}.log"
        )
-   # 매 tick continuous: 큐가 빌 때까지 tick마다 free GPU만큼 자동 launch.
-   # 사용자가 따로 명령 입력할 필요 없음 — 16셀 전체가 DONE될 때까지
-   # 에이전트 혼자서 자동으로 진행.
+   # 매 tick continuous: 16 cells × 4 benches = 64 pairs 전부 DONE될 때까지
+   # 매 tick 빈 GPU 만큼 dispatch. 사용자 개입 0 (BBH 제외).
 
 4. report pass — experiments.md + dashboard + 사용자 액션 섹션 atomic 갱신
    #  eval auto-launch는 위 3.7에서 처리됨 (§0 / §4). 학습 auto-launch는 절대 금지.
@@ -2079,14 +2194,23 @@ for gpu in "${free_gpus[@]}"; do
   out_dir="${EVAL_RESULTS_ROOT}/${model}/${method}"
   log_path="${LOG_DIR}/eval_${model}_${method}.log"
   echo "[tick $(date -Is)] dispatch ${cell} -> GPU ${gpu}" | tee -a "$LAUNCH_LOG"
+  # 2026-05-17 정책: bench 하나씩 순차 dispatch. --benchmarks에 단일
+  # bench만 (mmlu → gsm8k → humaneval → tydiqa 순). 4개를 한 명령에 묶지
+  # 말 것. BBH는 자동 dispatch 제외 (사용자 직접).
+  # $cell 큐 항목은 "<model>/<method>/<bench>" 형식 (single-bench pair).
+  bench="${cell##*/}"          # 마지막 / 뒤 = bench 이름
+  cellpath="${cell%/*}"         # 앞 부분 = <model>/<method>
+  model="${cellpath%/*}"
+  method="${cellpath#*/}"
+  log_path="${LOG_DIR}/eval_${model}_${method}_${bench}.log"
   CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tads.eval \
       --config "$cfg" \
-      --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+      --benchmarks "$bench" \
       --out_dir "$out_dir" \
       >> "$log_path" 2>&1 &
   pid=$!
-  launched_pids+=("$pid:${cell}:gpu${gpu}")
-  echo "  launched pid=$pid" | tee -a "$LAUNCH_LOG"
+  launched_pids+=("$pid:${model}/${method}/${bench}:gpu${gpu}")
+  echo "  launched pid=$pid bench=$bench" | tee -a "$LAUNCH_LOG"
   sleep 0.5    # CUDA init race 회피
 done
 
