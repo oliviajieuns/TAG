@@ -10,9 +10,19 @@ sentencepiece
 # 8-bit AdamW (needed for full FT 7B on A100 80GB without OOM)
 bitsandbytes>=0.43
 
+# Cross-process serialisation for the Alpaca dataset-build phase
+# (tads/data/alpaca.py). HF `datasets` pulls filelock as a transitive dep
+# already, but we declare it explicitly so a partial install can't strand
+# concurrent training jobs in the silent-no-lock fallback path.
+filelock>=3.12
+
 # Optional eval extras
 lm-eval>=0.4
 pandas
+# pyarrow is the engine pandas.read_parquet uses — every parquet-backed
+# eval (mmlu, mmlu_pro, gsm8k, svamp, mbpp, tydiqa) fails without it.
+# `pip install pandas` does NOT pull this transitively.
+pyarrow>=14.0
 # HumanEval scoring — `evaluate_functional_correctness` lives in this package.
 # tads/evals/humaneval.py imports it lazily and raises a clear RuntimeError
 # if missing, so the rest of the eval suite still runs without it. Pin name

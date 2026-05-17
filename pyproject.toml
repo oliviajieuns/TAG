@@ -19,12 +19,18 @@ dependencies = [
     "tqdm>=4.66",
     "sentencepiece",
     "bitsandbytes>=0.43",
+    # Cross-process serialisation for concurrent training jobs sharing
+    # the Alpaca dataset cache (tads/data/alpaca.py).
+    "filelock>=3.12",
 ]
 
 [project.optional-dependencies]
 eval = [
     "lm-eval>=0.4",
     "pandas",
+    # pyarrow is the engine pandas.read_parquet uses — every parquet-backed
+    # eval (mmlu, mmlu_pro, gsm8k, svamp, mbpp, tydiqa) fails without it.
+    "pyarrow>=14.0",
     # HumanEval functional-correctness scorer. Imported lazily by
     # tads.evals.humaneval; missing-import is caught and surfaces a clear
     # RuntimeError so the other 8 benches still run.
