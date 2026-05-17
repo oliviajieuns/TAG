@@ -2757,6 +2757,156 @@ bash scripts/download_xquad.sh      # → $XQUAD_DATA_DIR
 - 진입 connectivity probe → 외부 망 차단 시 즉시 fail with 수동 명령 가이드.
 - 이미 존재하면 skip (idempotent).
 
+### 14-2.5. 수동 다운로드 — URL 직접 명세 (cluster 외부 망 불가 시)
+
+cluster 노드에 outbound HTTPS 가 없거나, login 노드에서 받아 scp 로 옮겨야 하는 경우. 아래 표의 URL 을 그대로 curl / wget 하고 우측 target path 에 저장.
+
+**경로 결정 우선순위**:
+1. `$MMLU_PRO_DATA_DIR` / `$SVAMP_DATA_DIR` / `$MBPP_DATA_DIR` / `$XQUAD_DATA_DIR` 가 export 돼 있으면 그 값.
+2. 안 돼 있으면 `setup_env.sh` 기본값 `/group-volume/IT-datasets/<bench>/`.
+3. 학습 / eval 시 cluster 외부 위치라면 `configs/base.yaml` 의 키를 직접 덮어쓰거나 `--<bench>_data_dir /your/path` CLI 로 호출.
+
+#### MMLU-Pro (2 파일, ~10 MB)
+
+| URL | target |
+|---|---|
+| https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro/resolve/main/data/test-00000-of-00001.parquet | `$MMLU_PRO_DATA_DIR/test-00000-of-00001.parquet` |
+| https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro/resolve/main/data/validation-00000-of-00001.parquet | `$MMLU_PRO_DATA_DIR/validation-00000-of-00001.parquet` |
+
+```bash
+mkdir -p "$MMLU_PRO_DATA_DIR"
+cd "$MMLU_PRO_DATA_DIR"
+curl -fLO https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro/resolve/main/data/test-00000-of-00001.parquet
+curl -fLO https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro/resolve/main/data/validation-00000-of-00001.parquet
+```
+
+#### SVAMP (1 파일, ~200 KB)
+
+| URL | target |
+|---|---|
+| https://huggingface.co/datasets/ChilleD/SVAMP/resolve/main/data/test-00000-of-00001.parquet | `$SVAMP_DATA_DIR/test-00000-of-00001.parquet` |
+
+```bash
+mkdir -p "$SVAMP_DATA_DIR"
+cd "$SVAMP_DATA_DIR"
+curl -fLO https://huggingface.co/datasets/ChilleD/SVAMP/resolve/main/data/test-00000-of-00001.parquet
+```
+
+#### MBPP (sanitized 2 파일 필수, full 2 파일 optional)
+
+| URL | target |
+|---|---|
+| https://huggingface.co/datasets/google-research-datasets/mbpp/resolve/main/sanitized/test-00000-of-00001.parquet | `$MBPP_DATA_DIR/sanitized/test-00000-of-00001.parquet` |
+| https://huggingface.co/datasets/google-research-datasets/mbpp/resolve/main/sanitized/prompt-00000-of-00001.parquet | `$MBPP_DATA_DIR/sanitized/prompt-00000-of-00001.parquet` |
+| https://huggingface.co/datasets/google-research-datasets/mbpp/resolve/main/full/test-00000-of-00001.parquet | `$MBPP_DATA_DIR/full/test-00000-of-00001.parquet` (optional) |
+| https://huggingface.co/datasets/google-research-datasets/mbpp/resolve/main/full/prompt-00000-of-00001.parquet | `$MBPP_DATA_DIR/full/prompt-00000-of-00001.parquet` (optional) |
+
+```bash
+mkdir -p "$MBPP_DATA_DIR/sanitized" "$MBPP_DATA_DIR/full"
+
+# sanitized — mandatory (NAIT default)
+cd "$MBPP_DATA_DIR/sanitized"
+curl -fLO https://huggingface.co/datasets/google-research-datasets/mbpp/resolve/main/sanitized/test-00000-of-00001.parquet
+curl -fLO https://huggingface.co/datasets/google-research-datasets/mbpp/resolve/main/sanitized/prompt-00000-of-00001.parquet
+
+# full — optional (cross-paper comparison)
+cd "$MBPP_DATA_DIR/full"
+curl -fLO https://huggingface.co/datasets/google-research-datasets/mbpp/resolve/main/full/test-00000-of-00001.parquet
+curl -fLO https://huggingface.co/datasets/google-research-datasets/mbpp/resolve/main/full/prompt-00000-of-00001.parquet
+```
+
+#### XQuAD (11 NAIT 언어 + optional ro = 최대 12 파일, 각 ~300 KB)
+
+| URL | target |
+|---|---|
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.ar.json | `$XQUAD_DATA_DIR/xquad.ar.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.de.json | `$XQUAD_DATA_DIR/xquad.de.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.el.json | `$XQUAD_DATA_DIR/xquad.el.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.en.json | `$XQUAD_DATA_DIR/xquad.en.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.es.json | `$XQUAD_DATA_DIR/xquad.es.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.hi.json | `$XQUAD_DATA_DIR/xquad.hi.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.ro.json | `$XQUAD_DATA_DIR/xquad.ro.json` (optional — non-NAIT) |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.ru.json | `$XQUAD_DATA_DIR/xquad.ru.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.th.json | `$XQUAD_DATA_DIR/xquad.th.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.tr.json | `$XQUAD_DATA_DIR/xquad.tr.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.vi.json | `$XQUAD_DATA_DIR/xquad.vi.json` |
+| https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.zh.json | `$XQUAD_DATA_DIR/xquad.zh.json` |
+
+GitHub 차단 시 HF mirror fallback (동일 파일):
+```
+https://huggingface.co/datasets/google/xquad/resolve/main/xquad.<lang>.json
+```
+
+```bash
+mkdir -p "$XQUAD_DATA_DIR"
+cd "$XQUAD_DATA_DIR"
+for lang in ar de el en es hi ro ru th tr vi zh; do
+  curl -fL -o "xquad.${lang}.json" \
+    "https://raw.githubusercontent.com/google-deepmind/xquad/master/xquad.${lang}.json" \
+    || curl -fL -o "xquad.${lang}.json" \
+       "https://huggingface.co/datasets/google/xquad/resolve/main/xquad.${lang}.json"
+done
+```
+
+#### HF datasets API 로 한 번에 받기 (Python 환경 있을 때)
+
+cluster 외부 노드(Python + outbound HTTPS 가능)에서 한 번에 받고 scp:
+
+```python
+from datasets import load_dataset
+
+# MMLU-Pro
+ds = load_dataset("TIGER-Lab/MMLU-Pro")
+ds["test"].to_parquet("/tmp/mmlu_pro/test-00000-of-00001.parquet")
+ds["validation"].to_parquet("/tmp/mmlu_pro/validation-00000-of-00001.parquet")
+
+# SVAMP
+ds = load_dataset("ChilleD/SVAMP")
+ds["test"].to_parquet("/tmp/svamp/test-00000-of-00001.parquet")
+
+# MBPP (sanitized) + (full optional)
+for cfg in ("sanitized", "full"):
+    ds = load_dataset("google-research-datasets/mbpp", cfg)
+    ds["test"].to_parquet(f"/tmp/mbpp/{cfg}/test-00000-of-00001.parquet")
+    ds["prompt"].to_parquet(f"/tmp/mbpp/{cfg}/prompt-00000-of-00001.parquet")
+
+# XQuAD — 한 config 당 한 언어, 11번 호출
+import os
+os.makedirs("/tmp/xquad", exist_ok=True)
+for lang in "ar de el en es hi ru th tr vi zh".split():
+    ds = load_dataset("google/xquad", f"xquad.{lang}")
+    # XQuAD HF parquet shape != 원본 SQuAD JSON shape — 원본 JSON 형식을
+    # 평가 코드가 기대하므로 raw JSON 다운로드(위 curl 방식)가 더 안전.
+    # HF datasets API 를 굳이 쓸 거면 별도 SQuAD JSON 재구성 필요.
+```
+
+**주의**: XQuAD 만 HF 와 원본 JSON 의 스키마가 다름 — 평가 코드는 google-deepmind 의 원본 SQuAD-v1 JSON 형식을 기대. HF parquet 으로 받으면 evaluator schema 불일치로 실패한다. curl 로 raw JSON 받는 게 가장 단순하고 정확.
+
+#### 다운로드 후 sanity 체크 (옵션)
+
+```bash
+python3 -c "
+import pandas as pd, json, os
+mmlu_pro = pd.read_parquet(os.path.join(os.environ['MMLU_PRO_DATA_DIR'], 'test-00000-of-00001.parquet'))
+print('MMLU-Pro test:', mmlu_pro.shape, '|', sorted(mmlu_pro.columns)[:6])
+svamp = pd.read_parquet(os.path.join(os.environ['SVAMP_DATA_DIR'], 'test-00000-of-00001.parquet'))
+print('SVAMP test:   ', svamp.shape, '|', sorted(svamp.columns)[:6])
+mbpp = pd.read_parquet(os.path.join(os.environ['MBPP_DATA_DIR'], 'sanitized/test-00000-of-00001.parquet'))
+print('MBPP sanit.:  ', mbpp.shape, '|', sorted(mbpp.columns)[:6])
+xquad_dir = os.environ['XQUAD_DATA_DIR']
+files = sorted(f for f in os.listdir(xquad_dir) if f.startswith('xquad.') and f.endswith('.json'))
+print('XQuAD langs:  ', len(files), '|', files)
+"
+```
+
+예상 출력:
+```
+MMLU-Pro test:  (12032, ...) | ['answer', 'answer_index', 'category', 'cot_content', 'options', 'question']
+SVAMP test:     (1000, ...)  | ['Answer', 'Body', 'Equation', 'ID', 'Question', 'Type']
+MBPP sanit.:    (257, ...)   | ['challenge_test_list', 'code', 'source_file', 'task_id', 'test_imports', 'test_list']
+XQuAD langs:    11           | ['xquad.ar.json', ..., 'xquad.zh.json']
+```
+
 ### 14-3. 평가 호출 형식 (단일 bench, NAIT auto-launch와 동일)
 
 ```bash
