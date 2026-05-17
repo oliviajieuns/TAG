@@ -117,10 +117,22 @@ def _format_options(options) -> Tuple[str, int]:
     return rendered, len(cleaned)
 
 
+def _safe_str(v, default: str = "") -> str:
+    """Return v as a string, treating None/NaN/empty-array as the default.
+    Avoids the numpy/pandas `arr or x` ambiguous-truth-value trap."""
+    if v is None:
+        return default
+    # float NaN check (parquet-loaded missing values surface as NaN, not None)
+    if isinstance(v, float) and v != v:
+        return default
+    s = str(v)
+    return s if s.strip() else default
+
+
 def _build_prompt(
     demo_items: List[Dict[str, Any]],
     test_q: str,
-    test_opts: List[str],
+    test_opts,
     category: str,
 ) -> Tuple[str, int]:
     """5-shot CoT prompt:
@@ -144,10 +156,14 @@ def _build_prompt(
     )
     chunks: List[str] = [head]
     for d in demo_items:
-        d_opts, _ = _format_options(d.get("options") or [])
-        d_cot = (d.get("cot_content") or "").strip()
+        # CRITICAL: `d.get("options") or []` triggers the numpy
+        # "truth value of an array with more than one element is ambiguous"
+        # error when parquet loads list columns as np.ndarray. _format_options
+        # already handles None / empty, so pass the value through directly.
+        d_opts, _ = _format_options(d.get("options"))
+        d_cot = _safe_str(d.get("cot_content")).strip()
         chunks.append(
-            f"Question: {d['question']}\n"
+            f"Question: {d.get('question', '')}\n"
             f"Options:\n{d_opts}\n"
             f"Answer: {d_cot}\n\n"
         )
@@ -224,20 +240,79 @@ class MMLUProEvaluator(BenchmarkEvaluator):
         # TIGER-Lab/MMLU-Pro canonical (HF):
         #     question / options / answer / answer_index / category / cot_content / src
         # But mirrors vary: HF datasets→to_parquet exports preserve all, but some
-        # older or community mirrors use `choices` instead of `options`, `subject`
-        # or `src` instead of `category`, and omit `answer` when only the index
-        # is provided. Auto-map common variants here BEFORE running the schema
-        # audit so we don't reject otherwise-valid data.
+        # older or community mirrors use `choices` / `option` / `option_a..option_j`
+        # for options; `subject` / `src` for category; and omit `answer` when
+        # only the index is provided. Auto-map common variants here BEFORE
+        # running the schema audit so we don't reject otherwise-valid data.
         _ALIAS = {
-            "options": ["options", "choices"],
+            "options": ["options", "choices", "option", "mc_options", "answer_choices"],
             "category": ["category", "subject", "src"],
             "answer": ["answer", "answer_text"],
             "answer_index": ["answer_index", "answer_idx", "label"],
             "question": ["question", "prompt"],
             "cot_content": ["cot_content", "cot", "explanation"],
         }
+
+        def _collect_option_a_to_j(df):
+            """If options live in separate `option_a` .. `option_j` columns
+            (some preprocessed mirrors), merge into a single `options` list
+            column. Returns the (possibly modified) DataFrame."""
+            per_letter = {}
+            for L in LETTERS:
+                for cand in (f"option_{L.lower()}", f"option_{L}", f"opt_{L.lower()}", f"opt_{L}"):
+                    if cand in df.columns:
+                        per_letter[L] = cand
+                        break
+            if not per_letter:
+                return df
+            df = df.copy()
+
+            def _row_to_list(row):
+                out = []
+                for L in LETTERS:
+                    col = per_letter.get(L)
+                    if col is None:
+                        break
+                    v = row.get(col)
+                    if v is None:
+                        break
+                    out.append(str(v))
+                return out
+            df["options"] = df.apply(_row_to_list, axis=1)
+            logger.info(
+                "MMLU-Pro: collected options from %d per-letter columns (%s).",
+                len(per_letter), ",".join(sorted(per_letter.values())),
+            )
+            return df
+
+        def _parse_json_options(df, name: str):
+            """If `options` is stored as a JSON-encoded string ('["...", "..."]'),
+            decode each row to a list. Idempotent on already-list values."""
+            if "options" not in df.columns or df.empty:
+                return df
+            sample = df["options"].iloc[0]
+            if isinstance(sample, str) and sample.strip().startswith("["):
+                df = df.copy()
+                def _maybe_parse(v):
+                    if isinstance(v, str):
+                        try:
+                            return json.loads(v)
+                        except Exception:
+                            return [v]
+                    return v
+                df["options"] = df["options"].map(_maybe_parse)
+                logger.info(
+                    "MMLU-Pro (%s): parsed JSON-encoded `options` column to list.",
+                    name,
+                )
+            return df
+
         def _normalize_schema(df, name: str):
             cols = set(df.columns)
+            # First pass: collect option_a..option_j into a single `options` column.
+            df = _collect_option_a_to_j(df)
+            cols = set(df.columns)
+            # Rename single-name aliases.
             for canon, aliases in _ALIAS.items():
                 if canon in cols:
                     continue
@@ -249,6 +324,8 @@ class MMLUProEvaluator(BenchmarkEvaluator):
                         )
                         cols = set(df.columns)
                         break
+            # Decode JSON-string options if needed.
+            df = _parse_json_options(df, name)
             # If we have answer_index but no answer, derive the letter from index.
             if "answer" not in df.columns and "answer_index" in df.columns:
                 df = df.copy()
@@ -272,16 +349,29 @@ class MMLUProEvaluator(BenchmarkEvaluator):
         if miss_test or miss_val:
             # Dump observed schema + a sample row so the user can fix the data
             # source instead of guessing what we expected.
-            try:
-                sample = {
-                    k: (
-                        v if not isinstance(v, (list, tuple))
-                        else f"<{type(v).__name__} len={len(v)}>"
-                    )
-                    for k, v in test_df.iloc[0].to_dict().items()
-                }
-            except Exception:
-                sample = "<no row 0>"
+            def _row_preview(df):
+                try:
+                    row = df.iloc[0].to_dict()
+                except Exception:
+                    return "<no row 0>"
+                out = {}
+                for k, v in row.items():
+                    if v is None:
+                        out[k] = None
+                    elif isinstance(v, (list, tuple)):
+                        out[k] = f"<{type(v).__name__} len={len(v)}: {list(v)[:2]}...>"
+                    elif hasattr(v, "__len__") and not isinstance(v, str):
+                        # numpy arrays etc.
+                        try:
+                            preview = list(v)[:2]
+                            out[k] = f"<{type(v).__name__} len={len(v)}: {preview}...>"
+                        except Exception:
+                            out[k] = f"<{type(v).__name__}>"
+                    elif isinstance(v, str) and len(v) > 80:
+                        out[k] = v[:80] + "..."
+                    else:
+                        out[k] = v
+                return out
             raise ValueError(
                 f"MMLU-Pro schema mismatch at {data_dir}.\n"
                 f"  test missing: {sorted(miss_test) or 'OK'}\n"
@@ -289,7 +379,8 @@ class MMLUProEvaluator(BenchmarkEvaluator):
                 f"  expected (after alias normalisation): {sorted(need)}\n"
                 f"  observed test columns:       {sorted(test_df.columns)}\n"
                 f"  observed validation columns: {sorted(val_df.columns)}\n"
-                f"  test row 0 sample: {sample}\n"
+                f"  test row 0 sample: {_row_preview(test_df)}\n"
+                f"  validation row 0 sample: {_row_preview(val_df)}\n"
                 f"  Canonical source: TIGER-Lab/MMLU-Pro (HF). If you used a "
                 f"different mirror, re-download with "
                 f"`bash scripts/download_mmlu_pro.sh {data_dir}` or with the HF "
@@ -311,7 +402,8 @@ class MMLUProEvaluator(BenchmarkEvaluator):
         # the same reasoning style as the test question.
         demos_by_cat: Dict[str, List[Dict[str, Any]]] = {}
         for r in val_df.to_dict("records"):
-            demos_by_cat.setdefault(r["category"], []).append(r)
+            cat = _safe_str(r.get("category"), "unknown")
+            demos_by_cat.setdefault(cat, []).append(r)
         # Truncate to num_fewshot per category for prompt-size determinism.
         for cat in list(demos_by_cat):
             demos_by_cat[cat] = demos_by_cat[cat][:num_fewshot]
@@ -335,9 +427,21 @@ class MMLUProEvaluator(BenchmarkEvaluator):
         n_extract_fail = 0
 
         for i, ex in enumerate(test_records):
-            cat = ex["category"]
+            cat = _safe_str(ex.get("category"), "unknown")
             demos = demos_by_cat.get(cat, [])
-            prompt, n_opts = _build_prompt(demos, ex["question"], list(ex["options"]), cat)
+            # Pass options through as-is (None / list / ndarray all handled by
+            # _format_options); avoid `list(None)` if options is missing.
+            raw_opts = ex.get("options")
+            if raw_opts is None:
+                raw_opts = []
+            elif not isinstance(raw_opts, (list, tuple)):
+                try:
+                    raw_opts = list(raw_opts)
+                except TypeError:
+                    raw_opts = [raw_opts]
+            prompt, n_opts = _build_prompt(
+                demos, _safe_str(ex.get("question")), raw_opts, cat,
+            )
 
             inputs = tokenizer(
                 prompt, return_tensors="pt",
@@ -366,7 +470,7 @@ class MMLUProEvaluator(BenchmarkEvaluator):
                     break
 
             pred = _extract_answer(response, n_opts)
-            gold = str(ex["answer"]).strip().upper()
+            gold = _safe_str(ex.get("answer")).strip().upper()
             ok = (pred == gold) if pred is not None else False
             if pred is None:
                 n_extract_fail += 1

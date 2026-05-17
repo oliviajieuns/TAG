@@ -227,21 +227,55 @@ class MBPPEvaluator(BenchmarkEvaluator):
         #   full:       task_id / text / code / test_list / test_setup_code / challenge_test_list
         # We canonicalise to the `full` field names internally so the rest of
         # the evaluator (prompt builder + sandbox setup) doesn't have to care
-        # which config the user downloaded. Rename in-place + derive the
-        # missing setup column from whatever the source has.
+        # which config the user downloaded.
+        #
+        # Mirror variants (community / lm-eval-harness preprocessing) sometimes
+        # use additional aliases, listed below. Order matters — first match
+        # wins (most common variant first).
+        _TEXT_ALIASES = ["text", "prompt", "task", "description", "nl", "nl_description"]
+        _CODE_ALIASES = ["code", "solution", "canonical_solution"]
+        _TESTS_ALIASES = ["test_list", "tests", "test_cases", "asserts"]
+        _SETUP_ALIASES = ["test_setup_code", "setup", "imports"]
+
+        def _first_alias_present(cols, aliases):
+            for a in aliases:
+                if a in cols:
+                    return a
+            return None
+
         def _normalize_mbpp(df, split_name: str):
             df = df.copy()
             cols = set(df.columns)
-            # `prompt` (sanitized) → `text` (canonical)
-            if "text" not in cols and "prompt" in cols:
-                df = df.rename(columns={"prompt": "text"})
-                logger.info(
-                    "MBPP (%s/%s): renamed `prompt` → `text` (sanitized layout).",
-                    config, split_name,
-                )
-                cols = set(df.columns)
-            # `test_imports` (sanitized, list of import statements) →
-            # `test_setup_code` (canonical, joined str).
+            # text — problem description
+            if "text" not in cols:
+                src = _first_alias_present(cols, _TEXT_ALIASES[1:])
+                if src is not None:
+                    df = df.rename(columns={src: "text"})
+                    logger.info(
+                        "MBPP (%s/%s): renamed %r → `text`", config, split_name, src,
+                    )
+                    cols = set(df.columns)
+            # code — reference solution
+            if "code" not in cols:
+                src = _first_alias_present(cols, _CODE_ALIASES[1:])
+                if src is not None:
+                    df = df.rename(columns={src: "code"})
+                    logger.info(
+                        "MBPP (%s/%s): renamed %r → `code`", config, split_name, src,
+                    )
+                    cols = set(df.columns)
+            # test_list — list of assert statements
+            if "test_list" not in cols:
+                src = _first_alias_present(cols, _TESTS_ALIASES[1:])
+                if src is not None:
+                    df = df.rename(columns={src: "test_list"})
+                    logger.info(
+                        "MBPP (%s/%s): renamed %r → `test_list`",
+                        config, split_name, src,
+                    )
+                    cols = set(df.columns)
+            # test_setup_code — derive from `test_imports` (sanitized list-of-imports)
+            # if not directly present.
             if "test_setup_code" not in cols:
                 if "test_imports" in cols:
                     df["test_setup_code"] = df["test_imports"].map(
@@ -253,7 +287,15 @@ class MBPPEvaluator(BenchmarkEvaluator):
                         config, split_name,
                     )
                 else:
-                    df["test_setup_code"] = ""
+                    src = _first_alias_present(cols, _SETUP_ALIASES[1:])
+                    if src is not None:
+                        df = df.rename(columns={src: "test_setup_code"})
+                        logger.info(
+                            "MBPP (%s/%s): renamed %r → `test_setup_code`",
+                            config, split_name, src,
+                        )
+                    else:
+                        df["test_setup_code"] = ""
             return df
 
         test_df = _normalize_mbpp(test_df, "test")
