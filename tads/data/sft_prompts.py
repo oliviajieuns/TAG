@@ -323,17 +323,35 @@ def tydiqa_generation_prefix(
 def humaneval_generation_prefix(
     code_prompt: str, *, prompt_style: str = "alpaca_default",
 ) -> str:
-    """Build the generation prefix for HumanEval — raw code prompt for the
-    code-completion task. For chat-style prompts we wrap minimally.
+    """Build the generation prefix for HumanEval.
+
+    Every supported `prompt_style` wraps the raw function-signature prompt
+    in the SFT template the model family was trained on. Returning the
+    raw code prompt is fine for a BASE model but breaks for an SFT'd
+    model whose response distribution is conditioned on the template —
+    e.g. llama-2-7B + Alpaca-GPT4 SFT, fed a bare signature, often emits
+    explanations or refuses entirely, dropping pass@10 from ~0.27
+    (paper-faithful with wrap) to ~0.08 (no wrap, observed).
+
+    The model's response will typically re-emit the function signature
+    + a body. ``_extract_body_after_signature`` in tads.evals.humaneval
+    peels the signature off so `prompt + completion` round-trips to a
+    well-formed exec.
 
     See ``tydiqa_generation_prefix`` for the rationale on why
     ``mistral_instruct`` omits a manual leading `<s>` token.
     """
-    if prompt_style == "alpaca_default":
-        # Most code-completion benches expect the raw function signature
-        # as the prefix, so return it as-is.
-        return code_prompt
     user = f"Complete the following Python function:\n\n{code_prompt}"
+    if prompt_style == "alpaca_default":
+        # Stanford Alpaca SFT template — what llama-2 + Alpaca-GPT4 SFT
+        # is trained on. The model has learned to ALWAYS respond after
+        # `### Response:\n`; feeding a raw signature without this marker
+        # leaves the model out-of-distribution. Wrap it.
+        return (
+            "Below is an instruction that describes a task. "
+            "Write a response that appropriately completes the request.\n\n"
+            f"### Instruction:\n{user}\n\n### Response:\n"
+        )
     if prompt_style == "qwen_chatml":
         return f"{IM_START}user\n{user}\n{IM_END}\n{IM_START}assistant\n"
     if prompt_style == "mistral_instruct":
