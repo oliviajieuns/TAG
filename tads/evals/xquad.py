@@ -200,10 +200,22 @@ class XQuADEvaluator(BenchmarkEvaluator):
         limit: Optional[int] = None,
         prompt_style: str = "alpaca_default",
         data_dir: Optional[str] = None,
-        max_new_tokens: int = 50,
+        # max_new_tokens=30: XQuAD gold answers are short extractive spans
+        # (avg ~3 tokens, p95 ~15 tokens). 50 was conservative but expensive
+        # — every generation step is a forward pass + the (now-removed)
+        # stop_string CPU check. Dropping to 30 saves ~40% wall time on
+        # short-answer cases that hit EOS early too.
+        max_new_tokens: int = 30,
         n_fewshot: int = 5,
         max_input_tokens: int = 2048,
         languages: Optional[List[str]] = None,
+        # empty_cache every N items rather than every iteration. Per-item KV
+        # cache for a 30-token generation is tiny (~5 MB) so fragmentation
+        # isn't a real risk between calls — sync + cudaFree calls were
+        # adding ~5-15 ms × 13K items = up to 3 min of pure cleanup
+        # overhead. Bump to every 50 items so we still drain occasionally
+        # but the per-step cost amortises away.
+        empty_cache_interval: int = 50,
         **kwargs,
     ) -> Dict[str, Any]:
         if data_dir is None:
@@ -256,6 +268,11 @@ class XQuADEvaluator(BenchmarkEvaluator):
         per_lang_total: Dict[str, int] = {}
         per_lang_f1_sum: Dict[str, float] = {}
         per_question: List[Dict[str, Any]] = []
+        # Global counter for empty_cache interval. KV cache for a 30-token
+        # generation is small enough that we don't need to drain after
+        # every item; interval of empty_cache_interval keeps the allocator
+        # tidy without the per-step sync cost.
+        _seen_global = 0
 
         for lang, items in per_lang_items.items():
             if len(items) <= n_fewshot:
@@ -287,23 +304,24 @@ class XQuADEvaluator(BenchmarkEvaluator):
                     do_sample=False,
                     temperature=0.0,
                     pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                    # Stop on the next demo's header — model often hallucinates
-                    # a continuation like "\nContext: <next>" or "\nQuestion:".
-                    # Capturing this in the generator (not just post-trim)
-                    # also shortens wall time per item by ~30%.
-                    stop_strings=[
-                        "\nContext:", "\n\nContext:",
-                        "\nQuestion:", "\n\nQuestion:",
-                        "\nAnswer:", "\n\nAnswer:",
-                    ],
-                    tokenizer=tokenizer,
+                    # NOTE: stop_strings + `tokenizer=` was deliberately
+                    # removed — on some transformers versions the criteria
+                    # runs `tokenizer.decode(last_15_tokens, ...)` PER
+                    # generated token, adding 5–20ms of CPU work each
+                    # step. For 30 token max × 13K items that's up to
+                    # ~1.6h of pure stop-string overhead. The defensive
+                    # post-decode trim below ("\nContext:" / "\nQuestion:"
+                    # / "\nAnswer:" cut) recovers the same quality at zero
+                    # per-token cost; model otherwise stops naturally at
+                    # EOS or max_new_tokens.
                 )
                 prompt_tok_len = inputs["input_ids"].shape[1]
                 gen_ids = out[0, prompt_tok_len:]
                 pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-                # XQuAD gold is a short extractive span. Defense-in-depth
-                # alongside stop_strings: trim at the next demo header that
-                # slipped through anyway, then take only the first line.
+                # XQuAD gold is a short extractive span. Trim at the next
+                # demo header the model may have hallucinated, then take
+                # only the first line. This is the sole stop mechanism
+                # (post-decode) now that stop_strings is removed for speed.
                 for sep in ("\nContext:", "\nQuestion:", "\nAnswer:",
                             "\n\nContext:", "\n\nQuestion:", "\n\nAnswer:"):
                     idx = pred.find(sep)
@@ -334,7 +352,12 @@ class XQuADEvaluator(BenchmarkEvaluator):
                 })
 
                 del inputs, out, gen_ids
-                if torch.cuda.is_available():
+                _seen_global += 1
+                if (
+                    torch.cuda.is_available()
+                    and empty_cache_interval > 0
+                    and _seen_global % empty_cache_interval == 0
+                ):
                     torch.cuda.empty_cache()
 
             per_lang_correct[lang] = n_correct
