@@ -220,12 +220,68 @@ class MBPPEvaluator(BenchmarkEvaluator):
                 f"split is required as the 3-shot demonstration source.",
             )
 
+        # ---- Schema normalisation -------------------------------------------------
+        # google-research-datasets/mbpp ships two configs that disagree on
+        # field names:
+        #   sanitized:  task_id / source_file / prompt / code / test_imports / test_list
+        #   full:       task_id / text / code / test_list / test_setup_code / challenge_test_list
+        # We canonicalise to the `full` field names internally so the rest of
+        # the evaluator (prompt builder + sandbox setup) doesn't have to care
+        # which config the user downloaded. Rename in-place + derive the
+        # missing setup column from whatever the source has.
+        def _normalize_mbpp(df, split_name: str):
+            df = df.copy()
+            cols = set(df.columns)
+            # `prompt` (sanitized) → `text` (canonical)
+            if "text" not in cols and "prompt" in cols:
+                df = df.rename(columns={"prompt": "text"})
+                logger.info(
+                    "MBPP (%s/%s): renamed `prompt` → `text` (sanitized layout).",
+                    config, split_name,
+                )
+                cols = set(df.columns)
+            # `test_imports` (sanitized, list of import statements) →
+            # `test_setup_code` (canonical, joined str).
+            if "test_setup_code" not in cols:
+                if "test_imports" in cols:
+                    df["test_setup_code"] = df["test_imports"].map(
+                        lambda x: "\n".join(list(x)) if x is not None else ""
+                    )
+                    logger.info(
+                        "MBPP (%s/%s): derived `test_setup_code` from "
+                        "`test_imports` (sanitized layout).",
+                        config, split_name,
+                    )
+                else:
+                    df["test_setup_code"] = ""
+            return df
+
+        test_df = _normalize_mbpp(test_df, "test")
+        prompt_df = _normalize_mbpp(prompt_df, "prompt")
+
         need = {"task_id", "text", "code", "test_list"}
         miss = need - set(test_df.columns)
         if miss:
+            try:
+                sample = {
+                    k: (v if not isinstance(v, (list, tuple))
+                        else f"<{type(v).__name__} len={len(v)}>")
+                    for k, v in test_df.iloc[0].to_dict().items()
+                }
+            except Exception:
+                sample = "<no row 0>"
             raise ValueError(
-                f"MBPP schema mismatch at {cfg_dir}: missing {sorted(miss)}. "
-                f"Got columns: {list(test_df.columns)}",
+                f"MBPP schema mismatch at {cfg_dir}: missing {sorted(miss)}.\n"
+                f"  observed test columns: {sorted(test_df.columns)}\n"
+                f"  test row 0 sample: {sample}\n"
+                f"  Canonical source: google-research-datasets/mbpp. If you "
+                f"used a different mirror, re-download with "
+                f"`bash scripts/download_mbpp.sh {data_dir}` (config={config!r}) "
+                f"or with the HF datasets API:\n"
+                f"    from datasets import load_dataset\n"
+                f"    ds = load_dataset('google-research-datasets/mbpp', {config!r})\n"
+                f"    ds['test'].to_parquet('{cfg_dir}/test-00000-of-00001.parquet')\n"
+                f"    ds['prompt'].to_parquet('{cfg_dir}/prompt-00000-of-00001.parquet')",
             )
 
         # First num_fewshot records of `prompt` split — deterministic.
@@ -233,6 +289,7 @@ class MBPPEvaluator(BenchmarkEvaluator):
         # Convert test_list / test_setup_code numpy arrays → plain lists / str.
         for d in demos:
             d["test_list"] = list(d.get("test_list") or [])
+            d["test_setup_code"] = d.get("test_setup_code") or ""
         test_records = test_df.to_dict("records")
         for r in test_records:
             r["test_list"] = list(r.get("test_list") or [])
