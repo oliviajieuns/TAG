@@ -84,11 +84,35 @@ def _extract_answer(text: str, n_options: int) -> Optional[str]:
     return None
 
 
-def _format_options(options: List[str]) -> Tuple[str, int]:
+def _format_options(options) -> Tuple[str, int]:
     """Render the option list as "A) opt1\nB) opt2\n..." and return
     ``(rendered, n_options_kept)``. Drops trailing blank entries the
-    dataset uses to pad to 10."""
-    cleaned = [o for o in options if isinstance(o, str) and o.strip() and o.strip().lower() != "n/a"]
+    dataset uses to pad to 10.
+
+    Tolerates: list / tuple / numpy.ndarray of strings, plus None / NaN
+    (treated as empty). Parquet round-trips list columns as np.ndarray,
+    and some mirrors store the answer in dict-of-strings form which we
+    also accept (sorted by key).
+    """
+    if options is None:
+        return "", 0
+    # Handle dict form {"A": "...", "B": "..."} — rare but seen on some mirrors.
+    if isinstance(options, dict):
+        items = sorted(options.items())
+        opts = [v for _, v in items]
+    else:
+        try:
+            opts = list(options)
+        except TypeError:
+            return "", 0
+    cleaned: List[str] = []
+    for o in opts:
+        if o is None:
+            continue
+        s = str(o)
+        if not s.strip() or s.strip().lower() == "n/a":
+            continue
+        cleaned.append(s)
     rendered = "\n".join(f"{LETTERS[i]}) {opt}" for i, opt in enumerate(cleaned))
     return rendered, len(cleaned)
 
@@ -196,19 +220,84 @@ class MMLUProEvaluator(BenchmarkEvaluator):
             ignore_index=True,
         )
 
-        # Schema audit — fail fast on a non-MMLU-Pro mirror before running
-        # any model forward. The canonical TIGER-Lab/MMLU-Pro fields are:
-        #   question, options, answer, answer_index, category, cot_content
+        # ---- Schema normalisation -------------------------------------------------
+        # TIGER-Lab/MMLU-Pro canonical (HF):
+        #     question / options / answer / answer_index / category / cot_content / src
+        # But mirrors vary: HF datasets→to_parquet exports preserve all, but some
+        # older or community mirrors use `choices` instead of `options`, `subject`
+        # or `src` instead of `category`, and omit `answer` when only the index
+        # is provided. Auto-map common variants here BEFORE running the schema
+        # audit so we don't reject otherwise-valid data.
+        _ALIAS = {
+            "options": ["options", "choices"],
+            "category": ["category", "subject", "src"],
+            "answer": ["answer", "answer_text"],
+            "answer_index": ["answer_index", "answer_idx", "label"],
+            "question": ["question", "prompt"],
+            "cot_content": ["cot_content", "cot", "explanation"],
+        }
+        def _normalize_schema(df, name: str):
+            cols = set(df.columns)
+            for canon, aliases in _ALIAS.items():
+                if canon in cols:
+                    continue
+                for a in aliases[1:]:
+                    if a in cols:
+                        df = df.rename(columns={a: canon})
+                        logger.info(
+                            "MMLU-Pro (%s): renamed column %r → %r", name, a, canon,
+                        )
+                        cols = set(df.columns)
+                        break
+            # If we have answer_index but no answer, derive the letter from index.
+            if "answer" not in df.columns and "answer_index" in df.columns:
+                df = df.copy()
+                df["answer"] = df["answer_index"].map(
+                    lambda i: LETTERS[int(i)] if 0 <= int(i) < len(LETTERS) else ""
+                )
+                logger.info(
+                    "MMLU-Pro (%s): derived `answer` letter from `answer_index`.",
+                    name,
+                )
+            return df
+
+        test_df = _normalize_schema(test_df, "test")
+        val_df = _normalize_schema(val_df, "validation")
+
+        # Schema audit — fail fast on a non-MMLU-Pro mirror before running any
+        # model forward. After normalisation we require the canonical names.
         need = {"question", "options", "answer", "category"}
         miss_test = need - set(test_df.columns)
         miss_val = need - set(val_df.columns)
         if miss_test or miss_val:
+            # Dump observed schema + a sample row so the user can fix the data
+            # source instead of guessing what we expected.
+            try:
+                sample = {
+                    k: (
+                        v if not isinstance(v, (list, tuple))
+                        else f"<{type(v).__name__} len={len(v)}>"
+                    )
+                    for k, v in test_df.iloc[0].to_dict().items()
+                }
+            except Exception:
+                sample = "<no row 0>"
             raise ValueError(
                 f"MMLU-Pro schema mismatch at {data_dir}.\n"
                 f"  test missing: {sorted(miss_test) or 'OK'}\n"
                 f"  validation missing: {sorted(miss_val) or 'OK'}\n"
-                f"  expected: {sorted(need)} (TIGER-Lab/MMLU-Pro). Got "
-                f"test={sorted(test_df.columns)}",
+                f"  expected (after alias normalisation): {sorted(need)}\n"
+                f"  observed test columns:       {sorted(test_df.columns)}\n"
+                f"  observed validation columns: {sorted(val_df.columns)}\n"
+                f"  test row 0 sample: {sample}\n"
+                f"  Canonical source: TIGER-Lab/MMLU-Pro (HF). If you used a "
+                f"different mirror, re-download with "
+                f"`bash scripts/download_mmlu_pro.sh {data_dir}` or with the HF "
+                f"datasets API:\n"
+                f"    from datasets import load_dataset\n"
+                f"    ds = load_dataset('TIGER-Lab/MMLU-Pro')\n"
+                f"    ds['test'].to_parquet('{data_dir}/test-00000-of-00001.parquet')\n"
+                f"    ds['validation'].to_parquet('{data_dir}/validation-00000-of-00001.parquet')",
             )
         if "cot_content" not in val_df.columns:
             logger.warning(
