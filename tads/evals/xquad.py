@@ -200,21 +200,17 @@ class XQuADEvaluator(BenchmarkEvaluator):
         limit: Optional[int] = None,
         prompt_style: str = "alpaca_default",
         data_dir: Optional[str] = None,
-        # max_new_tokens=30: XQuAD gold answers are short extractive spans
-        # (avg ~3 tokens, p95 ~15 tokens). 50 was conservative but expensive
-        # — every generation step is a forward pass + the (now-removed)
-        # stop_string CPU check. Dropping to 30 saves ~40% wall time on
-        # short-answer cases that hit EOS early too.
-        max_new_tokens: int = 30,
+        max_new_tokens: int = 50,
         n_fewshot: int = 5,
         max_input_tokens: int = 2048,
         languages: Optional[List[str]] = None,
-        # empty_cache every N items rather than every iteration. Per-item KV
-        # cache for a 30-token generation is tiny (~5 MB) so fragmentation
-        # isn't a real risk between calls — sync + cudaFree calls were
-        # adding ~5-15 ms × 13K items = up to 3 min of pure cleanup
-        # overhead. Bump to every 50 items so we still drain occasionally
-        # but the per-step cost amortises away.
+        # empty_cache every N items rather than every iteration. Per-item
+        # KV cache for a ~50-token generation is tiny (~5–10 MB) so
+        # fragmentation isn't a real risk between calls — sync + cudaFree
+        # calls were adding ~5–15 ms × 13K items = up to ~3 min of pure
+        # cleanup overhead. Bump to every 50 items so we still drain
+        # occasionally but the per-step cost amortises away. Pure memory
+        # management; zero impact on EM/F1 values.
         empty_cache_interval: int = 50,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -304,24 +300,29 @@ class XQuADEvaluator(BenchmarkEvaluator):
                     do_sample=False,
                     temperature=0.0,
                     pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                    # NOTE: stop_strings + `tokenizer=` was deliberately
-                    # removed — on some transformers versions the criteria
-                    # runs `tokenizer.decode(last_15_tokens, ...)` PER
-                    # generated token, adding 5–20ms of CPU work each
-                    # step. For 30 token max × 13K items that's up to
-                    # ~1.6h of pure stop-string overhead. The defensive
-                    # post-decode trim below ("\nContext:" / "\nQuestion:"
-                    # / "\nAnswer:" cut) recovers the same quality at zero
-                    # per-token cost; model otherwise stops naturally at
-                    # EOS or max_new_tokens.
+                    # Stop on the next demo's header — model often
+                    # hallucinates a continuation like "\nContext: <next>"
+                    # or "\nQuestion:". transformers ≥ 4.34 uses a fast
+                    # C path for stop_strings so the per-token overhead
+                    # is negligible, AND it short-circuits generation
+                    # ~15–30 steps earlier than letting it run to
+                    # max_new_tokens. The post-decode trim below stays as
+                    # a belt-and-braces in case any separator variant
+                    # slipped through.
+                    stop_strings=[
+                        "\nContext:", "\n\nContext:",
+                        "\nQuestion:", "\n\nQuestion:",
+                        "\nAnswer:", "\n\nAnswer:",
+                    ],
+                    tokenizer=tokenizer,
                 )
                 prompt_tok_len = inputs["input_ids"].shape[1]
                 gen_ids = out[0, prompt_tok_len:]
                 pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-                # XQuAD gold is a short extractive span. Trim at the next
-                # demo header the model may have hallucinated, then take
-                # only the first line. This is the sole stop mechanism
-                # (post-decode) now that stop_strings is removed for speed.
+                # XQuAD gold is a short extractive span. Defense-in-depth
+                # alongside stop_strings: trim at the next demo header that
+                # may have slipped through anyway, then take only the
+                # first line.
                 for sep in ("\nContext:", "\nQuestion:", "\nAnswer:",
                             "\n\nContext:", "\n\nQuestion:", "\n\nAnswer:"):
                     idx = pred.find(sep)
