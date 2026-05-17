@@ -5,6 +5,39 @@
 
 ---
 
+# 🆕🆕🆕 2026-05-17: 5 벤치 → 9 벤치 확장 — NAIT Table 2 풀-매칭 🆕🆕🆕
+
+기존 5 벤치(`mmlu` / `gsm8k` / `humaneval` / `tydiqa` / `bbh`)에 NAIT (ICLR 2026) Table 2 의 나머지 4개 벤치가 합류:
+
+```
+mmlu  →  mmlu_pro  →  gsm8k  →  svamp  →  humaneval  →  mbpp  →  tydiqa  →  xquad  →  bbh
+─────   ─────────   ─────   ─────   ─────────   ────   ──────   ─────   ────
+ (1)      (2)        (3)     (4)      (5)        (6)    (7)      (8)     (9)
+빠름                          빠름           빠름                          가장 느림 (마지막)
+```
+
+**dispatch unit 총량 변경**: 16 cells × 5 benches = **80** → 16 cells × 9 benches = **144** (cell, bench) pair.
+
+**§13 reference 표 / §0-4 (6)(7)(8) 점수 표 / §0-5 dashboard 모두 9 컬럼으로 확장.** 본문 곳곳에 남아있는 "5 벤치" / "80 셀" wording은 sweep 미완 — operational decision은 본 banner의 9-bench 정의를 따른다. 자세한 사양은 §14 (밑) 참조.
+
+primary metric (JSON 파일의 점수 표 추출 키):
+
+| bench | JSON key | 형식 | 추출 경로 |
+|---|---|---|---|
+| `mmlu` | `overall_accuracy` | 0..1 float | 5-shot logit choice |
+| `mmlu_pro` | `accuracy` (= `macro_avg_accuracy`) | 0..1 float | 5-shot CoT generate + letter 추출, 14 카테고리 macro |
+| `gsm8k` | `accuracy` | 0..1 float | 8-shot CoT generate + last-number EM |
+| `svamp` | `accuracy` | 0..1 float | 8-shot CoT + last-number EM (gsm8k와 동일 grader) |
+| `humaneval` | `accuracy` (= `pass@10`) | 0..1 float | n=20 samples, T=0.8, pass@10 |
+| `mbpp` | `accuracy` (= `pass@1`) | 0..1 float | sanitized + 3-shot, greedy, subprocess sandbox |
+| `tydiqa` | `accuracy_em` | 0..1 float | 5-shot Gold-Passage, EM |
+| `xquad` | `accuracy` (= `macro_em`) | 0..1 float | 11-언어 5-shot, EM macro over languages |
+| `bbh` | `macro_avg_accuracy` | 0..1 float | 27 task 3-shot CoT, macro |
+
+`accuracy` alias는 점수표 reader가 bench 분기 없이 통일된 키로 읽을 수 있게 한 cross-bench 일치 키. mmlu / bbh / tydiqa 만 bench-specific 키를 primary로 쓰는 옛 인터페이스 유지. 모든 새 evaluator(mmlu_pro / svamp / mbpp / xquad)는 `accuracy` 도 같이 채워 넣는다.
+
+---
+
 # 🚨🚨🚨 핵심 파이프라인 — 자주 끊김. 사용자 반복 지적 🚨🚨🚨
 
 **에이전트는 다음 3단계를 매 cron tick에서 끝까지 돌려야 한다.** 한 단계라도 끊어지면 사용자가 "또 안 되네"를 다시 외친다. 사용자 지적 빈도 매우 높음.
@@ -18,8 +51,9 @@
 │         --benchmarks <single_bench>                                     │
 │         --out_dir ${EVAL_RESULTS_ROOT}/<m>/<x>                          │
 │         >> logs/eval_<m>_<x>_<bench>.log 2>&1 &                         │
-│     (5 벤치 전부 자동, 단일 bench, 1 GPU = 1 (cell, bench),             │
-│      bbh는 가장 마지막 순서 — mmlu→gsm8k→humaneval→tydiqa→bbh)          │
+│     (9 벤치 전부 자동, 단일 bench, 1 GPU = 1 (cell, bench),             │
+│      bbh는 가장 마지막 순서 — mmlu→mmlu_pro→gsm8k→svamp→humaneval        │
+│      →mbpp→tydiqa→xquad→bbh)                                            │
 │           │                                                             │
 │           ▼                                                             │
 │ [2] 결과 파일 즉시 읽기                                                 │
@@ -52,9 +86,9 @@
 2. 로그 polling(§0-7)은 **dispatch의 입력 신호일 뿐, 그 자체가 deliverable이 아님**. 로그만 읽고 표만 그리는 건 임무 미완.
 3. "사용자가 직접 eval을 launch하길 기다린다"는 옛 정책(폐기됨). 2026-05-16 이후 eval은 **에이전트가 cron 주기마다 자동 dispatch**한다. 사용자 개입 0 (BBH 포함, 5 벤치 전부).
 
-## ✅ BBH 포함 5 벤치 전부 자동 (BBH는 가장 마지막 순서)
+## ✅ BBH 포함 9 벤치 전부 자동 (BBH는 가장 마지막 순서)
 
-**옛 정책(BBH는 사용자 직접 launch)은 2026-05-17 폐기됨.** BBH도 에이전트가 자동 dispatch — 단 시간이 오래 걸리므로 (~15h+) **순서상 가장 마지막**: `mmlu → gsm8k → humaneval → tydiqa → bbh`. 앞 4개가 모두 DONE 된 셀만 bbh 큐에 들어간다.
+**옛 정책(BBH는 사용자 직접 launch)은 2026-05-17 폐기됨.** BBH도 에이전트가 자동 dispatch — 단 시간이 오래 걸리므로 (~15h+) **순서상 가장 마지막**: `mmlu → mmlu_pro → gsm8k → svamp → humaneval → mbpp → tydiqa → xquad → bbh`. 앞 8개가 모두 DONE 된 셀만 bbh 큐에 들어간다.
 
 ## 📁 분류 기준 — `eval중` 만 프로세스, 나머지 4종은 정적 파일
 
@@ -91,26 +125,27 @@ dispatch pass 에서 pgrep 은 **eval중 분류 + 중복 launch 방지** 둘 다
 
 **`--benchmarks` 인자에 항상 단일 벤치 하나만 넣는다** (2026-05-17 분리 정책). 4개를 한 명령에 묶지 말 것:
 
-- ✓ OK: `--benchmarks mmlu` → 끝나면 `--benchmarks gsm8k` → ...
+- ✓ OK: `--benchmarks mmlu` → 끝나면 `--benchmarks mmlu_pro` → `--benchmarks gsm8k` → ...
 - ❌ 금지: `--benchmarks mmlu,gsm8k,humaneval,tydiqa` (옛 정책, 폐기됨).
 
-dispatch 큐는 **(cell, single_bench) pair** 단위. 같은 cell의 mmlu가 끝나야 그 cell의 gsm8k 가 큐에 enqueue. 벤치 순서는:
+dispatch 큐는 **(cell, single_bench) pair** 단위. 같은 cell의 mmlu가 끝나야 그 cell의 mmlu_pro 가 큐에 enqueue. 벤치 순서는:
 ```
-mmlu  →  gsm8k  →  humaneval  →  tydiqa  →  bbh   (bbh는 가장 마지막)
+mmlu  →  mmlu_pro  →  gsm8k  →  svamp  →  humaneval  →  mbpp  →  tydiqa  →  xquad  →  bbh
 ```
+(bbh는 셀당 ~15h+ 이므로 가장 마지막. 앞 8 벤치 다 끝난 셀만 bbh 큐에 enqueue.)
 
-총 dispatch unit = 16 cells × 5 benches = **80개 (cell, bench) pair**.
+총 dispatch unit = 16 cells × 9 benches = **144개 (cell, bench) pair**.
 빈 GPU 만큼 동시에 launch하되, 각 launch는 단일 (cell, bench) — 한 GPU에 한 (cell, bench).
 
-**한 tick 사이클** (5-bench auto, 사용자 개입 0):
+**한 tick 사이클** (9-bench auto, 사용자 개입 0):
 ```
-[poll logs]  →  [classify 80 cells]  →  [3.7 DISPATCH PASS — 5 벤치 전부]  →  [update tables]
+[poll logs]  →  [classify 144 cells]  →  [3.7 DISPATCH PASS — 9 벤치 전부]  →  [update tables]
                                           ↑
                                           --benchmarks <single bench>
                                           K개 빈 GPU = K번 launch (1 GPU = 1 cell, §4-1)
 ```
 
-dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (5-bench 대상). 다음 cron tick까지 `eval대기` 셀이 그대로 남아있고 사용자가 "또 그대로네"를 외친다.
+dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대상). 다음 cron tick까지 `eval대기` 셀이 그대로 남아있고 사용자가 "또 그대로네"를 외친다.
 
 ---
 
@@ -2646,28 +2681,30 @@ nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
 **에이전트가 새 reference 값을 자동으로 추출하려면**: 각 셀의 config 파일 첫 줄 코멘트에서 `Expected (paper): MMLU X, GSM Y, H-Eval Z, TyDiQA W, BBH V` 패턴을 grep해 가져올 것. config에 적혀있는 셀은 그 값이 paper-faithful reference이고, 사용자 직접 입력이 따로 있는 셀은 사용자 값 우선.
 
 ```
-Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh
-========================== ========= ========= ========= ========= =========
-llama2 / random_10         47.14%    14.13%    25.55%    44.16%    39.21%
-llama2 / full_100          46.87%    14.63%    27.87%    39.48%    39.94%
-llama2 / data_agent_10     -         -         -         -         -
-llama2 / tads_10           -         -         -         -         -
+Model/Method               mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh
+========================== ========= ========= ========= ========= ========= ========= ========= ========= =========
+llama2 / random_10         47.14%    -         14.13%    -         25.55%    -         44.16%    -         39.21%
+llama2 / full_100          46.87%    21.89%    14.63%    39.00%    27.87%    51.58%    39.48%    42.99%    39.94%
+llama2 / data_agent_10     -         -         -         -         -         -         -         -         -
+llama2 / tads_10           -         -         -         -         -         -         -         -         -
 
-qwen25 / full_100          -         -         -         -         -
-qwen25 / random_10         -         -         -         -         -
-qwen25 / data_agent_10     -         -         -         -         -
-qwen25 / tads_10           -         -         -         -         -
+qwen25 / full_100          -         -         -         -         -         -         -         -         -
+qwen25 / random_10         -         -         -         -         -         -         -         -         -
+qwen25 / data_agent_10     -         -         -         -         -         -         -         -         -
+qwen25 / tads_10           -         -         -         -         -         -         -         -         -
 
-mistral / full_100         -         -         -         -         -
-mistral / random_10        -         -         -         -         -
-mistral / data_agent_10    -         -         -         -         -
-mistral / tads_10          -         -         -         -         -
+mistral / full_100         -         -         -         -         -         -         -         -         -
+mistral / random_10        -         -         -         -         -         -         -         -         -
+mistral / data_agent_10    -         -         -         -         -         -         -         -         -
+mistral / tads_10          -         -         -         -         -         -         -         -         -
 
-deepseek / full_100        -         -         -         -         -
-deepseek / random_10       -         -         -         -         -
-deepseek / data_agent_10   -         -         -         -         -
-deepseek / tads_10         -         -         -         -         -
+deepseek / full_100        -         -         -         -         -         -         -         -         -
+deepseek / random_10       -         -         -         -         -         -         -         -         -
+deepseek / data_agent_10   -         -         -         -         -         -         -         -         -
+deepseek / tads_10         -         -         -         -         -         -         -         -         -
 ```
+
+`llama2 / full_100` 9개 값 출처: **NAIT (ICLR 2026, Chen et al.) Table 2 row 01 "Alpaca-GPT4 (Peng et al., 2023)"**. paper-faithful baseline 동일 row 0 — 우리 환경에서 재현이 이 값에 ±2%p 안에 들어와야 학습/eval 정상.
 
 기록 시점 / 출처:
 - `llama2 / random_10` — 2026-05-16 사용자 직접 입력 (이전 환경 재현 값).
@@ -2679,3 +2716,215 @@ deepseek / tads_10         -         -         -         -         -
 - reference 셀이 `-`이면 그 셀에 대한 비교는 건너뜀 (조용히 통과, 알람 없음).
 
 추가 입력 방법: 사용자가 새 reference 값을 알려주면 위 표의 해당 셀을 `-`에서 `NN.NN%`로 교체 (atomic 편집). 가이드 문서의 표는 에이전트가 자동으로 안 건드린다 — 사용자 명시적 요청 시에만 갱신.
+
+---
+
+## 14. 9-bench 확장 상세 (MMLU-Pro / SVAMP / MBPP / XQuAD) — 2026-05-17 추가
+
+기존 5 벤치 위에 NAIT Table 2 의 나머지 4 벤치(`mmlu_pro` / `svamp` / `mbpp` / `xquad`)가 합류. 각 벤치의 데이터 위치, primary metric, 예상 시간, dispatch 순서, paper baseline 값은 다음과 같다. 본 섹션은 에이전트의 "이 벤치는 어떻게 다뤄야 하나" 질문에 대한 단일 진실 공급원이다.
+
+### 14-1. dispatch 순서 (다시 — 9 벤치 모두)
+
+```
+mmlu → mmlu_pro → gsm8k → svamp → humaneval → mbpp → tydiqa → xquad → bbh
+```
+
+- 같은 cell에서 직전 bench가 DONE 되어야 다음 bench가 enqueue.
+- 빠른 것부터 느린 것 순서 (대략): mmlu(0.5h) < svamp(2h) < gsm8k(3h) ≈ mmlu_pro(5h) ≈ humaneval(3h) ≈ mbpp(1h) ≈ tydiqa(4h) ≈ xquad(7h) < bbh(15h+).
+- 16 cells × 9 benches = **144 (cell, bench) pair**. 4 GPU 동시 dispatch 기준 매트릭스 완주 ≈ 7~10일.
+
+### 14-2. 데이터 / 환경 변수 / 다운로드
+
+| bench | env var | 기본 경로 | 다운로드 스크립트 | 핵심 파일 |
+|---|---|---|---|---|
+| `mmlu_pro` | `MMLU_PRO_DATA_DIR` | `/group-volume/IT-datasets/mmlu_pro` | `scripts/download_mmlu_pro.sh` | `test-00000-of-00001.parquet` + `validation-00000-of-00001.parquet` |
+| `svamp` | `SVAMP_DATA_DIR` | `/group-volume/IT-datasets/svamp` | `scripts/download_svamp.sh` | `test-00000-of-00001.parquet` |
+| `mbpp` | `MBPP_DATA_DIR` | `/group-volume/IT-datasets/mbpp` | `scripts/download_mbpp.sh` | `sanitized/test-*.parquet` + `sanitized/prompt-*.parquet` (full/ optional) |
+| `xquad` | `XQUAD_DATA_DIR` | `/group-volume/IT-datasets/xquad` | `scripts/download_xquad.sh` | `xquad.<lang>.json` × 11 (+ optional `xquad.ro.json`) |
+
+다운로드 명령 (어디서든 cd `/home/kms/dev/tads` 후):
+
+```bash
+source scripts/setup_env.sh
+bash scripts/download_mmlu_pro.sh   # → $MMLU_PRO_DATA_DIR
+bash scripts/download_svamp.sh      # → $SVAMP_DATA_DIR
+bash scripts/download_mbpp.sh       # → $MBPP_DATA_DIR
+bash scripts/download_xquad.sh      # → $XQUAD_DATA_DIR
+```
+
+각 스크립트는:
+- HF main branch URL 우선, refs/convert/parquet fallback.
+- 진입 connectivity probe → 외부 망 차단 시 즉시 fail with 수동 명령 가이드.
+- 이미 존재하면 skip (idempotent).
+
+### 14-3. 평가 호출 형식 (단일 bench, NAIT auto-launch와 동일)
+
+```bash
+# MMLU-Pro
+CUDA_VISIBLE_DEVICES=<g> nohup python -m tads.eval \
+  --config configs/experiments/main_7b/<model>/<method>.yaml \
+  --benchmarks mmlu_pro \
+  --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
+  >> logs/eval_<model>_<method>_mmlu_pro.log 2>&1 &
+
+# SVAMP / MBPP / XQuAD — 동일 패턴, --benchmarks 값만 svamp / mbpp / xquad 로 교체.
+```
+
+기존 `--bbh_data_dir` 처럼 per-benchmark data dir CLI 오버라이드도 있다(`--mmlu_pro_data_dir` / `--svamp_data_dir` / `--mbpp_data_dir` / `--xquad_data_dir`) — 보통은 setup_env.sh 에 export 한 환경변수로 자동 풀려서 안 써도 됨.
+
+### 14-4. 각 벤치의 evaluator 사양
+
+#### (a) `mmlu_pro` — TIGER-Lab/MMLU-Pro
+
+- **Setup**: 5-shot CoT generate + 답 letter (A..J) 추출.
+- **Test size**: 12,032 questions, 14 categories.
+- **Few-shot source**: validation split (각 카테고리당 5개) — 같은 category 의 데모로 prompt.
+- **max_new_tokens**: 512 (CoT 답안이 길다).
+- **Stop strings**: `\nQuestion:`, `\n\nQuestion:` — 다음 데모 환각 방지.
+- **Score JSON 키**:
+  - `accuracy` ← primary, score-board reader 가 읽는 키
+  - `macro_avg_accuracy` ← 카테고리 14개 macro 평균 (NAIT 기준, alias of accuracy)
+  - `micro_avg_accuracy` ← 전체 12K 문제 합산 (진단용)
+  - `n_extract_fail` ← 답 letter 추출 실패 (모델 응답에 A-J 가 없음) 수
+  - `per_category` ← 카테고리별 accuracy dict
+- **예상 시간 / 셀**: ~4~6h on 7B A100 (12K × 1 generate × ~1s + 답 추출).
+- **paper baseline** (llama2 full_100): **21.89%** (NAIT Table 2).
+
+#### (b) `svamp` — ChilleD/SVAMP
+
+- **Setup**: 8-shot CoT (GSM8K 데모 재사용) + last-number EM.
+- **Test size**: 1,000 math word problems.
+- **Input shape**: `Body` + `Question` 두 필드 concat → 단일 질문.
+- **gold answer**: 숫자 (int / float). `gsm8k._grade` 그대로 재사용 — `The answer is X` / 마지막 숫자 추출 + float EM.
+- **max_new_tokens**: 256 (gsm8k와 동일).
+- **Stop strings**: `\nQ:`, `\n\nQ:`, `Question:`, `\n\nQuestion:` — gsm8k 패턴.
+- **Score JSON 키**:
+  - `accuracy` ← primary
+  - `correct`, `total` ← 셀의 raw 카운트
+  - `per_question` ← question + gold + predicted text per item
+- **예상 시간 / 셀**: ~1.5~2.5h on 7B (1000 문제 × ~7s greedy generate).
+- **paper baseline** (llama2 full_100): **39.00%** (NAIT Table 2).
+
+#### (c) `mbpp` — google-research-datasets/mbpp (sanitized)
+
+- **Setup**: sanitized config, 3-shot pass@1. greedy generate → subprocess sandbox 에서 test_list assert 들 exec.
+- **Test size**: 257 sanitized test problems.
+- **Few-shot source**: sanitized/prompt split의 첫 3개 (deterministic, no sampling).
+- **Prompt template** (Austin et al. 2021 + lm-eval-harness convention):
+  ```
+  You are an expert Python programmer, and here is your task: <text>
+  Your code should pass these tests:
+
+  <first assert>
+
+  [BEGIN]
+  <reference code>
+  [DONE]
+
+  ... (3 demos) ...
+
+  You are an expert Python programmer, and here is your task: <test text>
+  Your code should pass these tests:
+
+  <first assert>
+
+  [BEGIN]
+  ```
+- **max_new_tokens**: 512.
+- **Stop strings**: `\n[DONE]`, `[DONE]`, `\nYou are an expert Python programmer` — 다음 데모 환각 방지.
+- **채점**: 별개 Python subprocess (`subprocess.run([sys.executable, "-c", runner], stdin=payload, timeout=10s)`). human_eval 의 multiprocessing pool 과 달리 fork 없는 fresh process — model code 가 builtin / import 를 오염시켜도 다음 item에 leak 안 됨.
+- **Score JSON 키**:
+  - `accuracy` ← primary (alias of `pass@1`)
+  - `pass@1` ← 본 metric
+  - `total_passed`, `total_questions`
+  - `config` ← "sanitized" 명시
+  - `n_fewshot`, `exec_timeout_sec` ← 재현성 메타
+  - `per_problem` ← task_id / passed / error / completion per item
+- **예상 시간 / 셀**: ~30분~1h on 7B (257 × ~3s generate + ~0.1s exec timeout).
+- **paper baseline** (llama2 full_100): **51.58%** (NAIT Table 2).
+- **종속성**: human_eval 패키지 **불필요** — MBPP 채점은 자체 subprocess sandbox. (HumanEval 만 `pip install human-eval` 필요.)
+
+#### (d) `xquad` — google-deepmind/xquad
+
+- **Setup**: 11 언어 (NAIT 기준) — ar, de, el, en, es, hi, ru, th, tr, vi, zh. 각 언어당 5-shot SQuAD-style extractive QA. EM macro-avg over languages.
+- **Optional 12번째 언어**: `ro` (Romanian) — 로컬에 `xquad.ro.json` 이 있으면 자동 포함. NAIT-exact 비교를 원하면 `--languages ar,de,el,en,es,hi,ru,th,tr,vi,zh` 로 강제.
+- **Test size per language**: 1,190 questions × 11 = 13,090 (- 5-shot 데모 = 13,035 실제 채점).
+- **Few-shot source**: 같은 언어의 첫 5개 item (자동, deterministic).
+- **Generate template**: TyDiQA 와 동일한 `tydiqa_generation_prefix(..., demos=...)` — Context/Question/Answer SQuAD pattern.
+- **max_new_tokens**: 50 (extractive span 짧음).
+- **gold**: short text span. NFC normalize + lower + punctuation strip 후 string EM.
+- **Score JSON 키**:
+  - `accuracy` ← primary (alias of `macro_em`)
+  - `macro_em` ← 언어별 EM 평균 (NAIT 기준)
+  - `micro_em` ← 전체 13K 문제 합산 (진단용)
+  - `accuracy_em` ← TyDiQA-style key alias (호환성)
+  - `languages` ← 실제 평가된 언어 리스트
+  - `missing_languages` ← 데이터 없어서 skip한 언어들 — 비어있어야 정상
+  - `per_language` ← 언어별 EM dict
+- **예상 시간 / 셀**: ~6~10h on 7B (13K × generate 50 tokens × 1.5~2s).
+- **paper baseline** (llama2 full_100): **42.99%** (NAIT Table 2).
+
+### 14-5. 결과 파일 경로 (§5-1 layout 동일)
+
+각 셀당 9개 raw bench JSON + 1개 summary:
+
+```
+${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/
+  <experiment_label>-mmlu.json
+  <experiment_label>-mmlu_pro.json     ← 신규
+  <experiment_label>-gsm8k.json
+  <experiment_label>-svamp.json        ← 신규
+  <experiment_label>-humaneval.json
+  <experiment_label>-mbpp.json         ← 신규
+  <experiment_label>-tydiqa.json
+  <experiment_label>-xquad.json        ← 신규
+  <experiment_label>-bbh.json
+  <experiment_label>-eval_summary.json   (해당 invocation 의 벤치만 들어감 — §5-2.5 광역 scan으로 보완)
+```
+
+§5-2.5 광역 scan은 9 벤치 모두에 동일 적용. 누락 없이 9개 raw JSON 을 모아 점수표 셀에 반영.
+
+### 14-6. dispatch decision tree (에이전트가 매 tick 자문)
+
+```
+for cell in 16:
+  for bench in [mmlu, mmlu_pro, gsm8k, svamp, humaneval, mbpp, tydiqa, xquad, bbh]:
+    if status[cell] != "학습완료":         # sealed_n < target → 학습 안 끝남, skip
+        continue
+    if bench_done(cell, bench):           # §5-3 의 3-조건 만족
+        continue
+    if bench_inflight(cell, bench):       # pgrep / log mtime < 5분
+        continue
+    if bench == "bbh":
+        # 앞 8 벤치 모두 DONE 된 셀만 bbh 큐 진입
+        if not all(bench_done(cell, b) for b in [mmlu, mmlu_pro, gsm8k, svamp, humaneval, mbpp, tydiqa, xquad]):
+            continue
+    # 이 (cell, bench) 가 dispatch 대상
+    enqueue((cell, bench))
+```
+
+빈 GPU 1개당 큐의 1개 (cell, bench) 를 launch.
+
+### 14-7. 점수 표 (§0-4 (6)(7)(8)) — 9-column 으로 확장
+
+옛 5-column (`mmlu / gsm8k / humaneval / tydiqa / bbh`) → 새 9-column 순서:
+
+```
+mmlu  mmlu_pro  gsm8k  svamp  humaneval  mbpp  tydiqa  xquad  bbh
+```
+
+표 작성 규칙 (코드 펜스 + 고정폭 + `=======` separator + 모델 그룹 사이 빈 줄 1개)은 변경 없음 — 단지 컬럼이 4개 늘었을 뿐. 80-cell 검증 (`16 × 5 = 80`) → **144-cell 검증** (`16 × 9 = 144`).
+
+### 14-8. 발산 알람 (§13 기준치 비교)
+
+새 4 벤치에도 동일 ±2%p / ±5%p 임계 적용. `llama2 / full_100` 4개 셀(MMLU-Pro 21.89 / SVAMP 39.00 / MBPP 51.58 / XQuAD 42.99)이 paper-faithful reference. 다른 model / method 의 reference 는 사용자가 직접 측정해 §13 표에 채워넣어야 함 (NAIT 논문에 모델 4종 × method 4종 매트릭스 값이 다 있는 건 아님).
+
+### 14-9. 자주 발생할 수 있는 함정
+
+| 증상 | 원인 | 대처 |
+|---|---|---|
+| `mmlu_pro` 0~5% | 답 추출 실패 (모델이 A~J 안 씀, "The answer is …" 패턴 없음) | `n_extract_fail` 확인. >30%면 prompt_style / model SFT 의심. |
+| `svamp` 0~5% | gold가 float `5.0` vs model `5` mismatch | 이미 `_gold_answer` 에서 정수형 float은 `int(5)` 로 정규화 — 그래도 0이면 generate 자체가 실패 |
+| `mbpp` 모든 셀에서 pass@1 = 0 | subprocess timeout 너무 빡빡, 혹은 test_list assert 가 import 못 함 | `exec_timeout` 기본 10s — 일부 dynamic programming 문제는 더 필요할 수 있음. `per_problem[].error` field 의 "timeout" 비율 확인 |
+| `xquad` macro vs micro 큰 차이 | 일부 언어 0%, 다른 언어 정상 → tokenizer가 그 언어 unicode 못 다룸 | `per_language` 확인. 한 두 언어만 0이면 toknizer 한정 — 모델 prompt_style 점검 |
+| `xquad` 한 두 언어 데이터 없음 | `missing_languages` 가 비어있어야 정상 — 채워져있으면 download_xquad.sh 재실행 | `bash scripts/download_xquad.sh $XQUAD_DATA_DIR` |
