@@ -16,6 +16,8 @@ import string
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
+import torch
+
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import tydiqa_generation_prefix
 
@@ -680,6 +682,19 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 "prediction": pred,
                 "correct": ok,
             })
+
+            # Release per-example CUDA tensors so the next 5-shot prompt
+            # (~1.5k input + up to max_new_tokens generated) doesn't peak
+            # at 2× KV cache. Mirrors bbh.py / gsm8k.py / humaneval.py.
+            # ~5500 examples × ~10ms = ~55s overhead vs the OOM /
+            # fragmentation hang risk under concurrent multi-GPU eval.
+            # gen_ids is a slice-view of out, so it keeps the underlying
+            # storage alive even after `del out` — must drop it too for
+            # empty_cache() to actually reclaim the KV block.
+            del inputs, out, gen_ids
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             if (i + 1) % 100 == 0:
                 logger.info(
                     "  Progress: %d/%d | EM: %.4f",

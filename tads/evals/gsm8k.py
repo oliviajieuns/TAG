@@ -7,6 +7,8 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+import torch
+
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import build_cot_prompt_prefix
 
@@ -168,6 +170,15 @@ class GSM8KEvaluator(BenchmarkEvaluator):
                 "predicted": response,
                 "correct": ok,
             })
+
+            # Release per-example CUDA tensors before the next 8-shot prompt
+            # (~1k input + up to 256 generated tokens). Mirrors bbh.py /
+            # humaneval.py hygiene. Cheap (~10ms × 1319 = ~13s) vs the OOM /
+            # fragmentation hang risk under concurrent multi-GPU eval.
+            del inputs, out
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             if (i + 1) % 100 == 0:
                 logger.info(
                     "  Progress: %d/%d | Acc: %.4f",

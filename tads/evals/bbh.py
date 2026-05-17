@@ -29,6 +29,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import torch
+
 from .base import BenchmarkEvaluator, register
 
 logger = logging.getLogger(__name__)
@@ -334,6 +336,18 @@ class BBHEvaluator(BenchmarkEvaluator):
                 pred = _extract_answer(response)
                 if _normalize(pred) == _normalize(ex["target"]):
                     correct += 1
+
+                # Drop the per-example CUDA tensors and reclaim allocator
+                # blocks before the next 3072-token prompt is built. BBH
+                # accumulates ~6500 generate() calls per benchmark with
+                # prompt lengths near max_input_tokens; without periodic
+                # empty_cache the allocator fragments enough that a long
+                # task late in the run (notably tracking_shuffled_objects_*)
+                # can hang or OOM when it can't find a contiguous KV cache
+                # block. Mirrors the same hygiene humaneval.py:320 uses.
+                del inputs, out
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             n = len(test_examples)
             acc = correct / n if n else 0.0
