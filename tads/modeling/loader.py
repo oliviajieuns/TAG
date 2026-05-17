@@ -273,6 +273,24 @@ def load_for_eval(
     dev = torch.device(device)
     model = model.to(dev)
     model.eval()
+
+    # Clear baked-in generation_config defaults that conflict with the
+    # per-call kwargs every evaluator passes. Llama-2's config.json ships
+    # generation_config.max_length=4096, and several models also set
+    # temperature / top_p / top_k. transformers emits
+    #   "Both `max_new_tokens` (=N) and `max_length`(=M) seem to have been set..."
+    #   "`do_sample` is set to `False`. However, `temperature` is set to ..."
+    # on EVERY .generate() call when these defaults are present. Our evaluators
+    # each fire 1.3K–6.5K generate calls, so the warnings flood the log to the
+    # point that real per-task progress lines are unreadable. Nulling the
+    # fields here removes the conflict at the source — no information loss
+    # because evaluators always pass max_new_tokens explicitly, and
+    # temperature/top_p/top_k are ignored under do_sample=False anyway.
+    if hasattr(model, "generation_config") and model.generation_config is not None:
+        for _field in ("max_length", "temperature", "top_p", "top_k"):
+            if hasattr(model.generation_config, _field):
+                setattr(model.generation_config, _field, None)
+
     return model, tokenizer, dev
 
 

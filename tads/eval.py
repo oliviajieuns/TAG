@@ -171,6 +171,22 @@ def main() -> None:
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
     quiet_repeated_warnings()
 
+    # Silence the per-generate() warnings that fire 1.3K–6.5K times per
+    # benchmark and bury real progress lines. Defense-in-depth alongside the
+    # generation_config null-out in load_for_eval — some transformers versions
+    # also emit a top-level UserWarning via warnings.warn (not the dedup'd
+    # logger path), so we filter by message pattern here.
+    import warnings as _warnings
+    _warnings.filterwarnings(
+        "ignore", message=r".*max_new_tokens.*max_length.*",
+    )
+    _warnings.filterwarnings(
+        "ignore", message=r".*do_sample.*set to `False`.*",
+    )
+    _warnings.filterwarnings(
+        "ignore", message=r".*`temperature`.*will be ignored.*",
+    )
+
     # Eval is designed to run on a single GPU. If invoked under torchrun
     # (which sets RANK / LOCAL_RANK / WORLD_SIZE), only the rank-0 process
     # should run the evaluation — otherwise every worker re-runs the full
