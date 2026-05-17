@@ -66,6 +66,27 @@ def _read_parquet_dir(cfg_dir: str, split_prefix: str):
     return pd.concat(dfs, ignore_index=True)
 
 
+def _safe_list(v) -> List:
+    """Return v as a plain Python list. Handles None, numpy.ndarray (from
+    parquet sequence columns), pandas Series, and bare strings (wrapped
+    in a single-element list).
+
+    Necessary because `v or []` triggers the numpy
+    "truth value of an array with more than one element is ambiguous"
+    error when v is np.ndarray.
+    """
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        return [v]
+    try:
+        return list(v)
+    except TypeError:
+        return [v]
+
+
 def _build_mbpp_prompt(
     demos: List[Dict[str, Any]],
     test_item: Dict[str, Any],
@@ -73,20 +94,22 @@ def _build_mbpp_prompt(
     """3-shot MBPP CoT-style prompt ending right before the model's code."""
     chunks: List[str] = []
     for d in demos:
-        first_test = (d.get("test_list") or [""])[0]
+        tests = _safe_list(d.get("test_list"))
+        first_test = tests[0] if tests else ""
         chunks.append(
             "You are an expert Python programmer, and here is your task: "
-            f"{d['text']}\n"
+            f"{d.get('text', '')}\n"
             "Your code should pass these tests:\n\n"
             f"{first_test}\n\n"
             "[BEGIN]\n"
-            f"{d['code']}\n"
+            f"{d.get('code', '')}\n"
             "[DONE]\n\n"
         )
-    first_test = (test_item.get("test_list") or [""])[0]
+    tests = _safe_list(test_item.get("test_list"))
+    first_test = tests[0] if tests else ""
     chunks.append(
         "You are an expert Python programmer, and here is your task: "
-        f"{test_item['text']}\n"
+        f"{test_item.get('text', '')}\n"
         "Your code should pass these tests:\n\n"
         f"{first_test}\n\n"
         "[BEGIN]\n"
@@ -154,7 +177,7 @@ def _run_in_subprocess(code: str, test_list: List[str], setup: str, timeout: flo
     payload = json.dumps({
         "code": code,
         "setup": setup,
-        "tests": list(test_list or []),
+        "tests": _safe_list(test_list),
     })
     try:
         proc = subprocess.run(
@@ -279,7 +302,7 @@ class MBPPEvaluator(BenchmarkEvaluator):
             if "test_setup_code" not in cols:
                 if "test_imports" in cols:
                     df["test_setup_code"] = df["test_imports"].map(
-                        lambda x: "\n".join(list(x)) if x is not None else ""
+                        lambda x: "\n".join(str(i) for i in _safe_list(x))
                     )
                     logger.info(
                         "MBPP (%s/%s): derived `test_setup_code` from "
@@ -328,14 +351,30 @@ class MBPPEvaluator(BenchmarkEvaluator):
 
         # First num_fewshot records of `prompt` split — deterministic.
         demos = prompt_df.head(num_fewshot).to_dict("records")
+
+        def _coerce_setup(v) -> str:
+            if v is None:
+                return ""
+            if isinstance(v, float) and v != v:  # NaN
+                return ""
+            if isinstance(v, str):
+                return v
+            # If a mirror stored test_setup_code as list-of-imports, join.
+            try:
+                return "\n".join(str(x) for x in v)
+            except TypeError:
+                return str(v)
+
         # Convert test_list / test_setup_code numpy arrays → plain lists / str.
+        # Using _safe_list / _coerce_setup avoids the `arr or default` numpy
+        # ambiguous-truth bug.
         for d in demos:
-            d["test_list"] = list(d.get("test_list") or [])
-            d["test_setup_code"] = d.get("test_setup_code") or ""
+            d["test_list"] = _safe_list(d.get("test_list"))
+            d["test_setup_code"] = _coerce_setup(d.get("test_setup_code"))
         test_records = test_df.to_dict("records")
         for r in test_records:
-            r["test_list"] = list(r.get("test_list") or [])
-            r["test_setup_code"] = r.get("test_setup_code") or ""
+            r["test_list"] = _safe_list(r.get("test_list"))
+            r["test_setup_code"] = _coerce_setup(r.get("test_setup_code"))
         if limit is not None:
             test_records = test_records[:limit]
         logger.info(
