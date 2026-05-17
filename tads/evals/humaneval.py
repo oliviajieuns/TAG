@@ -34,6 +34,15 @@ _HUMANEVAL_STOP_SEQUENCES = (
     "\n\n\n",
     # Chat-style models often wrap code in ``` fences; cut at the closing one.
     "\n```",
+    # Alpaca-template SFT models often hallucinate a NEXT instruction/response
+    # turn after answering — `\n### Instruction:` / `\n### Response:`. Without
+    # this stop, the model fills max_new_tokens with garbage which then
+    # breaks the body-extraction (extra ### markers confuse text slicing).
+    "\n### Instruction",
+    "\n### Response",
+    # ChatML / Qwen variants of the same hallucinated-turn pattern.
+    "\n<|im_start|>",
+    "\n<|im_end|>",
 )
 
 
