@@ -13,6 +13,11 @@ bitsandbytes>=0.43
 # Optional eval extras
 lm-eval>=0.4
 pandas
+# HumanEval scoring — `evaluate_functional_correctness` lives in this package.
+# tads/evals/humaneval.py imports it lazily and raises a clear RuntimeError
+# if missing, so the rest of the eval suite still runs without it. Pin name
+# is `human-eval` (with hyphen) on PyPI; the import path is `human_eval`.
+human-eval>=1.0
 
 # Optional test
 pytest>=7

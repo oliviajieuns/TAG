@@ -25,6 +25,10 @@ dependencies = [
 eval = [
     "lm-eval>=0.4",
     "pandas",
+    # HumanEval functional-correctness scorer. Imported lazily by
+    # tads.evals.humaneval; missing-import is caught and surfaces a clear
+    # RuntimeError so the other 8 benches still run.
+    "human-eval>=1.0",
 ]
 test = [
     "pytest>=7",
