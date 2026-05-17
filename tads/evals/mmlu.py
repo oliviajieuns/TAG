@@ -259,6 +259,10 @@ class MMLUEvaluator(BenchmarkEvaluator):
                 _trunc_count, total_total,
             )
         summary = {
+            # `accuracy` is the cross-bench primary-metric alias the score-board
+            # reader picks up without bench-specific branching. `overall_accuracy`
+            # remains the bench-natural key.
+            "accuracy": overall,
             "overall_accuracy": overall,
             "total_correct": total_correct,
             "total_questions": total_total,

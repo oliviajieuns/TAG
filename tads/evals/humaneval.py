@@ -317,6 +317,10 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             # high-water mark for 164 problems × 20 samples stays at the
             # union of everything ever allocated and pushes a 7B run past
             # 80 GB even though the steady state would fit in ~30 GB.
+            # Drop `inputs` BEFORE empty_cache so the allocator can actually
+            # reclaim the prefix tensor (would otherwise survive until the
+            # next problem's `inputs = ...` rebinding).
+            del inputs
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 

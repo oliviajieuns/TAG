@@ -375,6 +375,12 @@ class BBHEvaluator(BenchmarkEvaluator):
         micro_avg = total_correct / total_count if total_count else 0.0
 
         summary = {
+            # `accuracy` is the cross-bench primary-metric alias the score-board
+            # reader picks up without bench-specific branching. NAIT/BBH uses
+            # macro-avg across tasks as the headline (paper Table 2), so that's
+            # what `accuracy` mirrors. `macro_avg_accuracy` stays as the
+            # bench-natural key.
+            "accuracy": macro_avg,
             "macro_avg_accuracy": macro_avg,
             "micro_avg_accuracy": micro_avg,
             "total_correct": total_correct,

@@ -721,6 +721,10 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 100.0 * n_silent_zero_shot / max(1, len(examples)),
             )
         summary = {
+            # `accuracy` is the cross-bench primary-metric alias the score-board
+            # reader picks up without bench-specific branching. `accuracy_em`
+            # remains the bench-natural key.
+            "accuracy": accuracy,
             "accuracy_em": accuracy,
             "correct": correct,
             "total": len(examples),
