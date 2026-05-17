@@ -131,9 +131,17 @@ def parse_args() -> argparse.Namespace:
     )
     # Per-benchmark data dir overrides.
     p.add_argument("--mmlu_data_dir", default=None)
+    p.add_argument("--mmlu_pro_data_dir", default=None,
+                   help="MMLU-Pro root containing test-*.parquet + validation-*.parquet.")
     p.add_argument("--gsm8k_data_dir", default=None)
+    p.add_argument("--svamp_data_dir", default=None,
+                   help="SVAMP root containing test-*.parquet.")
     p.add_argument("--humaneval_data_dir", default=None)
+    p.add_argument("--mbpp_data_dir", default=None,
+                   help="MBPP root containing sanitized/ (+ optional full/) subdirs.")
     p.add_argument("--tydiqa_data_dir", default=None)
+    p.add_argument("--xquad_data_dir", default=None,
+                   help="XQuAD root containing xquad.<lang>.json files.")
     p.add_argument("--bbh_data_dir", default=None,
                    help="BBH root containing per-task .json + cot-prompts/.")
     # lm_harness extras.
@@ -434,10 +442,14 @@ def main() -> None:
     prompt_style = cfg.get("prompt_style", "alpaca_default")
     cli_paths = {
         "mmlu_data_dir": args.mmlu_data_dir,
+        "mmlu_pro_data_dir": args.mmlu_pro_data_dir,
         "gsm8k_data_dir": args.gsm8k_data_dir,
+        "svamp_data_dir": args.svamp_data_dir,
         "humaneval_data_dir": args.humaneval_data_dir,
+        "mbpp_data_dir": args.mbpp_data_dir,
         "bbh_data_dir": args.bbh_data_dir,
         "tydiqa_data_dir": args.tydiqa_data_dir,
+        "xquad_data_dir": args.xquad_data_dir,
     }
 
     summaries = []

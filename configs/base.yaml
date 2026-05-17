@@ -10,9 +10,13 @@ output_root: ${oc.env:OUTPUT_ROOT,/group-volume/minsoo3.kim/tads-checkpoints}
 
 # --- Benchmark data dirs (used by `python -m tads.eval`) ---
 mmlu_data_dir: ${oc.env:MMLU_DATA_DIR,/group-volume/IT-datasets/mmlu/all}
+mmlu_pro_data_dir: ${oc.env:MMLU_PRO_DATA_DIR,/group-volume/IT-datasets/mmlu_pro}
 gsm8k_data_dir: ${oc.env:GSM8K_DATA_DIR,/group-volume/IT-datasets/gsm8k}
+svamp_data_dir: ${oc.env:SVAMP_DATA_DIR,/group-volume/IT-datasets/svamp}
 humaneval_data_dir: ${oc.env:HUMANEVAL_DATA_DIR,/group-volume/IT-datasets/human-eval}
+mbpp_data_dir: ${oc.env:MBPP_DATA_DIR,/group-volume/IT-datasets/mbpp}
 tydiqa_data_dir: ${oc.env:TYDIQA_DATA_DIR,/group-volume/IT-datasets/tydiqa}
+xquad_data_dir: ${oc.env:XQUAD_DATA_DIR,/group-volume/IT-datasets/xquad}
 bbh_data_dir: ${oc.env:BBH_DATA_DIR,/group-volume/IT-datasets/bbh}
 
 # --- Dataset (Alpaca-GPT4 by default; matches NAIT ICLR 2026, Peng et al. 2023) ---

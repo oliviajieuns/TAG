@@ -7,7 +7,18 @@ need only add a file under ``tads/evals/`` and decorate their class.
 from .base import BenchmarkEvaluator, register, get_evaluator, list_evaluators
 
 # Eager imports populate the registry.
-from . import mmlu, gsm8k, humaneval, tydiqa, bbh, lm_harness  # noqa: F401
+from . import (  # noqa: F401
+    mmlu,
+    mmlu_pro,
+    gsm8k,
+    svamp,
+    humaneval,
+    mbpp,
+    tydiqa,
+    xquad,
+    bbh,
+    lm_harness,
+)
 
 __all__ = [
     "BenchmarkEvaluator",

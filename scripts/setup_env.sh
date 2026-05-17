@@ -41,9 +41,13 @@ export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/tads-ev
 
 # --- Benchmark data dirs ---
 export MMLU_DATA_DIR="${MMLU_DATA_DIR:-/group-volume/IT-datasets/mmlu/all}"
+export MMLU_PRO_DATA_DIR="${MMLU_PRO_DATA_DIR:-/group-volume/IT-datasets/mmlu_pro}"
 export GSM8K_DATA_DIR="${GSM8K_DATA_DIR:-/group-volume/IT-datasets/gsm8k}"
+export SVAMP_DATA_DIR="${SVAMP_DATA_DIR:-/group-volume/IT-datasets/svamp}"
 export HUMANEVAL_DATA_DIR="${HUMANEVAL_DATA_DIR:-/group-volume/IT-datasets/human-eval}"
+export MBPP_DATA_DIR="${MBPP_DATA_DIR:-/group-volume/IT-datasets/mbpp}"
 export TYDIQA_DATA_DIR="${TYDIQA_DATA_DIR:-/group-volume/IT-datasets/tydiqa}"
+export XQUAD_DATA_DIR="${XQUAD_DATA_DIR:-/group-volume/IT-datasets/xquad}"
 export BBH_DATA_DIR="${BBH_DATA_DIR:-/group-volume/IT-datasets/bbh}"
 
 # --- Runtime hygiene ---
@@ -183,9 +187,13 @@ _tads_warn ALPACA_DATA_FILES      "$ALPACA_DATA_FILES"      "Alpaca-GPT4 trainin
 
 # Required for evaluation (only matter if you actually run that benchmark)
 _tads_warn MMLU_DATA_DIR          "$MMLU_DATA_DIR"          "MMLU 'all' parquet directory"
+_tads_warn MMLU_PRO_DATA_DIR      "$MMLU_PRO_DATA_DIR"      "MMLU-Pro dir (test-*.parquet + validation-*.parquet — run scripts/download_mmlu_pro.sh \$MMLU_PRO_DATA_DIR)"
 _tads_warn GSM8K_DATA_DIR         "$GSM8K_DATA_DIR"         "GSM8K root (contains main/test*.parquet)"
+_tads_warn SVAMP_DATA_DIR         "$SVAMP_DATA_DIR"         "SVAMP dir (test-*.parquet — run scripts/download_svamp.sh \$SVAMP_DATA_DIR)"
 _tads_warn HUMANEVAL_DATA_DIR     "$HUMANEVAL_DATA_DIR"     "HumanEval dir (contains HumanEval.jsonl.gz — run scripts/download_humaneval.sh \$HUMANEVAL_DATA_DIR to fetch; also needs 'pip install human-eval' for scoring)"
+_tads_warn MBPP_DATA_DIR          "$MBPP_DATA_DIR"          "MBPP dir (sanitized/test-*.parquet + sanitized/prompt-*.parquet — run scripts/download_mbpp.sh \$MBPP_DATA_DIR)"
 _tads_warn TYDIQA_DATA_DIR        "$TYDIQA_DATA_DIR"        "TyDiQA dir (HF parquet: validation-00000-of-00001.parquet + train-00000-of-00001.parquet — run scripts/download_tydiqa.sh \$TYDIQA_DATA_DIR to fetch)"
+_tads_warn XQUAD_DATA_DIR         "$XQUAD_DATA_DIR"         "XQuAD dir (xquad.<lang>.json files for 11 languages — run scripts/download_xquad.sh \$XQUAD_DATA_DIR)"
 _tads_warn BBH_DATA_DIR           "$BBH_DATA_DIR"           "BBH directory (contains <task>.json + optional cot-prompts/)"
 
 # -----------------------------------------------------------------------------
