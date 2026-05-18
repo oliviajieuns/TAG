@@ -1,0 +1,20 @@
+# LIMA (Zhou et al., 2023) baseline — uses `python -m tads.baselines.lima.train`.
+#
+# LIMA은 selection 알고리즘이 아니라 1030-sample hand-curated 데이터셋이다.
+# `selection_ratio`는 무의미하지만 cross-method 비교를 위해 1.0으로 둠.
+#
+# Eval output convention:
+#   Training checkpoints → ${OUTPUT_ROOT}/...
+#   Eval results         → ${LIMA_EVAL_RESULTS_ROOT}/...   (별도 root,
+#                                                           setup_env.sh에 추가)
+#
+# 데이터: HF gated `GAIR/lima` (1030 rows). 첫 실행 전:
+#   huggingface-cli login
+#   # 데이터셋 페이지에서 access 동의
+# 또는 local mirror:
+#   export LIMA_DATA_FILES=/path/to/lima.{json,jsonl}
+method: lima
+selection_ratio: 1.0
+lima:
+  # local mirror path; optional. CLI env > cfg.
+  # data_files: /group-volume/IT-datasets/lima/train.jsonl

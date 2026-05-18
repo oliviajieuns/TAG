@@ -31,23 +31,43 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_rating_token_ids(tokenizer) -> List[int]:
-    """Return the token ids for the bare digits "1".."5" using the model's
-    own tokenizer. On LLaMA-2 SentencePiece this yields [29896, 29906, 29941,
-    29946, 29945] — matching the hard-coded ids in the official repo.
+    """Return the token ids for the bare digits "1".."5".
 
-    Raises if any digit is not a single token (some BPE tokenizers split it
-    differently — those models need a per-tokenizer scoring strategy).
+    On LLaMA-2 SentencePiece, `tokenizer.encode("1", add_special_tokens=False)`
+    actually returns ``[29871, 29896]`` — the SP model prefixes a leading
+    whitespace marker (▁, id 29871) before the digit. The official SelectIT
+    code sidesteps this by hard-coding ``[29896, 29906, 29941, 29946, 29945]``.
+
+    Strategy here:
+        1. Try `convert_tokens_to_ids(digit)`. SP-based tokenizers map the bare
+           digit token "1" directly to its single vocab id (29896 for LLaMA-2)
+           without any whitespace prefix — this matches the official repo's
+           hard-coded constant exactly.
+        2. Fallback: `encode(digit, add_special_tokens=False)` and take the
+           LAST token — that strips a leading ▁ marker if present, leaving the
+           digit's vocab id.
+        3. Raise only if both yield no usable id.
     """
     ids: List[int] = []
+    unk_id = getattr(tokenizer, "unk_token_id", None)
     for digit in ("1", "2", "3", "4", "5"):
+        # (1) direct vocab lookup
+        candidate = tokenizer.convert_tokens_to_ids(digit)
+        if candidate is not None and candidate != unk_id and isinstance(candidate, int):
+            ids.append(int(candidate))
+            continue
+        # (2) encode-and-take-last
         toks = tokenizer.encode(digit, add_special_tokens=False)
-        if len(toks) != 1:
+        if not toks:
             raise ValueError(
-                f"Tokenizer split rating digit {digit!r} into {toks} — "
-                f"SelectIT scoring expects single-token rating digits. "
-                f"This tokenizer may need a custom rating-id resolver."
+                f"Tokenizer produced empty encoding for rating digit {digit!r}."
             )
-        ids.append(int(toks[0]))
+        ids.append(int(toks[-1]))
+    if len(set(ids)) != 5:
+        raise ValueError(
+            f"Resolved rating token ids are not unique: {ids}. This tokenizer "
+            f"collapses digit tokens — SelectIT scoring won't work unmodified."
+        )
     return ids
 
 

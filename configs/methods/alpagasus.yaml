@@ -1,0 +1,20 @@
+# AlpaGasus (Chen et al., 2024) baseline — uses `python -m tads.baselines.alpagasus.train`.
+#
+# Official repo의 pre-filtered JSON (`chatgpt_9k.json` etc.) 사용 — GPT-4 API
+# 호출 불필요. Filtered 9k instruction 텍스트를 우리 Alpaca-GPT4 raw와 매칭해
+# 선택 indices를 복원, 그 subset으로 SFT.
+#
+# Eval output convention:
+#   Training checkpoints → ${OUTPUT_ROOT}/...
+#   Eval results         → ${ALPAGASUS_EVAL_RESULTS_ROOT}/...   (별도 root)
+#
+# 데이터: 첫 실행 전 official repo에서 filtered JSON 다운로드:
+#   wget https://raw.githubusercontent.com/gpt4life/alpagasus/main/data/filtered/chatgpt_9k.json
+#   export ALPAGASUS_FILTERED_FILE=/path/to/chatgpt_9k.json
+method: alpagasus
+# 의미상 ratio가 아니라 absolute count (9k / 52k ≈ 17.3%). selection_ratio는
+# 다른 method와의 비교 표시 용도로만 사용.
+selection_ratio: 0.173
+alpagasus:
+  # 절대 경로 또는 env $ALPAGASUS_FILTERED_FILE 우선.
+  # filtered_file: /group-volume/IT-datasets/alpagasus/chatgpt_9k.json

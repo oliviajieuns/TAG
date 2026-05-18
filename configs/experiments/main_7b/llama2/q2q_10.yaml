@@ -1,0 +1,15 @@
+# Llama-2-7B + Q2Q / Cherry_LLM (Li et al., 2024 NAACL) at 10% selection
+#
+# 실행:
+#   source scripts/setup_env.sh
+#   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.q2q.train \
+#       --config configs/experiments/main_7b/llama2/q2q_10.yaml \
+#       --tag Q2Q-Top10
+defaults:
+  - configs/base.yaml
+  - configs/methods/q2q.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/llama2/q2q_10
+selection_ratio: 0.1

@@ -1,0 +1,21 @@
+# Q2Q / Cherry_LLM (Li et al., 2024 NAACL) baseline — uses `python -m tads.baselines.q2q.train`.
+#
+# IFD(x,y) = PPL(y|x) / PPL(y)로 sample 별 score 계산. paper §3.3에 따라
+# IFD ∈ [ifd_low, ifd_high] (default 0.5–1.0) 필터 후 selection_ratio top-K.
+#
+# 주의: 본 구현은 paper의 precursor (brief-experience) model SFT 단계를 생략하고
+# base model로 직접 IFD를 계산한다 (paper §3.2 simplification). full pipeline이
+# 필요하면 `q2q.use_precursor: true` 후속 작업 (현재 미구현).
+#
+# Eval output convention:
+#   Training checkpoints → ${OUTPUT_ROOT}/...
+#   Eval results         → ${Q2Q_EVAL_RESULTS_ROOT}/...   (별도 root)
+method: q2q
+selection_ratio: 0.1
+q2q:
+  # Cherry_LLM paper §3.3 ablation에 따른 IFD range. 너무 낮으면 trivial sample,
+  # 너무 높으면 noise/unsolvable로 보고.
+  ifd_low: 0.5
+  ifd_high: 1.0
+  # Precursor SFT는 미구현 — base model로 직접 score.
+  use_precursor: false

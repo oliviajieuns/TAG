@@ -1,0 +1,15 @@
+# Llama-2-7B + AlpaGasus (Chen et al., 2024) — pre-filtered Alpaca subset
+#
+# 실행:
+#   source scripts/setup_env.sh
+#   export ALPAGASUS_FILTERED_FILE=/path/to/chatgpt_9k.json
+#   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.alpagasus.train \
+#       --config configs/experiments/main_7b/llama2/alpagasus.yaml \
+#       --tag AlpaGasus-ChatGPT-9k
+defaults:
+  - configs/base.yaml
+  - configs/methods/alpagasus.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/llama2/alpagasus
