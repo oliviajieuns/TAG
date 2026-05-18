@@ -31,7 +31,11 @@ _HUMANEVAL_STOP_SEQUENCES = (
     "\n#",
     "\nif __name__",
     "\nprint(",
-    "\n\n\n",
+    # Audit A1: removed "\n\n\n" — bigcode-eval/openai-human-eval don't use it,
+    # and HumanEval gold solutions occasionally include triple-blank separators
+    # between helper functions. Truncating there clipped valid completions and
+    # depressed pass@1 differentially across models that emit more vs fewer
+    # blank lines in their codestyle.
     # Chat-style models often wrap code in ``` fences; cut at the closing one.
     "\n```",
     # Alpaca-template SFT models often hallucinate a NEXT instruction/response

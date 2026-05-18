@@ -76,12 +76,17 @@ def _extract_answer(text: str) -> str:
                 if m2:
                     return m2[-1].group(0)
             return candidate
-    # Phase 2: no explicit "answer is" — look for canonical BBH labels
-    # anywhere in the response and return the LAST occurrence.
-    for lpat in _BBH_LABEL_PATTERNS:
-        ms = list(lpat.finditer(text))
-        if ms:
-            return ms[-1].group(0)
+    # Phase 2: no explicit "answer is" — search ONLY the last non-empty line
+    # for canonical BBH labels. Searching the whole response (previous behaviour)
+    # picked up labels inside reasoning prose like "if it were True, then ..."
+    # and flipped the extracted answer at random. (Audit A3.)
+    _lines_p2 = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    if _lines_p2:
+        _last_line_p2 = _lines_p2[-1]
+        for lpat in _BBH_LABEL_PATTERNS:
+            m = lpat.search(_last_line_p2)
+            if m:
+                return m.group(0)
     # Last-resort: last non-empty line. For BBH numeric / word-form tasks that
     # don't match any (A)/(B)/Yes/No/True/False label, a full trailing sentence
     # like "The answer is 42 approximately." used to be returned verbatim and

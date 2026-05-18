@@ -200,7 +200,11 @@ class XQuADEvaluator(BenchmarkEvaluator):
         limit: Optional[int] = None,
         prompt_style: str = "alpaca_default",
         data_dir: Optional[str] = None,
-        max_new_tokens: int = 50,
+        # Audit A2: bumped 50 → 80. XQuAD answers in Thai/Chinese/Vietnamese
+        # can exceed 50 subword tokens with the Llama tokenizer; the stop_strings
+        # short-circuit short answers before 80 so wall-time impact is small
+        # (~5% per lang) while long-span EM stops silently failing.
+        max_new_tokens: int = 80,
         n_fewshot: int = 5,
         max_input_tokens: int = 2048,
         languages: Optional[List[str]] = None,
@@ -270,15 +274,40 @@ class XQuADEvaluator(BenchmarkEvaluator):
         # tidy without the per-step sync cost.
         _seen_global = 0
 
+        # Audit A5: pull demos from the English split for all non-English target
+        # languages (NAIT/Artetxe cross-lingual convention: English exemplar →
+        # target-language test). Previously each language used its OWN test
+        # split's first n_fewshot items as demos, which (a) shrunk the eval set
+        # to (1190 - n_fewshot)/lang and (b) deviated from the standard
+        # cross-lingual eval setup. English itself still uses its own first
+        # n_fewshot rows as demos.
+        _en_items = per_lang_items.get("en")
+        shared_en_demos = (
+            _build_demos(_en_items, n_fewshot)
+            if _en_items is not None and len(_en_items) > n_fewshot
+            else None
+        )
+        if shared_en_demos is None:
+            logger.warning(
+                "XQuAD: xquad.en unavailable or too short — falling back to "
+                "per-language demos from each test split (legacy behaviour, "
+                "not paper-faithful for cross-lingual evaluation)."
+            )
+
         for lang, items in per_lang_items.items():
-            if len(items) <= n_fewshot:
-                logger.warning(
-                    "XQuAD/%s: only %d items, skipping (need > n_fewshot=%d)",
-                    lang, len(items), n_fewshot,
-                )
-                continue
-            demos = _build_demos(items, n_fewshot)
-            test_items = items[n_fewshot:]
+            if shared_en_demos is not None and lang != "en":
+                demos = shared_en_demos
+                test_items = items  # full eval set; demos come from xquad.en
+            else:
+                # English itself, or fallback when xquad.en is missing.
+                if len(items) <= n_fewshot:
+                    logger.warning(
+                        "XQuAD/%s: only %d items, skipping (need > n_fewshot=%d)",
+                        lang, len(items), n_fewshot,
+                    )
+                    continue
+                demos = _build_demos(items, n_fewshot)
+                test_items = items[n_fewshot:]
             if limit is not None:
                 test_items = test_items[:limit]
 

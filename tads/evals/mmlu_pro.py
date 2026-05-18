@@ -60,6 +60,15 @@ def _extract_answer(text: str, n_options: int) -> Optional[str]:
     silently accepted as letter index 5.
     """
     valid = set(LETTERS[:n_options])
+    # Audit A4: truncate at the first hallucinated next-question boundary so
+    # a leaked next-demo "answer is X" can't override the real answer when
+    # the LAST-match Phase 1 rule fires. stop_strings catches most of these
+    # at generation time but a belt-and-braces trim here is cheap.
+    for _boundary in ("\nQuestion:", "\n\nQuestion:", "\nQ:", "\n\nQ:"):
+        _idx = text.find(_boundary)
+        if _idx != -1:
+            text = text[:_idx]
+            break
     # Phase 1: explicit "answer is" patterns. Use the LAST match in case the
     # model self-corrects ("The answer is A. Wait, let me redo... The answer
     # is C.").
@@ -75,12 +84,10 @@ def _extract_answer(text: str, n_options: int) -> Optional[str]:
         cand = pm[-1].group(1).upper()
         if cand in valid:
             return cand
-    # Phase 3: last bare letter anywhere — weak signal, but better than None.
-    bm = list(_BARE_LETTER.finditer(text))
-    if bm:
-        cand = bm[-1].group(1).upper()
-        if cand in valid:
-            return cand
+    # Phase 3 REMOVED (Audit A4): "last bare letter anywhere" was picking up
+    # stray A/I from CoT prose ("A triangle...", "I think...") and biasing
+    # accuracy randomly. Returning None counts the example as wrong, which is
+    # the honest signal when no anchored answer cue is present.
     return None
 
 
