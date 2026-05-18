@@ -18,7 +18,7 @@ mmlu  →  mmlu_pro  →  gsm8k  →  svamp  →  humaneval  →  mbpp  →  tyd
 
 **dispatch unit 총량 변경**: 16 cells × 5 benches = **80** → 16 cells × 9 benches = **144** (cell, bench) pair.
 
-**§13 reference 표 / §0-4 (6)(7)(8) 점수 표 / §0-5 dashboard 모두 9 컬럼으로 확장.** 본문 곳곳에 남아있는 "5 벤치" / "80 셀" wording은 sweep 미완 — operational decision은 본 banner의 9-bench 정의를 따른다. 자세한 사양은 §14 (밑) 참조.
+**§13 reference 표 / §0-4 (1)-(8) 점수 표 / §0-5 dashboard 모두 9 컬럼으로 확장 (2026-05-18 본문 전체 sweep 완료).** "5 벤치" / "80 셀" wording은 historical narrative(§14 인트로, top banner 변경 announcement)에만 남아있고 operational instruction은 모두 9-bench / 144-cell. 자세한 사양은 §14 (밑) 참조.
 
 primary metric (JSON 파일의 점수 표 추출 키):
 
@@ -80,11 +80,11 @@ primary metric (JSON 파일의 점수 표 추출 키):
 
 # 🛑🛑🛑 EVAL IS THE AGENT'S JOB — LAUNCH, NOT JUST POLL 🛑🛑🛑
 
-**에이전트의 핵심 의무는 eval을 직접 launch하는 것이다 (5 벤치 전부 자동).** log 추출 + 점수 표 갱신만 하고 끝내는 게 아니라:
+**에이전트의 핵심 의무는 eval을 직접 launch하는 것이다 (9 벤치 전부 자동).** log 추출 + 점수 표 갱신만 하고 끝내는 게 아니라:
 
 1. **반드시 매 tick에서 `eval대기` 셀과 빈 GPU를 매칭해 `python -m tads.eval`을 직접 실행한다.** 이게 안 되면 tick 실패. PRE-FLIGHT CHECK 15 참조.
 2. 로그 polling(§0-7)은 **dispatch의 입력 신호일 뿐, 그 자체가 deliverable이 아님**. 로그만 읽고 표만 그리는 건 임무 미완.
-3. "사용자가 직접 eval을 launch하길 기다린다"는 옛 정책(폐기됨). 2026-05-16 이후 eval은 **에이전트가 cron 주기마다 자동 dispatch**한다. 사용자 개입 0 (BBH 포함, 5 벤치 전부).
+3. "사용자가 직접 eval을 launch하길 기다린다"는 옛 정책(폐기됨). 2026-05-16 이후 eval은 **에이전트가 cron 주기마다 자동 dispatch**한다. 사용자 개입 0 (BBH 포함, 9 벤치 전부).
 
 ## ✅ BBH 포함 9 벤치 전부 자동 (BBH는 가장 마지막 순서)
 
@@ -149,25 +149,23 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 
 ---
 
-# 🚨 용어 명확화 — "5"는 벤치마크 데이터 5개를 가리킨다 🚨
+# 🚨 용어 명확화 — 벤치마크(9) vs 상태 토큰(5) 🚨
 
-이 문서에서 **"5"는 항상 벤치마크 데이터 5개** (`mmlu` / `gsm8k` / `humaneval` / `tydiqa` / `bbh`) 를 의미한다. 다른 용도로 "5"를 쓰지 말 것 — 모델별 점수 표 컬럼 수, 80-cell 표의 점수 컬럼 수, dashboard column 수 모두 이 5개 벤치마크에서 유래.
+두 개의 별개 어휘 집합이 있다. 숫자가 다르므로 혼동 위험은 낮지만 명시:
 
-**상태 토큰** (`학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%`) 은 별개 개념 — 셀 값으로 들어가는 어휘이지 "5"라는 숫자와 무관 (현재 5개 토큰이 정의돼 있지만 spec 진화로 추가될 수도 있어 "5-state" 같은 카운트 기반 이름은 쓰지 않음).
-
-| 명칭 | 개수 (의미) | 무엇 | 예시 |
+| 명칭 | 개수 | 무엇 | 값 |
 |---|---|---|---|
-| **벤치마크** | 항상 5 | 점수 컬럼 이름 (= 평가 데이터셋 종류) | `mmlu` / `gsm8k` / `humaneval` / `tydiqa` / `bbh` |
-| **상태 토큰** | (incidental count) | 셀 값으로 들어가는 어휘 | `학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%` |
+| **벤치마크** | **9** | 점수 컬럼 이름 (= 평가 데이터셋 종류) | `mmlu` / `mmlu_pro` / `gsm8k` / `svamp` / `humaneval` / `mbpp` / `tydiqa` / `xquad` / `bbh` |
+| **상태 토큰** | 5 (현재) | 셀 값으로 들어가는 어휘 (incidental count — spec 진화 시 추가 가능) | `학습전` / `학습중` / `eval대기` / `eval중` / `NN.NN%` |
 
 §0-4 (6)/(7)/(8) 테이블 구조:
-- **컬럼**: # / Model/Method / **벤치마크 5개** / Status / Params.
+- **컬럼**: # / Model/Method / **벤치마크 9개** / Status / Params.
 - **각 (행, 벤치마크) 교차점의 셀 값**: **상태 토큰** 중 하나.
 
 용어 사용 규칙:
-- "5개 벤치마크" / "5개 점수 컬럼" / "5종 벤치마크" — OK (벤치마크 데이터 갯수).
+- "9개 벤치마크" / "9개 점수 컬럼" / "9종 벤치마크" — OK (벤치마크 데이터 갯수).
 - "상태 토큰" — OK (셀에 들어가는 어휘 통칭).
-- "5-state" / "5종 상태" / "5종 어휘" / "5종 마커" / "5 상태" — **금지** (의미 혼동). 옛 spec에 적혀 있던 자리는 모두 "상태 토큰"으로 의미함.
+- "5-state" / "5종 상태" / "5종 어휘" / "5종 마커" — **금지** (카운트 기반 이름 안 씀, spec이 진화하면 토큰 수도 변경 가능).
 
 ---
 
@@ -183,7 +181,7 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 [CHECK 05] (6) Current 코드펜스 안에 "Params" 컬럼이 헤더로 들어있다.
 [CHECK 06] (7) Latest 코드펜스 안에 "Params" 컬럼이 헤더로 들어있다.
 [CHECK 07] (8) Best 코드펜스 안에 "Params" 컬럼이 헤더로 들어있다.
-[CHECK 08] (6) Current 80개 셀(16행 × 5벤치 = 80개 값)에 단 하나의
+[CHECK 08] (6) Current 144개 셀(16행 × 9벤치 = 144개 값)에 단 하나의
             `-` / `err` / 공란이 없다 — 전부 상태 토큰(학습전/학습중/
             eval대기/eval중/NN.NN%) 중 하나.
 [CHECK 09] (9) History의 이번 tick 변경분이 newest-at-bottom으로
@@ -277,17 +275,17 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 
 에이전트가 해야 할 일:
 
-1. 매 tick (§9 cron) 마다 16 × 5 = 80개 셀 전체의 상태를 분류 (§5-4 / §0-5)
+1. 매 tick (§9 cron) 마다 16 × 9 = 144개 셀 전체의 상태를 분류 (§5-4 / §0-5)
 2. 분류는 **상태별 신호 분리** (§0 정책):
    - **학습전 / 학습중 / eval대기 / NN.NN%** (4종) — filesystem only (sealed epoch / `_latest/_complete` / summary mtime).
    - **eval중만** process state (`pgrep`) + log mtime — 잡이 살아있는지 가장 직접적으로 확인하기 위한 예외.
-3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch (5 벤치 전부 자동, bbh는 마지막 순서):
+3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch (9 벤치 전부 자동, bbh는 마지막 순서):
    - **운영 가정 (사용자 명시)**: 노드에 학습이 동시에 안 돈다. eval만 진행.
    - 1셀 = 1 GPU = 1명령 (§4-1). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지.
    - `CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval --config ... --benchmarks <single_bench> --out_dir ... &` — 단일 벤치, 한 cell의 앞 벤치가 DONE되어야 다음 벤치 enqueue.
    - 빈 GPU가 K개면 매 tick K개 (cell, bench) pair launch (큐 나머지는 다음 tick — 매 tick continuous).
-   - 5 benchmark 16셀 전부 DONE될 때까지 에이전트 혼자서 자동 진행. 사용자 개입 0.
-   - **벤치 순서**: `mmlu → gsm8k → humaneval → tydiqa → bbh`. bbh는 셀당 ~15h+ 라 마지막에 배치 (다른 4개 다 끝난 셀만 bbh enqueue).
+   - 9 benchmark 16셀 전부 DONE될 때까지 에이전트 혼자서 자동 진행. 사용자 개입 0.
+   - **벤치 순서**: `mmlu → mmlu_pro → gsm8k → svamp → humaneval → mbpp → tydiqa → xquad → bbh`. bbh는 셀당 ~15h+ 라 마지막에 배치 (앞 8개 벤치 다 끝난 셀만 bbh enqueue).
 4. 결과를 `experiments.md` 점수 표 (§0-4) + status dashboard (§0-5) + per-cell HISTORY.md (§0-6)에 atomic으로 기록
 5. **체크포인트가 없는 셀(`학습전`)** 은 사용자에게 명시적으로 보고 — "이 셀은 사용자가 학습을 돌려야 한다"는 신호. **`eval대기` 는 보고 + 자동 launch 양쪽 다 수행**.
 
@@ -302,19 +300,19 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 
 이미 평가된 체크포인트는 건너뛴다 (DONE 판정 후 점수만 표에 반영, 재실행 안 함).
 
-### 0-1. 최종 결과 매트릭스 (목표 = 80개 셀)
+### 0-1. 최종 결과 매트릭스 (목표 = 144개 셀)
 
 | 축 | 개수 | 값 |
 |---|---|---|
 | 모델 | **4** | `llama2`, `qwen25`, `mistral`, `deepseek` |
 | 메서드(실험) | **4** | `full_100`, `random_10`, `data_agent_10`, `tads_10` |
-| 벤치마크 | **5** | `mmlu`, `gsm8k`, `humaneval`, `tydiqa`, `bbh` |
+| 벤치마크 | **9** | `mmlu`, `mmlu_pro`, `gsm8k`, `svamp`, `humaneval`, `mbpp`, `tydiqa`, `xquad`, `bbh` |
 
-→ 4 × 4 × 5 = **80개** (모델, 메서드, 벤치마크) 결과 셀.
+→ 4 × 4 × 9 = **144개** (모델, 메서드, 벤치마크) 결과 셀.
 
-에이전트 단위는 (모델, 메서드) = **16개 셀**. 각 셀의 자동 eval 호출은 **단일 벤치 단위** 로 5번 dispatch — `mmlu → gsm8k → humaneval → tydiqa → bbh`. 16 cells × 5 benches = 80 (cell, bench) pair 가 매 tick 큐에 들어가 빈 GPU 만큼 launch.
+에이전트 단위는 (모델, 메서드) = **16개 셀**. 각 셀의 자동 eval 호출은 **단일 벤치 단위** 로 9번 dispatch — `mmlu → mmlu_pro → gsm8k → svamp → humaneval → mbpp → tydiqa → xquad → bbh`. 16 cells × 9 benches = 144 (cell, bench) pair 가 매 tick 큐에 들어가 빈 GPU 만큼 launch.
 
-진행 상황은 "16개 중 N개 완료 / 80개 중 M개 점수 산출"로 보고할 것.
+진행 상황은 "16개 중 N개 완료 / 144개 중 M개 점수 산출"로 보고할 것.
 
 ### 0-2. Baselines — 비교 기준 (외워둘 것)
 
@@ -366,7 +364,7 @@ treatment (data_agent_10, tads_10)  ← 위 둘 사이 어디쯤이어야 정상
 
 > 모든 config 파일은 로컬에 실제로 존재함을 확인함. `random_50 / data_agent_50 / tads_50`도 디스크엔 있지만 **이번 매트릭스 범위 밖**이므로 자동 eval에서 제외.
 
-#### (b) 셀 하나당 떨어지는 결과 JSON (16개 셀 × 5 벤치 = 80개 점수 파일 + 16개 summary)
+#### (b) 셀 하나당 떨어지는 결과 JSON (16개 셀 × 9 벤치 = 144개 점수 파일 + 16개 summary)
 
 **eval도 train과 동일한 history-preserving 레이아웃**을 따른다 (2026-05-16 변경). 셀의 BASE eval 디렉터리는 `${EVAL_RESULTS_ROOT}/<model>/<method>/`이고, 그 안에:
 
@@ -402,16 +400,20 @@ ${EVAL_RESULTS_ROOT}/<model>/<method>/
 
 ```
 ${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-mmlu.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-mmlu_pro.json
 ${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-gsm8k.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-svamp.json
 ${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-humaneval.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-mbpp.json
 ${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-tydiqa.json
+${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-xquad.json
 ${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-bbh.json
 ${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-eval_summary.json
 ```
 
 > **모든 점수 파싱은 `<셀 BASE>/_latest/<exp_label>-…json` 경로를 사용**한다. `_latest`를 거치지 않은 flat 경로(`<셀 BASE>/<exp_label>-…json`)는 `--flat`으로 만든 legacy / ad-hoc 결과로 간주하여 LEGACY 분류(§5-5)로 떨어진다.
 
-전체 16개 셀에 대해 같은 파일 6종이 `_latest` 안에 만들어지면 **점수 파일 80개 + summary 16개 = 96개** 산출물이 최종 상태다. 이전 run들은 `runs/<eval_tag>/` 아래에 그대로 살아있어 점수 변동의 audit trail 역할.
+전체 16개 셀에 대해 같은 파일 10종(9 벤치 + summary)이 `_latest` 안에 만들어지면 **점수 파일 144개 + summary 16개 = 160개** 산출물이 최종 상태다. 이전 run들은 `runs/<eval_tag>/` 아래에 그대로 살아있어 점수 변동의 audit trail 역할.
 
 #### (c) "셀이 완료됐다"의 정의
 
@@ -437,9 +439,9 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 > **`experiments.md`는 항상 다음 4개 표 + History 1개 = 총 5개 섹션을 맨 아래에 같은 순서로 가지고 있어야 한다.** 매 tick 출력에 단 하나라도 누락되면 그 tick은 **실패** — 사용자에게 보고하지 말고 다시 그려라.
 >
 > ```
-> ## (6) Current — 80-cell 실시간 상태 (학습전/학습중/eval대기/eval중/NN.NN%) + Status + Params
-> ## (7) Latest  — 80-cell 가장 최근 DONE 점수만 (NN.NN% 또는 -)            + Params
-> ## (8) Best    — 80-cell 역대 최고 점수 + Best run tag                    + Params
+> ## (6) Current — 144-cell 실시간 상태 (학습전/학습중/eval대기/eval중/NN.NN%) + Status + Params
+> ## (7) Latest  — 144-cell 가장 최근 DONE 점수만 (NN.NN% 또는 -)            + Params
+> ## (8) Best    — 144-cell 역대 최고 점수 + Best run tag                    + Params
 > ## (9) History — append-only 변경 로그 (newest at bottom)
 > ```
 >
@@ -482,13 +484,13 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 1. 셀의 `<experiment_label>-eval_summary.json`을 읽어 정확도(%) 둘째 자리까지 추출
 2. `experiments.md`의 해당 셀을 `-`에서 실제 숫자로 교체 (또는 새 숫자로 갱신)
 3. treatment 행이면 §0-2 규칙으로 발산 알람(`RED` / `YELLOW` / `BLUE`)을 inline으로 표기
-4. **§0-4(6) 80-cell consolidated 표를 `experiments.md` 맨 아래에 항상 유지**하고, 80개 셀 전체를 매 tick 동기화 (per-model 표 (1)-(5) 갱신 후 동일 점수로 (6)도 함께 갱신)
+4. **§0-4(6) 144-cell consolidated 표를 `experiments.md` 맨 아래에 항상 유지**하고, 144개 셀 전체를 매 tick 동기화 (per-model 표 (1)-(5) 갱신 후 동일 점수로 (6)도 함께 갱신)
 5. 파일을 atomic하게 저장 (`experiments.md.tmp` 작성 후 `mv`)
 6. 채팅/로그 보고에는 **요약만**. 표 전체를 매번 복붙하지 말 것 — 변경된 행만 인용
 
-아래 표들은 **이 파일의 초기 템플릿**이다. `experiments.md`가 존재하지 않으면 에이전트가 이 템플릿을 그대로 복사해서 생성하고 (특히 (6)–(9) 80-cell 표 4종은 **파일 맨 아래**에 (6) Current → (7) Latest → (8) Best → (9) History 순서로 배치), 이후 셀 단위로 갱신만 한다. **이 가이드 문서(AUTO_EVAL_AGENT.md) 자체는 절대 수정하지 말 것** — 가이드는 spec이고, `experiments.md`가 live document.
+아래 표들은 **이 파일의 초기 템플릿**이다. `experiments.md`가 존재하지 않으면 에이전트가 이 템플릿을 그대로 복사해서 생성하고 (특히 (6)–(9) 144-cell 표 4종은 **파일 맨 아래**에 (6) Current → (7) Latest → (8) Best → (9) History 순서로 배치), 이후 셀 단위로 갱신만 한다. **이 가이드 문서(AUTO_EVAL_AGENT.md) 자체는 절대 수정하지 말 것** — 가이드는 spec이고, `experiments.md`가 live document.
 
-**80-cell 4종 표 관리 규약** (§0-4 (6)/(7)/(8)/(9) 전용):
+**144-cell 4종 표 관리 규약** (§0-4 (6)/(7)/(8)/(9) 전용):
 - 위치: `experiments.md`의 **맨 아래**. 항상 (6) Current → (7) Latest → (8) Best → (9) History 순서. 각 표는 자신의 `## (N) ...` 헤더로 둘러싸고, 그 안의 코드 펜스(```) 블록만 atomic 교체. (9) History는 append-only라 마지막 한 줄만 추가.
 - 갱신 단위: 셀 1개 / 벤치 1개 (점수 1개). 셀 값 1개가 바뀌면 (6) Current는 무조건 갱신, (7)/(8)/(9)는 §0-4 (10) 의 흐름표대로:
     * `학습중` → `학습중`: (6)만 갱신 (이미 그 상태였을 수 있음 — no-op이지만 그래도 atomic 교체).
@@ -500,7 +502,7 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 
 **🚨 셀 값 어휘 — 매우 엄격 (자주 위반되니 주의):**
 
-매 tick의 출력에 들어갈 수 있는 셀 값은 정확히 **상태 토큰** 중 하나뿐 (이것은 "5종 벤치마크"와 별개 개념 — 용어 혼동 주의, 위 "🚨 두 가지 '5'" 박스 참조):
+매 tick의 출력에 들어갈 수 있는 셀 값은 정확히 **상태 토큰** 중 하나뿐 (이것은 "9종 벤치마크"와 별개 개념 — 용어 혼동 주의, 위 "🚨 용어 명확화" 박스 참조):
 
 1. `학습전` — 체크포인트가 아직 없음 (§5-4 NEED-TRAIN)
 2. `학습중` — 학습 프로세스가 살아있거나 sealed epoch 수 < train_epochs
@@ -535,8 +537,8 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 
 **셀프 체크 — 매 tick의 표 작성 직후 반드시 수행 (3단계 검증):**
 ```bash
-# 1. §0-4(6) 80-cell 표의 16개 행 × 5개 벤치 컬럼 = 80개 셀 모두 추출
-table=$(awk '/^## 80-cell Consolidated Score Table/,0' experiments.md \
+# 1. §0-4(6) 144-cell 표의 16개 행 × 9개 벤치 컬럼 = 144개 셀 모두 추출
+table=$(awk '/^## \(6\) Current/,0' experiments.md \
         | awk '/^```$/{f=!f; next} f' | grep -E '^[ ]*[0-9]+ ')
 
 # 2. 상태 토큰 외의 토큰이 있는지 확인 (정규식: 학습전/학습중/eval대기/eval중/NN.NN%)
@@ -545,20 +547,20 @@ bad=$(echo "$table" \
       | grep -vE '^([0-9]+|llama2|qwen25|mistral|deepseek|/|full_100|random_10|data_agent_10|tads_10|학습전|학습중|eval대기|eval중|[0-9]+\.[0-9]{2}%)$' \
       | sort -u)
 if [ -n "$bad" ]; then
-  echo "[FAIL] 80-cell 표에 금지 토큰 발견 — 상태 토큰로 재분류 필요:"
+  echo "[FAIL] 144-cell 표에 금지 토큰 발견 — 상태 토큰로 재분류 필요:"
   echo "$bad" | sed 's/^/  - /'
   echo "  (`-`, `err`, `error`, 공란 등은 모두 상태 토큰 중 하나로 매핑할 것. 모르면 eval대기로 떨어뜨릴 것.)"
   exit 1
 fi
 
-# 3. 80개 셀 전체 카운트 검증 — 16행 × 5컬럼 = 80개여야 함
+# 3. 144개 셀 전체 카운트 검증 — 16행 × 9컬럼 = 144개여야 함
 n=$(echo "$table" | awk '{for(i=3;i<=NF;i++) print $i}' | wc -l)
-if [ "$n" -ne 80 ]; then
-  echo "[FAIL] 80-cell 표의 셀 개수가 $n (≠80) — 행/컬럼 폭이 깨졌거나 빈 셀이 있음"
+if [ "$n" -ne 144 ]; then
+  echo "[FAIL] 144-cell 표의 셀 개수가 $n (≠144) — 행/컬럼 폭이 깨졌거나 빈 셀이 있음"
   exit 1
 fi
 
-echo "[OK] 80-cell 표 검증 통과 (모든 셀이 상태 토큰로 채워짐)"
+echo "[OK] 144-cell 표 검증 통과 (모든 셀이 상태 토큰로 채워짐)"
 ```
 
 이 체크가 한 단계라도 fail이면:
@@ -566,7 +568,7 @@ echo "[OK] 80-cell 표 검증 통과 (모든 셀이 상태 토큰로 채워짐)"
 2. **즉시 분류 로직 재돌림** — fall-through 규칙(모르면 `eval대기`)으로 모든 셀을 다시 채운 뒤 검증 통과해야 보고.
 3. 재시도 3회 fail이면 사용자에게 "분류 로직 자체에 버그가 있다"고 보고하고 표 갱신 중단 — 절대 잘못된 표를 atomic 교체하지 말 것.
 
-- 80개 셀 전체가 `NN.NN%`로 채워지면 = 실험 완료. 이 시점에 §0-2 발산 알람 최종 평가를 별도 섹션 `## 최종 발산 알람 요약`으로 (6) 표 바로 위에 추가.
+- 144개 셀 전체가 `NN.NN%`로 채워지면 = 실험 완료. 이 시점에 §0-2 발산 알람 최종 평가를 별도 섹션 `## 최종 발산 알람 요약`으로 (6) 표 바로 위에 추가.
 
 값은 `<experiment_label>-eval_summary.json` 또는 벤치별 JSON에서 직접 파싱한 정확도 (%, 소수점 둘째자리까지).
 
@@ -596,48 +598,48 @@ echo "[OK] 80-cell 표 검증 통과 (모든 셀이 상태 토큰로 채워짐)"
 #### (1) llama2
 
 ```
-Method          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
-=============== ======= ======= ========== ======== ======= =======
-full_100        -       -       -          -        -       -
-random_10       -       -       -          -        -       -
-data_agent_10   -       -       -          -        -       -
-tads_10         -       -       -          -        -       -
+Method          mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh       avg
+=============== ========= ========= ========= ========= ========= ========= ========= ========= ========= =========
+full_100        -         -         -         -         -         -         -         -         -         -
+random_10       -         -         -         -         -         -         -         -         -         -
+data_agent_10   -         -         -         -         -         -         -         -         -         -
+tads_10         -         -         -         -         -         -         -         -         -         -
 ```
 
 #### (2) qwen25
 
 ```
-Method          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
-=============== ======= ======= ========== ======== ======= =======
-full_100        -       -       -          -        -       -
-random_10       -       -       -          -        -       -
-data_agent_10   -       -       -          -        -       -
-tads_10         -       -       -          -        -       -
+Method          mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh       avg
+=============== ========= ========= ========= ========= ========= ========= ========= ========= ========= =========
+full_100        -         -         -         -         -         -         -         -         -         -
+random_10       -         -         -         -         -         -         -         -         -         -
+data_agent_10   -         -         -         -         -         -         -         -         -         -
+tads_10         -         -         -         -         -         -         -         -         -         -
 ```
 
 #### (3) mistral
 
 ```
-Method          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
-=============== ======= ======= ========== ======== ======= =======
-full_100        -       -       -          -        -       -
-random_10       -       -       -          -        -       -
-data_agent_10   -       -       -          -        -       -
-tads_10         -       -       -          -        -       -
+Method          mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh       avg
+=============== ========= ========= ========= ========= ========= ========= ========= ========= ========= =========
+full_100        -         -         -         -         -         -         -         -         -         -
+random_10       -         -         -         -         -         -         -         -         -         -
+data_agent_10   -         -         -         -         -         -         -         -         -         -
+tads_10         -         -         -         -         -         -         -         -         -         -
 ```
 
 #### (4) deepseek
 
 ```
-Method          mmlu    gsm8k   humaneval  tydiqa   bbh     avg
-=============== ======= ======= ========== ======== ======= =======
-full_100        -       -       -          -        -       -
-random_10       -       -       -          -        -       -
-data_agent_10   -       -       -          -        -       -
-tads_10         -       -       -          -        -       -
+Method          mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh       avg
+=============== ========= ========= ========= ========= ========= ========= ========= ========= ========= =========
+full_100        -         -         -         -         -         -         -         -         -         -
+random_10       -         -         -         -         -         -         -         -         -         -
+data_agent_10   -         -         -         -         -         -         -         -         -         -
+tads_10         -         -         -         -         -         -         -         -         -         -
 ```
 
-#### (5) Cross-model summary (avg of 5 benchmarks)
+#### (5) Cross-model summary (avg of 9 benchmarks)
 
 ```
                 llama2     qwen25     mistral    deepseek
@@ -648,47 +650,47 @@ data_agent_10   -          -          -          -
 tads_10         -          -          -          -
 ```
 
-#### (6) Current — 80-cell real-time status table + Status + Params
+#### (6) Current — 144-cell real-time status table + Status + Params
 
-> **위치 = `experiments.md`의 맨 아래 (이 표 + 아래 (7) Latest + (8) Best + (9) History 4종이 항상 마지막)**. (1)-(5)는 모델별/요약별 뷰, (6)이 **현재 시점 80개 전체 셀의 single source of truth**. 매 tick 동기화 필수.
+> **위치 = `experiments.md`의 맨 아래 (이 표 + 아래 (7) Latest + (8) Best + (9) History 4종이 항상 마지막)**. (1)-(5)는 모델별/요약별 뷰, (6)이 **현재 시점 144개 전체 셀의 single source of truth**. 매 tick 동기화 필수.
 > **상태 토큰(`학습전 / 학습중 / eval대기 / eval중 / NN.NN%`) 그대로 채움 (§5-4).** 새로 학습이 시작되면 이전에 DONE이었던 셀도 즉시 `학습중`으로 돌아옴 (§0-4 (10) "재학습 → 표 갱신" 규약 참조). 이전 점수는 (7) Latest 표와 (9) History 로그에 보존.
 > **`Status` 컬럼** = 셀의 (1) 점수 이력, (2) 시스템 오류, (3) baseline 발산 알람을 한 줄로 요약 (§0-6 가이드 참조).
 > **`Params` 컬럼** = 그 셀의 가장 최근 학습 run(`<ckpt_root>/_latest/cfg.json`)에서 추출한 주요 하이퍼파라미터 한 줄 요약 (아래 §0-4 (10) "Params 한 줄 형식" 참조). 사용자가 셀 점수와 학습 설정을 한 화면에 같이 보기 위한 컬럼.
 
 ```
-#   Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh       Status                                            Params
-=== ========================== ========= ========= ========= ========= ========= ================================================= ================================================================
- 1  llama2 / full_100          학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
- 2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
- 3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
- 4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+#   Model/Method               mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh       Status                                            Params
+=== ========================== ========= ========= ========= ========= ========= ========= ========= ========= ========= ================================================= ================================================================
+ 1  llama2 / full_100          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 
- 5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
- 6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
- 7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
- 8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 
- 9  mistral / full_100         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
-10  mistral / random_10        학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
-11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
-12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 9  mistral / full_100         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+10  mistral / random_10        학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 
-13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
-14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
-15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
-16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 ```
 
 #### (7) Latest — 가장 최근의 DONE 점수만 모은 표 (`NN.NN%` 또는 `-` only)
 
 > **`(6) Current`가 in-progress 상태도 보여주는 표라면, `(7) Latest`는 점수 산출이 완료된 가장 마지막 값만 보여주는 표**다. 학습이 재시작돼서 Current가 `학습중`으로 돌아가도, Latest는 이전 DONE 점수를 **유지**한다 (새 DONE이 나올 때까지). 사용자가 "지금까지 가장 최근에 측정된 점수가 얼마였지?"를 빠르게 확인할 때 쓰는 표.
 >
-> 형식: (6)과 동일한 16행 × 5벤치 + Status + Params 컬럼. 단 셀 값은 **`NN.NN%` 또는 `-` (아직 한 번도 DONE된 적 없음)** 두 종류만. 학습중 / eval중 / eval대기는 이 표에 안 나타남. Status 컬럼은 마지막 DONE 시점(`done 2026-05-17 09:15`) 및 발산 알람을 1줄로. Params는 그 점수를 만든 run의 cfg.json 기준.
+> 형식: (6)과 동일한 16행 × 9벤치 + Status + Params 컬럼. 단 셀 값은 **`NN.NN%` 또는 `-` (아직 한 번도 DONE된 적 없음)** 두 종류만. 학습중 / eval중 / eval대기는 이 표에 안 나타남. Status 컬럼은 마지막 DONE 시점(`done 2026-05-17 09:15`) 및 발산 알람을 1줄로. Params는 그 점수를 만든 run의 cfg.json 기준.
 
 ```
-#   Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh       Status                                            Params
-=== ========================== ========= ========= ========= ========= ========= ================================================= ================================================================
- 1  llama2 / full_100          -         -         -         -         -         -                                                 (no DONE yet)
+#   Model/Method               mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh       Status                                            Params
+=== ========================== ========= ========= ========= ========= ========= ========= ========= ========= ========= ================================================= ================================================================
+ 1  llama2 / full_100          -         -         -         -         -         -         -         -         -         -                                                 (no DONE yet)
  ... (16행)
 ```
 
@@ -699,13 +701,13 @@ tads_10         -          -          -          -
 > 같은 셀 × 벤치에서 best가 갱신되면 그 점수를 만든 `eval_tag` 와 그 시점의 `<run>/cfg.json` 도 함께 기록. Params 컬럼은 **각 행 = 그 셀의 가장 높은 평균 점수를 만든 학습 run의 cfg**.
 
 ```
-#   Model/Method               mmlu      gsm8k     humaneval tydiqa    bbh       Best AVG  Best run                                Params (best avg run의 cfg.json)
-=== ========================== ========= ========= ========= ========= ========= ========= ======================================= ================================================================
- 1  llama2 / full_100          -         -         -         -         -         -         -                                       (no DONE yet)
+#   Model/Method               mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh       Best AVG  Best run                                Params (best avg run의 cfg.json)
+=== ========================== ========= ========= ========= ========= ========= ========= ========= ========= ========= ========= ======================================= ================================================================
+ 1  llama2 / full_100          -         -         -         -         -         -         -         -         -         -         -                                       (no DONE yet)
  ... (16행)
 ```
 
-> Best 표는 (7) Latest와 동일 컬럼 폭이 아니므로 헤더가 살짝 다름 — "Best AVG" + "Best run" 컬럼 추가. 80개 셀의 best는 셀 × 벤치 단위 (행 단위 best가 아님)이므로 한 행의 mmlu/gsm8k/humaneval/tydiqa/bbh 5점이 서로 다른 run에서 나올 수 있음. Params 컬럼은 그 셀의 **avg 최고 run** 기준으로 1개만 표기.
+> Best 표는 (7) Latest와 동일 컬럼 폭이 아니므로 헤더가 살짝 다름 — "Best AVG" + "Best run" 컬럼 추가. 144개 셀의 best는 셀 × 벤치 단위 (행 단위 best가 아님)이므로 한 행의 9개 벤치 점수가 서로 다른 run에서 나올 수 있음. Params 컬럼은 그 셀의 **avg 최고 run** 기준으로 1개만 표기.
 
 #### (9) History — append-only 변경 로그
 
@@ -828,7 +830,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 >
 > **재학습 감지** (§0-4 (10)): 셀이 이전 tick에 DONE(`NN.NN%`)이었어도, 현재 tick에서 위 결정 트리 #2 (sealed_n < cfg_target_epochs — 즉 사용자가 새 run을 launch해서 새 cfg.json snapshot이 더 큰 target을 가짐, 또는 새 run이 아직 epoch 안 채움) 가 만족되면 **즉시 `학습중`으로 되돌린다**. 이전 NN.NN%는 (7) Latest 표에 유지되고 (9) History에 prev=NN.NN% new=학습중 한 줄 append. (6) Current만 학습중으로 덮어씀. DONE → 학습중 → 새 NN.NN% 흐름이 매 tick 동기화됨.
 
-> **표기는 위 상태 토큰만 허용** (5종 벤치마크와 혼동 금지). `-`는 본 가이드 문서 안의 placeholder일 뿐 `experiments.md`의 셀 값으로는 **절대 쓰지 말 것** — `experiments.md`를 최초 생성할 때부터 §5-4 분류를 돌려 상태 토큰 중 하나를 채운다. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 상태 토큰 중 하나로 매핑: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
+> **표기는 위 상태 토큰만 허용** (9종 벤치마크와 혼동 금지). `-`는 본 가이드 문서 안의 placeholder일 뿐 `experiments.md`의 셀 값으로는 **절대 쓰지 말 것** — `experiments.md`를 최초 생성할 때부터 §5-4 분류를 돌려 상태 토큰 중 하나를 채운다. `…`, `학습필요`, `legacy(...)`, `실패` 같은 옛 표기는 모두 위 상태 토큰 중 하나로 매핑: 진행 중 → `eval중`, 옛 포맷 점수 → 그대로 `NN.NN%`(다음 tick에 새 포맷으로 덮어씀), 실패 → `eval대기`로 되돌리고 fail_count(§10-3)만 별도 카운터.
 >
 > 흔한 실수: 가이드 §0-4(6) 코드 블록의 `-`로 채워진 행을 그대로 `experiments.md`에 복사하고 끝내는 것. 이건 잘못된 출력이다. **복사 직후 같은 tick에서 분류해서 상태 토큰로 덮어써야 매 tick이 마무리된다.**
 
@@ -854,9 +856,9 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
   각 줄에 ckpt sealed 시각 + 직전 eval 활동 시각 부기. 맨 아래에 현재 빈 GPU 수 + 다음 tick에 어느 셀까지 launch될지 명시.
 - 옛 포맷에서 추출한 점수도 그대로 `NN.NN%`로 표기하되, 발산 알람은 다음 tick 재평가로 DONE 전환될 때까지 회색(`(provisional)`)으로 표기.
 
-### 0-5. Status Dashboard — **5×16 한눈 보기 표 (의무 출력)**
+### 0-5. Status Dashboard — **9×16 한눈 보기 표 (의무 출력)**
 
-매 tick 보고에 에이전트는 **다음 80-cell 표 한 개를 반드시 출력**한다. §0-4의
+매 tick 보고에 에이전트는 **다음 144-cell 표 한 개를 반드시 출력**한다. §0-4의
 score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 사용자가 한
 번에 진행 상태를 파악하는 dashboard. 셀 값은 정확히 **상태 토큰 중 하나** (§0-4 채우는 규칙과 동일 어휘):
 
@@ -868,7 +870,7 @@ score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 �
 | `eval중` | eval 잡 활성 | **process-based**: `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 OR `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. (정책 §0: eval중만 pgrep 사용, 나머지는 정적 파일.) |
 | `47.56%` | 점수 산출 완료 | `<eval_base>/_latest/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. `_latest/_complete` sentinel도 있어야 함. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
 
-**판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 5×16에 투영):
+**판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 9×16에 투영):
 
 ```python
 def status_cell(model, method, bench):
@@ -915,34 +917,34 @@ def status_cell(model, method, bench):
     return "eval대기"
 ```
 
-#### 80-cell 표 (16 행 × 5 벤치 컬럼) — 초기 상태 / 갱신 템플릿
+#### 144-cell 표 (16 행 × 9 벤치 컬럼) — 초기 상태 / 갱신 템플릿
 
 행 순서는 `(model, method)` 묶음, §0-3 16-cell 표와 동일.
 
 **experiments.md에 쓸 형식 — 반드시 아래처럼 코드 펜스 + 고정폭 정렬** (§0-4 표 작성 규칙 적용. 컬럼 폭: `#`=3, `Model/Method`=26, 각 벤치 상태 컬럼=9 — `eval대기`(visual 8) + 여백 1).
 
 ```
-#   Model/Method               MMLU      GSM8K     HumanEval TyDiQA    BBH
-=== ========================== ========= ========= ========= ========= =========
- 1  llama2 / full_100          학습전    학습전    학습전    학습전    학습전
- 2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전
- 3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전
- 4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전
+#   Model/Method               MMLU      MMLU-Pro  GSM8K     SVAMP     HumanEval MBPP      TyDiQA    XQuAD     BBH
+=== ========================== ========= ========= ========= ========= ========= ========= ========= ========= =========
+ 1  llama2 / full_100          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+ 2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+ 3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+ 4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 
- 5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전
- 6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전
- 7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전
- 8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전
+ 5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+ 6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+ 7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+ 8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 
- 9  mistral / full_100         학습전    학습전    학습전    학습전    학습전
-10  mistral / random_10        학습전    학습전    학습전    학습전    학습전
-11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전
-12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전
+ 9  mistral / full_100         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+10  mistral / random_10        학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 
-13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전
-14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전
-15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전
-16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전
+13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 ```
 
 > `**tads_10**` 같은 markdown bold는 experiments.md에는 쓰지 않는다 (terminal에서 `**` 별표가 그대로 보임). 강조가 필요하면 별도 ASCII 마커(`<` `>` 같은) 사용하거나 그냥 평문.
@@ -952,23 +954,23 @@ def status_cell(model, method, bench):
 학습이 일부 진행되고 평가도 시작된 시점의 예시. 셀 값이 섞여도 컬럼 boundary는 그대로 유지(좌측 정렬, 우측에 공백 패딩):
 
 ```
-#   Model/Method               MMLU      GSM8K     HumanEval TyDiQA    BBH
-=== ========================== ========= ========= ========= ========= =========
- 1  llama2 / full_100          47.56%    14.63%    27.87%    39.48%    39.94%
- 2  llama2 / random_10         47.14%    14.13%    eval중    eval대기  eval대기
- 3  llama2 / data_agent_10     학습중    학습중    학습중    학습중    학습중
- 4  llama2 / tads_10           학습중    학습중    학습중    학습중    학습중
+#   Model/Method               MMLU      MMLU-Pro  GSM8K     SVAMP     HumanEval MBPP      TyDiQA    XQuAD     BBH
+=== ========================== ========= ========= ========= ========= ========= ========= ========= ========= =========
+ 1  llama2 / full_100          47.56%    21.89%    14.63%    39.00%    27.87%    51.58%    39.48%    42.99%    39.94%
+ 2  llama2 / random_10         47.14%    eval중    14.13%    eval대기  eval대기  eval대기  eval대기  eval대기  eval대기
+ 3  llama2 / data_agent_10     학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중
+ 4  llama2 / tads_10           학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중
 
- 5  qwen25 / full_100          eval중    eval대기  eval대기  eval대기  eval대기
+ 5  qwen25 / full_100          eval중    eval대기  eval대기  eval대기  eval대기  eval대기  eval대기  eval대기  eval대기
  ...
-16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전
+16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 ```
 
 해석 가이드:
 - 행 전체가 `학습전`/`학습중`이면 학습 단계 → **에이전트는 자동 트리거 금지**, 사용자에게만 보고.
 - 행에 `eval대기`가 섞여 있으면 §4-3 dispatch 큐에 자동 enqueue → 빈 GPU 생기는 대로 launch (launch 직후 `eval대기` → `eval중`).
 - 행 전체가 `NN.NN%`이면 DONE → §0-4 score board에 점수 반영 + §0-2 발산 알람 평가.
-- 한 행 내에서 `47.56%`와 `eval중`/`eval대기`가 섞이는 건 정상 (eval은 5개 벤치 순차 처리, JSON 떨어진 순으로 셀이 갱신됨).
+- 한 행 내에서 `47.56%`와 `eval중`/`eval대기`가 섞이는 건 정상 (eval은 9개 벤치 순차 처리, JSON 떨어진 순으로 셀이 갱신됨).
 
 #### 갱신 빈도 / 출력 위치
 
@@ -978,7 +980,7 @@ def status_cell(model, method, bench):
 
 ### 0-6. History Tracking Guide — Status 컬럼 + per-cell `HISTORY.md`
 
-§0-4(6) 80-cell 표의 맨 우측 `Status` 컬럼이 잡아야 하는 정보는 3종:
+§0-4(6) 144-cell 표의 맨 우측 `Status` 컬럼이 잡아야 하는 정보는 3종:
 
 1. **history** — 이 셀의 점수가 시간에 따라 어떻게 움직였나 (튜닝, 재학습으로 인한 +/− delta)
 2. **시스템 오류/상황** — eval 실행 중 OOM, crash, timeout, dataset 다운로드 실패 등
@@ -1100,8 +1102,8 @@ facet count ≠ 3 → atomic 교체 중단, Status 컬럼을 위 placeholder 규
 - log tail: ${EVAL_RESULTS_ROOT}/<model>/<method>/logs/mmlu-2026-05-18.log:120-145
 - action: retry queued for next tick (fail_count=2)
 
-## 2026-05-17 09:15  [eval]  done — 47.56% (avg of 5 bench)
-- mmlu 47.56, gsm8k 14.63, humaneval 27.87, tydiqa 39.48, bbh 39.94
+## 2026-05-17 09:15  [eval]  done — 36.95% (avg of 9 bench)
+- mmlu 47.56, mmlu_pro 21.89, gsm8k 14.63, svamp 39.00, humaneval 27.87, mbpp 51.58, tydiqa 39.48, xquad 42.99, bbh 39.94
 - delta vs prev avg (44.78%): +2.78
 - 발산: 🟡 -5.20p vs full_100 (52.76%)
 - summary: ${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/<label>-eval_summary.json
@@ -1410,19 +1412,19 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/      ← 옛 학습이면 epoch_3 (legac
 - **에이전트가 `eval대기` 셀을 자동 launch한다.** 빈 GPU가 K개 있으면 큐에서 K개를 골라 동시에 launch — **GPU 1장당 cell 1개**, 1셀 = 1 `python -m tads.eval` 명령 = 1 백그라운드 프로세스.
 - **batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지** — 사용자도, 에이전트도. wrapper는 한 호출로 여러 셀을 sequential/parallel dispatch하는데, 우리는 셀별로 별개 PID + 별개 log + 별개 dispatch line이 필요. wrapper의 cascade fail / log race / `_latest` symlink race 문제는 1셀-1명령 분해로만 해소됨.
 - 학습은 사용자 영역. 에이전트는 `python -m tads.train` / `torchrun` / `run_main_7b.sh` 절대 실행 금지.
-- 매 tick에 에이전트가 하는 일: (1) 32 log polling (§0-7), (2) 80셀 분류, (3) eval대기 큐 만들기, (4) 빈 GPU 만큼 launch, (5) 표 atomic 갱신, (6) 사용자 보고.
+- 매 tick에 에이전트가 하는 일: (1) 32 log polling (§0-7), (2) 144셀 분류, (3) eval대기 큐 만들기, (4) 빈 GPU 만큼 launch, (5) 표 atomic 갱신, (6) 사용자 보고.
 
-### 4-1. 정식 명령 형태 — 에이전트(자동, 1-bench 순차, 5 벤치 전부)
+### 4-1. 정식 명령 형태 — 에이전트(자동, 1-bench 순차, 9 벤치 전부)
 
-**에이전트 자동 dispatch — 단일 bench 하나씩만 (`mmlu` → `gsm8k` → `humaneval` → `tydiqa` 순서)**:
+**에이전트 자동 dispatch — 단일 bench 하나씩만 (`mmlu` → `mmlu_pro` → `gsm8k` → `svamp` → `humaneval` → `mbpp` → `tydiqa` → `xquad` → `bbh` 순서)**:
 
 ```bash
 # 매 cron tick에서 빈 GPU 만큼 자동 실행. 각 launch는 단일 (cell, bench).
 # ⚠️ 1 GPU = 1 (cell, bench). 여러 벤치를 한 명령에 묶지 말 것.
-# bench는 dispatch 큐 순서대로: mmlu 끝나면 같은 cell의 gsm8k, ..., 마지막 bbh.
+# bench는 dispatch 큐 순서대로: mmlu 끝나면 같은 cell의 mmlu_pro, ..., 마지막 bbh.
 CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval \
     --config configs/experiments/main_7b/<model>/<method>.yaml \
-    --benchmarks <single_bench> \    # mmlu / gsm8k / humaneval / tydiqa / bbh 중 하나
+    --benchmarks <single_bench> \    # mmlu / mmlu_pro / gsm8k / svamp / humaneval / mbpp / tydiqa / xquad / bbh 중 하나
     --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
     >> logs/eval_<model>_<method>_<single_bench>.log 2>&1 &
 ```
@@ -1434,9 +1436,9 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval --config .../llama2/random_10.y
 CUDA_VISIBLE_DEVICES=2 nohup python -m tads.eval --config .../llama2/data_agent_10.yaml --benchmarks mmlu --out_dir ... &
 CUDA_VISIBLE_DEVICES=3 nohup python -m tads.eval --config .../llama2/tads_10.yaml       --benchmarks mmlu --out_dir ... &
 ```
-이 4개 mmlu가 다 끝나면 다음 tick에서 같은 4 cells에 대해 `--benchmarks gsm8k` → 그 다음 `humaneval` → `tydiqa` → 마지막 `bbh` 로 dispatch.
+이 4개 mmlu가 다 끝나면 다음 tick에서 같은 4 cells에 대해 `--benchmarks mmlu_pro` → 그 다음 `gsm8k` → `svamp` → `humaneval` → `mbpp` → `tydiqa` → `xquad` → 마지막 `bbh` 로 dispatch.
 
-**bbh 자동 dispatch (2026-05-17 정책 갱신)**: 옛 "사용자 수동 launch" 정책은 폐기. bbh도 에이전트가 자동 dispatch — 단 셀당 ~15h+ 라 **순서상 가장 마지막** (mmlu/gsm8k/humaneval/tydiqa 4개 모두 DONE된 셀만 bbh 큐에 enqueue).
+**bbh 자동 dispatch (2026-05-17 정책 갱신)**: 옛 "사용자 수동 launch" 정책은 폐기. bbh도 에이전트가 자동 dispatch — 단 셀당 ~15h+ 라 **순서상 가장 마지막** (앞 8개 벤치 모두 DONE된 셀만 bbh 큐에 enqueue).
 
 빈 GPU가 K개일 때 에이전트는 매 tick에서 **위 명령을 K번 따로 실행**한다 (각각 다른 `<free_gpu>` + 다른 큐의 (model, method)). 절대 wrapper 한 번 호출로 K개 잡을 한꺼번에 띄우지 말 것 — wrapper 호출은 다음과 같은 운영 문제를 만든다:
 
@@ -1466,7 +1468,7 @@ done; done
 # ✓ 셀 1개 launch → 결과 확인 → 그 다음 셀 launch
 CUDA_VISIBLE_DEVICES=0 nohup python -m tads.eval \
     --config configs/experiments/main_7b/llama2/tads_10.yaml \
-    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
     --out_dir ${EVAL_RESULTS_ROOT}/llama2/tads_10 \
     >> logs/eval_llama2_tads_10.log 2>&1 &
 # (잡 끝나길 기다리거나 다른 빈 GPU 확인 후 다음 명령 입력)
@@ -1474,7 +1476,7 @@ CUDA_VISIBLE_DEVICES=0 nohup python -m tads.eval \
 # ✓ 다른 GPU에 다른 셀 — 각각 별개 명령
 CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
     --config configs/experiments/main_7b/qwen25/data_agent_10.yaml \
-    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
     --out_dir ${EVAL_RESULTS_ROOT}/qwen25/data_agent_10 \
     >> logs/eval_qwen25_data_agent_10.log 2>&1 &
 ```
@@ -1528,10 +1530,10 @@ CUDA_VISIBLE_DEVICES=0 python -m tads.eval \
 CUDA_VISIBLE_DEVICES=0 python -m tads.eval \
     --config configs/experiments/main_7b/llama2/tads_10.yaml \
     --run_tag 20260515_180000 \
-    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh
+    --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh
 ```
 
-- `--benchmarks` 기본 `mmlu`. 정식 매트릭스에선 `mmlu,gsm8k,humaneval,tydiqa,bbh` 명시.
+- `--benchmarks` 기본 `mmlu`. 정식 매트릭스에선 `mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh` 명시.
 - `--limit N`: 벤치별 샘플 N개로 제한 (디버그 전용).
 - `--run_tag <tag>`: `_latest` 대신 특정 과거 run 평가.
 
@@ -1589,7 +1591,7 @@ ${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log
 ```bash
 EVAL_BASE="${EVAL_RESULTS_ROOT}/<model>/<method>"
 LABEL="<model>_<method>"
-BENCH="<mmlu|gsm8k|humaneval|tydiqa|bbh>"
+BENCH="<mmlu|mmlu_pro|gsm8k|svamp|humaneval|mbpp|tydiqa|xquad|bbh>"
 
 # 1. _latest (현재 history layout 표준)
 find "$EVAL_BASE/_latest" -name "${LABEL}-${BENCH}.json" -type f 2>/dev/null
@@ -1799,7 +1801,7 @@ def classify_cell(model, method):
 | 우선 | 파일 패턴 | 비고 |
 |---|---|---|
 | 1 (최신) | `_latest/<experiment_label>-eval_summary.json` <br/> 예: `_latest/llama2_tads_10-eval_summary.json` | history layout (§5-1)의 표준. `_latest` 안에 `_complete` sentinel과 같이 있을 때만 DONE. 모든 벤치 점수와 메타데이터 포함. |
-| 2 (최신, 벤치별) | `_latest/<experiment_label>-<bench>.json` <br/> 예: `_latest/llama2_tads_10-mmlu.json` | 벤치별 상세. summary가 없으면 이것들로 합산 (단, 5개 벤치 다 있을 때만 DONE 처리). |
+| 2 (최신, 벤치별) | `_latest/<experiment_label>-<bench>.json` <br/> 예: `_latest/llama2_tads_10-mmlu.json` | 벤치별 상세. summary가 없으면 이것들로 합산 (단, 9개 벤치 다 있을 때만 DONE 처리). |
 | 3 (legacy, flat) | `<exp_label>-eval_summary.json` (BASE 디렉터리 직속) | `--flat` 호출이나 history layout 도입 전 산출물. `_latest`가 없을 때만 본다. LEGACY로 분류. |
 | 4 (legacy, 접두어 없음) | `eval_summary.json` (BASE 디렉터리 직속, 접두어 없음) | 옛 코드 산출물. label 충돌 위험(다른 셀의 결과를 덮어썼을 수 있음). LEGACY로 분류. |
 | 5 (legacy, 벤치별 접두어 없음) | `mmlu.json` / `gsm8k.json` / `humaneval.json` / `tydiqa.json` / `bbh.json` (BASE 디렉터리 직속, 접두어 없음) | 옛 벤치별. LEGACY로 분류. |
@@ -1877,7 +1879,7 @@ bash scripts/auto_eval_7b_fullft.sh <gpu_id> [run1 run2 ...]
 CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
     --config configs/experiments/7b_fullft_<run>.yaml \
     --ckpt ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_last \  # epoch_3 (legacy)도 가능
-    --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \
+    --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
     --out_dir ${EVAL_RESULTS_ROOT}/7b_fullft/<run> \
     >> logs/eval_7b_fullft_<run>.log 2>&1 &
 ```
@@ -1898,7 +1900,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 > [ ] 03 ## (8) Best 헤더 존재           ← 자주 누락. 반드시 확인.
 > [ ] 04 ## (9) History 헤더 존재        ← 자주 누락. 반드시 확인.
 > [ ] 05/06/07 (6)/(7)/(8)에 Params 컬럼 있음
-> [ ] 08 (6) Current 80개 셀에 `-` / `err` / 공란 0개
+> [ ] 08 (6) Current 144개 셀에 `-` / `err` / 공란 0개
 > [ ] 09 (9) History 이번 tick 변경분 append 됨
 > [ ] 10 학습 alive인 셀은 (6)에서 `학습중`, (7)/(8) 이전 값 유지
 > [ ] 11 (8) Best는 max() 비교만 — 낮은 새 점수로 덮어쓰지 말 것
@@ -1907,7 +1909,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 >       자주 facet 1만 적고 끝내는 위반. placeholder로라도 facet 3개 유지.
 > [ ] 15a 결과 파일 광역 스캔 (4 위치) — `_latest/`만 보지 말 것 (§5-2.5).
 > [ ] 15 DISPATCH 실행 — eval대기 + 빈 GPU 존재 시 `python -m tads.eval`
->       background launch 1회 이상 (5 벤치 전부, bbh는 마지막 순서).
+>       background launch 1회 이상 (9 벤치 전부, bbh는 마지막 순서).
 > ```
 > 
 > 하나라도 미통과 → atomic 교체 중단 → 누락 부분 §0-4 (6)/(7)/(8)/(9) 템플릿으로 재생성 → 다시 14개 체크 → 통과해야 사용자에게 보고.
@@ -1935,7 +1937,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
              sync_score_board_now(model, method)         # 다음 tick 안 기다리고 표 갱신
          update_status_column(model, method, signals)     # §0-5/§0-6 (a)
 
-3. classify pass — 모든 80개 셀에 §5-4 표의 상태 토큰 부여
+3. classify pass — 모든 144개 셀에 §5-4 표의 상태 토큰 부여
    for model in {llama2, qwen25, mistral, deepseek}:
      for method in {full_100, random_10, data_agent_10, tads_10}:
          ckpt_root = ${OUTPUT_ROOT}/main_7b/${model}/${method}
@@ -2008,16 +2010,17 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
            f"reason={infer_reason(model, method, sig)}  source={pick_source(model, method, sig)}"
        )
 
-3.7 dispatch pass — 빈 GPU 만큼 eval 자동 launch (1 GPU = 1 (cell, bench), 단일 bench, 5 벤치 전부 자동)
+3.7 dispatch pass — 빈 GPU 만큼 eval 자동 launch (1 GPU = 1 (cell, bench), 단일 bench, 9 벤치 전부 자동)
    # 운영 가정 (사용자 명시): 학습은 모두 끝났고, 노드에는 eval만 돈다.
    # 에이전트가 (cell, bench) 큐를 매 tick continuous하게 dispatch — 사용자 개입 0.
-   # 정책: --benchmarks는 항상 단일 bench. mmlu → gsm8k → humaneval → tydiqa → bbh
+   # 정책: --benchmarks는 항상 단일 bench. mmlu → mmlu_pro → gsm8k → svamp → humaneval → mbpp → tydiqa → xquad → bbh
    # 순서대로 한 cell의 모든 bench가 끝나야 다음 단계로. bbh도 자동 (가장 마지막 순서).
-   AUTO_BENCHES = ("mmlu", "gsm8k", "humaneval", "tydiqa", "bbh")  # bbh는 가장 마지막
+   AUTO_BENCHES = ("mmlu", "mmlu_pro", "gsm8k", "svamp", "humaneval",
+                   "mbpp", "tydiqa", "xquad", "bbh")  # bbh는 가장 마지막
 
    def next_bench_for_cell(model, method):
-       """이 cell의 5-bench 큐에서 아직 DONE 안 된 가장 앞 bench를 반환.
-       AUTO_BENCHES 순서: mmlu → gsm8k → humaneval → tydiqa → bbh.
+       """이 cell의 9-bench 큐에서 아직 DONE 안 된 가장 앞 bench를 반환.
+       AUTO_BENCHES 순서: mmlu → mmlu_pro → gsm8k → svamp → humaneval → mbpp → tydiqa → xquad → bbh.
        모두 DONE이면 None."""
        eval_base = f"{EVAL_RESULTS_ROOT}/{model}/{method}"
        eval_latest = resolve_latest_run(eval_base)
@@ -2028,7 +2031,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
                if exists(bj) and parse_score_pct(bj) is not None:
                    continue   # 이 bench는 이미 DONE
            return b
-       return None    # 5-bench 모두 DONE
+       return None    # 9-bench 모두 DONE
 
    # (cell, bench) pair 큐 — 셀당 다음으로 돌아야 할 bench 1개만.
    pair_queue = []
@@ -2074,21 +2077,21 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
            f"{now}  cell={m}/{x}  bench={b}  prev=eval대기  new=eval중  "
            f"reason=auto-dispatch (GPU {gpu})  source=logs/eval_{m}_{x}_{b}.log"
        )
-   # 매 tick continuous: 16 cells × 5 benches = 80 pairs 전부 DONE될 때까지
-   # 매 tick 빈 GPU 만큼 dispatch. 사용자 개입 0 (bbh 포함, 5 벤치 전부).
+   # 매 tick continuous: 16 cells × 9 benches = 144 pairs 전부 DONE될 때까지
+   # 매 tick 빈 GPU 만큼 dispatch. 사용자 개입 0 (bbh 포함, 9 벤치 전부).
 
 4. report pass — experiments.md + dashboard + 사용자 액션 섹션 atomic 갱신
    #  eval auto-launch는 위 3.7에서 처리됨 (§0 / §4). 학습 auto-launch는 절대 금지.
 
    ## STRUCTURE — MUST 5개 섹션 모두 갱신 (§0-4 절대 비교섭 규칙):
-   ## (6) Current      — 상태 토큰 + Status + Params, 80 cells
-   ## (7) Latest       — NN.NN%/- + Last DONE + Params, 80 cells
-   ## (8) Best         — NN.NN%/- + AVG + Best run + Params, 80 cells
+   ## (6) Current      — 상태 토큰 + Status + Params, 144 cells
+   ## (7) Latest       — NN.NN%/- + Last DONE + Params, 144 cells
+   ## (8) Best         — NN.NN%/- + AVG + Best run + Params, 144 cells
    ## (9) History      — 그 tick의 셀 값 변경마다 한 줄 append (newest at bottom)
    ## 4개 표 + 1 로그 누락 시 → atomic 교체 실패로 간주 → 재생성 후 다시 검증.
 
    - §0-4 (1)-(5) 모델별 점수 표 + §0-5 dashboard 코드 펜스 안만 atomic 교체
-   - §0-4 (6) 80-cell 표에 `-`가 단 하나도 남지 않도록 dash-self-check 수행
+   - §0-4 (6) 144-cell 표에 `-`가 단 하나도 남지 않도록 dash-self-check 수행
      (§0-4 셀프 체크 bash). 통과 못 하면 그 tick의 출력은 사용자에게
      보고하지 않고 분류를 재돌릴 것.
    - §0-4 절대 비교섭 STRUCT-OK self-check 수행 — (6)/(7)/(8)/(9) 헤더 4개
@@ -2144,7 +2147,7 @@ GPU 가 잠시도 idle해선 안 됨. cron 주기를 짧게 하고, 각 tick 안
                                           다시 poll free_gpus / pair_queue
   ```
   cron 다음 tick(5분 뒤)이 lock 잡으려 할 때까지 같은 프로세스가 계속 dispatch. 5분이 지나면 다음 cron tick이 자연스럽게 인계받음.
-- 결과: 16 cells × 5 benches = **80 pair** 가 사용 가능한 GPU 수 × 셀 평균 시간 만큼 걸려서 끝남. 빈 GPU 가 절대 idle하지 않음.
+- 결과: 16 cells × 9 benches = **144 pair** 가 사용 가능한 GPU 수 × 셀 평균 시간 만큼 걸려서 끝남. 빈 GPU 가 절대 idle하지 않음.
 - 학습이 동시에 안 돈다는 운영 가정 하에서 5분이 sweet spot. 학습이 동시에 돈다면 학습 잡 GPU는 free_gpus 필터에서 자동 제외.
 
 ### 9-2. crontab 예시
@@ -2420,8 +2423,9 @@ for gpu in "${free_gpus[@]}"; do
   log_path="${LOG_DIR}/eval_${model}_${method}.log"
   echo "[tick $(date -Is)] dispatch ${cell} -> GPU ${gpu}" | tee -a "$LAUNCH_LOG"
   # 2026-05-17 정책: bench 하나씩 순차 dispatch. --benchmarks에 단일
-  # bench만 (mmlu → gsm8k → humaneval → tydiqa → bbh 순). 여러 벤치를 한
-  # 명령에 묶지 말 것. bbh도 자동 dispatch (가장 마지막 순서).
+  # bench만 (mmlu → mmlu_pro → gsm8k → svamp → humaneval → mbpp → tydiqa
+  # → xquad → bbh 순). 여러 벤치를 한 명령에 묶지 말 것. bbh도 자동 dispatch
+  # (가장 마지막 순서).
   # $cell 큐 항목은 "<model>/<method>/<bench>" 형식 (single-bench pair).
   bench="${cell##*/}"          # 마지막 / 뒤 = bench 이름
   cellpath="${cell%/*}"         # 앞 부분 = <model>/<method>
@@ -2669,7 +2673,7 @@ nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
 
 값의 출처는 두 가지:
 - **사용자 직접 측정값** (다른 환경에서 재현한 결과).
-- **논문 인용값** (NAIT Table 2 / 각 cell의 config 헤더 코멘트에 명시). 예: `configs/experiments/main_7b/llama2/full_100.yaml` 첫 줄에 `# Expected (paper): MMLU 46.87, GSM 14.63, H-Eval 27.87, TyDiQA 39.48, BBH 39.94` 라고 적혀있음.
+- **논문 인용값** (NAIT Table 2 / 각 cell의 config 헤더 코멘트에 명시). 예: `configs/experiments/main_7b/llama2/full_100.yaml` 첫 줄에 `# Expected (paper): MMLU 46.87, MMLU-Pro 21.89, GSM 14.63, SVAMP 39.00, H-Eval 27.87, MBPP 51.58, TyDiQA 39.48, XQuAD 42.99, BBH 39.94` 라고 적혀있음.
 
 발산 알람 임계:
 - ±2%p 이상 차이 → **노란불** (학습 / eval 환경 의심)
@@ -2678,7 +2682,7 @@ nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
 
 표 형식 = §0-4 표 작성 규칙(코드 펜스 + 고정폭 정렬). 값은 정확도(%) 둘째 자리. 셀이 비어있으면 (`-`) 사용자가 아직 측정하지 않았다는 뜻 (이 표는 에이전트가 자동 갱신하지 않으므로 `-` 사용 OK — 점수 표가 아니라 reference 표).
 
-**에이전트가 새 reference 값을 자동으로 추출하려면**: 각 셀의 config 파일 첫 줄 코멘트에서 `Expected (paper): MMLU X, GSM Y, H-Eval Z, TyDiQA W, BBH V` 패턴을 grep해 가져올 것. config에 적혀있는 셀은 그 값이 paper-faithful reference이고, 사용자 직접 입력이 따로 있는 셀은 사용자 값 우선.
+**에이전트가 새 reference 값을 자동으로 추출하려면**: 각 셀의 config 파일 첫 줄 코멘트에서 `Expected (paper): MMLU A, MMLU-Pro B, GSM C, SVAMP D, H-Eval E, MBPP F, TyDiQA G, XQuAD H, BBH I` 패턴을 grep해 가져올 것. config에 적혀있는 셀은 그 값이 paper-faithful reference이고, 사용자 직접 입력이 따로 있는 셀은 사용자 값 우선.
 
 ```
 Model/Method               mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydiqa    xquad     bbh
