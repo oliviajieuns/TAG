@@ -37,7 +37,13 @@ export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_
 # --- Output roots ---
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/minsoo3.kim/tads-checkpoints}"
 export DATA_CACHE="${DATA_CACHE:-/group-volume/minsoo3.kim/tads-checkpoints/cache}"
+# `tads-eval-results` holds eval results for the TADS-family methods
+# (random / full / data_agent / tads). Comparison baselines (NAIT, SelectIT,
+# ...) write to sibling roots so each method's score history is separable
+# without per-run path mangling.
 export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/tads-eval-results}"
+export NAIT_EVAL_RESULTS_ROOT="${NAIT_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/nait-eval-results}"
+export SELECTIT_EVAL_RESULTS_ROOT="${SELECTIT_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/selectit-eval-results}"
 
 # --- Benchmark data dirs ---
 export MMLU_DATA_DIR="${MMLU_DATA_DIR:-/group-volume/IT-datasets/mmlu/all}"
@@ -154,7 +160,9 @@ export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 # -----------------------------------------------------------------------------
 # Create output dirs (idempotent, never warns)
 # -----------------------------------------------------------------------------
-mkdir -p "$OUTPUT_ROOT" "$DATA_CACHE" "$EVAL_RESULTS_ROOT" 2>/dev/null || true
+mkdir -p "$OUTPUT_ROOT" "$DATA_CACHE" \
+    "$EVAL_RESULTS_ROOT" "$NAIT_EVAL_RESULTS_ROOT" "$SELECTIT_EVAL_RESULTS_ROOT" \
+    2>/dev/null || true
 
 # -----------------------------------------------------------------------------
 # Existence checks (warn-only — never aborts the shell)
@@ -210,9 +218,11 @@ else
 fi
 echo ""
 echo "TADS env loaded."
-echo "  OUTPUT_ROOT       = $OUTPUT_ROOT"
-echo "  EVAL_RESULTS_ROOT = $EVAL_RESULTS_ROOT"
-echo "  ALPACA_DATA_FILES = $ALPACA_DATA_FILES"
+echo "  OUTPUT_ROOT                 = $OUTPUT_ROOT"
+echo "  EVAL_RESULTS_ROOT           = $EVAL_RESULTS_ROOT      (TADS family: random/full/data_agent/tads)"
+echo "  NAIT_EVAL_RESULTS_ROOT      = $NAIT_EVAL_RESULTS_ROOT      (NAIT baseline)"
+echo "  SELECTIT_EVAL_RESULTS_ROOT  = $SELECTIT_EVAL_RESULTS_ROOT  (SelectIT baseline)"
+echo "  ALPACA_DATA_FILES           = $ALPACA_DATA_FILES"
 
 unset -f _tads_warn
 unset _tads_missing

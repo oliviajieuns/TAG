@@ -1,7 +1,7 @@
 """NAIT (ICLR 2026) baseline training.
 
 Usage:
-    python -m tads.nait.train \\
+    python -m tads.baselines.nait.train \\
         --config configs/methods/nait.yaml \\
         --seed_path seeds/mix.json --tag NAIT-Mix
 """
@@ -28,7 +28,7 @@ from tads.core.utils import (
 )
 from tads.data.alpaca import build_alpaca_dataset
 from tads.modeling.loader import load_model, load_tokenizer
-from tads.nait.direction import (
+from tads.baselines.nait.direction import (
     extract_delta_from_seed,
     fit_directions,
     score_candidates,

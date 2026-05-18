@@ -1,10 +1,17 @@
-# NAIT baseline — uses `python -m tads.nait.train`.
+# NAIT baseline — uses `python -m tads.baselines.nait.train`.
 # Defaults below mirror the ICLR 2026 NAIT paper (Chen et al.):
 #   - selection_ratio: 0.1                 (paper Table 2 uses 10%)
 #   - layers: all 32 layers of Llama-2-7B  (paper Algorithm 1 sums over L)
 #   - n_seeds: keep full in-domain set (paper Table 7 uses 1.5k–49k)
 # For apples-to-apples comparison with our TADS 50% setup, override
 # selection_ratio: 0.5 in the experiment YAML.
+#
+# Eval output convention:
+#   Training checkpoints  → ${OUTPUT_ROOT}/...                 (shared with TADS)
+#   Eval results          → ${NAIT_EVAL_RESULTS_ROOT}/...      (separate from
+#                                                               tads-eval-results)
+# Invoke `python -m tads.eval --out_dir ${NAIT_EVAL_RESULTS_ROOT}/<exp>/` to
+# keep NAIT score history separable from the TADS-family methods.
 method: nait
 selection_ratio: 0.1
 nait:
