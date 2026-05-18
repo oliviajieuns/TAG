@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 import torch
 from torch.utils.data import DataLoader
 
-from ..data.sft_prompts import alpaca_input_part
+from tads.data.sft_prompts import alpaca_input_part
 
 logger = logging.getLogger(__name__)
 

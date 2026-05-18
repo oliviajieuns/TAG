@@ -1,0 +1,23 @@
+# Llama-2-7B + Alpaca-GPT4 + NAIT baseline at 10% selection (full fine-tune)
+#
+# 실행:
+#   source scripts/setup_env.sh
+#   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.nait.train \
+#       --config configs/experiments/main_7b/llama2/nait_10.yaml \
+#       --seed_path <seeds.json> \
+#       --tag NAIT-Mix
+#
+# 평가는 별도 root로:
+#   python -m tads.eval \
+#       --config configs/experiments/main_7b/llama2/nait_10.yaml \
+#       --ckpt ${OUTPUT_ROOT}/main_7b/llama2/nait_10/nait_nait_mix/epoch_3 \
+#       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
+#       --out_dir ${NAIT_EVAL_RESULTS_ROOT}/llama2/nait_10/
+defaults:
+  - configs/base.yaml
+  - configs/methods/nait.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/llama2/nait_10
+selection_ratio: 0.1

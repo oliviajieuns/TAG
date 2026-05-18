@@ -1,0 +1,25 @@
+# SelectIT (Liu et al., 2024b) baseline — uses `python -m tads.baselines.selectit.train`.
+#
+# Faithful port of github.com/Blue-Raincoat/SelectIT (token-level + sentence-level
+# self-reflection scoring → top-`selection_ratio` → SFT).
+#
+# Paper:
+#   Liu et al., 2024b. "SelectIT: Selective Instruction Tuning for Large
+#   Language Models via Uncertainty-Aware Self-Reflection." arXiv:2402.16705
+#
+# Eval output convention:
+#   Training checkpoints → ${OUTPUT_ROOT}/...                  (shared with TADS)
+#   Eval results         → ${SELECTIT_EVAL_RESULTS_ROOT}/...   (separate root)
+method: selectit
+selection_ratio: 0.1
+selectit:
+  # "token"    — one rating template per sample (cycled). Fast, paper Eq.2.
+  # "sentence" — k templates per sample, then avg / (1 + alpha * std).
+  #              Paper Eq.4 — most accurate, but ~5× the forward cost.
+  level: token
+  # Std penalty for sentence-level only. SelectIT paper default = 0.2.
+  alpha: 0.2
+  # The 9 rating prompts shipped with the package
+  # (tads/baselines/selectit/rating_prompts.txt) come from the official repo
+  # verbatim. To use a custom set, pass `--rating-prompts-file <path>` to
+  # the train entrypoint.
