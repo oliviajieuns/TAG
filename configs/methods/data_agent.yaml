@@ -1,3 +1,6 @@
+# Data Agent baseline = TADS λ=0 + anchor off.  PPO actor 폐기에 따라 본
+# 셀의 학습 흐름은 "calibrated-utility-only" (s_i = R̃_i, Eq.8 with λ=0).
+# 별도 코드 변경 없이 TADS와 같은 collect_episode 경로를 재사용한다.
 method: data_agent
 # Episode collection forward-only; safe to use a much larger batch on A100 80GB.
 episode_batch_size: 16

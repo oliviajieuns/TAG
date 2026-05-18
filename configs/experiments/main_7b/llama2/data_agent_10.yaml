@@ -1,4 +1,7 @@
 # Llama-2-7B + Alpaca-GPT4 + Data Agent (= TADS λ=0, anchor off) at 10% selection
+#
+# PPO actor 제거 후: data_agent는 자동으로 "calibrated utility only" 경로 (s_i = R̃_i).
+# TADS와 같은 collect_episode + scorer 흐름을 공유하므로 별도 코드 변경 없이 동작.
 defaults:
   - configs/base.yaml
   - configs/methods/data_agent.yaml
@@ -9,8 +12,3 @@ output_subdir: main_7b/llama2/data_agent_10
 selection_ratio: 0.1
 # epochs-reset(2026-05-16): 4 → 3. NAIT/대다수 IT-SFT 논문(Alpaca, LIMA, NAIT Table 8 등)이 3 epoch을 기준으로 보고하므로 매트릭스 전 셀을 3으로 환원해 baseline 비교 가능성 확보.
 train_epochs: 3
-
-# LLAMA-TUNE: bump PPO actor entropy slightly to keep exploration alive —
-# default 0.01 occasionally collapses the policy onto a small subset early.
-agent:
-  entropy_coef: 0.02

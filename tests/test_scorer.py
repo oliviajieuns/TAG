@@ -1,0 +1,89 @@
+"""Unit tests for tads.core.scorer — paper Eq.2-3, Eq.7, Eq.8."""
+from __future__ import annotations
+
+import math
+
+import torch
+
+from tads.core.scorer import (
+    calibrated_utility,
+    normalize_alignment,
+    pool_reward,
+    select_top_b,
+    tads_score,
+)
+
+
+def test_pool_reward_variance_ratio():
+    """w should weight whichever signal has the larger pool variance."""
+    # Loss has variance 1, entropy has variance 0 → w ≈ 1.
+    loss = torch.tensor([0.0, 1.0, 2.0])
+    entropy = torch.tensor([0.5, 0.5, 0.5])
+    R, w = pool_reward(loss, entropy)
+    assert w > 0.99
+    # R is essentially equal to loss when w ≈ 1.
+    assert torch.allclose(R, loss, atol=1e-2)
+
+
+def test_pool_reward_equal_variance():
+    """Equal variances → w ≈ 0.5 → R is the simple average."""
+    loss = torch.tensor([0.0, 1.0])
+    entropy = torch.tensor([0.0, 1.0])
+    R, w = pool_reward(loss, entropy)
+    assert abs(w - 0.5) < 1e-3
+    assert torch.allclose(R, torch.tensor([0.0, 1.0]), atol=1e-2)
+
+
+def test_calibrated_utility_bounded_and_centred():
+    """R̃ should lie strictly in (0, 1) and equal 0.5 at the pool mean."""
+    R = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+    R_tilde = calibrated_utility(R)
+    # All entries in (0, 1).
+    assert torch.all(R_tilde > 0).item()
+    assert torch.all(R_tilde < 1).item()
+    # Element corresponding to the pool mean (R=3) should be ≈ 0.5.
+    assert abs(R_tilde[2].item() - 0.5) < 1e-3
+
+
+def test_normalize_alignment_minmax():
+    """Min-max into [0, 1]; collapse flag triggers on zero spread."""
+    a, collapsed = normalize_alignment(torch.tensor([0.1, 0.5, 0.9]))
+    assert not collapsed
+    assert math.isclose(a.min().item(), 0.0, abs_tol=1e-6)
+    assert math.isclose(a.max().item(), 1.0, abs_tol=1e-6)
+
+    a2, collapsed2 = normalize_alignment(torch.tensor([0.3, 0.3, 0.3]))
+    assert collapsed2
+    assert torch.all(a2 == 0.5).item()
+
+
+def test_tads_score_lam_zero_recovers_calibrated_utility():
+    """At λ=0 the anchor factor is 1, so s_i == R̃_i exactly."""
+    R_tilde = torch.tensor([0.2, 0.5, 0.8])
+    a = torch.tensor([0.1, 0.5, 0.9])
+    s = tads_score(R_tilde, a, lam=0.0)
+    assert torch.allclose(s, R_tilde)
+
+
+def test_tads_score_multiplicative_boost():
+    """At λ=1 a top-alignment sample gets the full 2× boost."""
+    R_tilde = torch.tensor([0.5, 0.5])
+    a = torch.tensor([0.0, 1.0])
+    s = tads_score(R_tilde, a, lam=1.0)
+    assert math.isclose(s[0].item(), 0.5, abs_tol=1e-6)
+    assert math.isclose(s[1].item(), 1.0, abs_tol=1e-6)
+
+
+def test_select_top_b_descending():
+    scores = torch.tensor([0.1, 0.9, 0.3, 0.7])
+    idx = select_top_b(scores, b=2).cpu().tolist()
+    assert idx == [1, 3]
+
+
+def test_select_top_b_rejects_nan():
+    scores = torch.tensor([0.5, float("nan"), 0.3])
+    try:
+        select_top_b(scores, b=2)
+    except RuntimeError:
+        return
+    raise AssertionError("select_top_b should refuse NaN scores")

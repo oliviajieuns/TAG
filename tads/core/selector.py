@@ -1,29 +1,30 @@
 """Episode collection and selection scoring (paper §3, Algorithm 1).
 
-For each candidate sample we compute:
-    h_i      = last-token hidden state under current θ_t
-    R_i      = composite reward (paper Eq. 6)
-    a_i      = PPO actor action ∈ [0, 1]
-    Align_i  = compute_alignment(h_i) ∈ [0, 1]   (TADS only)
+Pure deterministic pipeline — no PPO actor. For each candidate sample we
+compute:
+    h̄_l(x_i)  = sequence-mean of layer-l hidden states           (paper Eq.6 input)
+    L_i        = mean CE loss over response tokens                (== rdiff legacy name)
+    H_i        = mean predictive entropy over response tokens     (== rconf legacy name)
+    R_i        = w·L_i + (1-w)·H_i  composite reward              (paper Eq.2)
+    R̃_i       = σ((R_i - R̄) / (σ_R + 1e-6))  calibrated utility  (paper Eq.8 inner)
+    ã_i       = min-max-norm( Σ_l <h̄_l(x_i), v_l> / L )           (paper Eq.7)
+    s_i        = R̃_i · (1 + λ · ã_i)                             (paper Eq.8 outer)
 
-The selection score is
-    s_i^(t) = R_i · a_i · (1 + λ · Align_i^(t))
-and the top-K samples form the training subset for this epoch.
-Setting λ=0 (or use_anchor=False) recovers the Data Agent baseline.
+Top-B samples by s_i form the training subset for this epoch.
+Setting λ=0 (or use_anchor=False) reduces s_i to R̃_i — the clean-ablation
+case where TADS becomes the calibrated-utility baseline.
 
-Reward components (paper Eq. 1, 3, 5, 6):
-    r_loss_i    = mean CE loss over response tokens          (== rdiff in the
-                                                              Data Agent paper)
-    r_entropy_i = mean predictive entropy                     (== rconf)
-    r_weight    = Var(r_loss) / (Var(r_loss) + Var(r_entropy) + eps)  (== r)
-    R_i         = r_weight * r_loss_i + (1 - r_weight) * r_entropy_i
+Note on "reward" naming: `R`, `r_loss`, `r_entropy`, `r_weight` are kept for
+paper / prior-work (DOTS, Active IT) convention compatibility. The TADS
+pipeline carries **no RL semantics** — every step is a closed-form
+deterministic operation over pool-level statistics.
 
-Adaptive weight scope (paper Eq. 5):
-    r_weight is computed at the DATASET LEVEL (over all N candidate
-    samples), not per-batch. Per-batch variance is degenerate when
-    batch_size=1 (forces var=0 -> r_weight=0). We therefore accumulate
-    r_loss / r_entropy across all batches and compute r_weight once
-    after the loop, then derive composite reward from it.
+Pool-level scope (paper Eq.3, Eq.7, Eq.8):
+    Variance ratio w, min-max bounds, and the z-score moments for R̃ are all
+    computed across the FULL pool (every candidate sample), not per
+    mini-batch. Per-batch variance degenerates to 0 at batch_size=1; we
+    therefore accumulate per-sample (L_i, H_i) and raw alignment scores
+    across all batches and reduce once after the loop.
 """
 from __future__ import annotations
 
@@ -34,8 +35,14 @@ from typing import Any, Dict, List, Optional
 import torch
 from torch.utils.data import DataLoader
 
-from .agent import PPOAgent
 from .reward import compute_rewards
+from .scorer import (
+    calibrated_utility,
+    normalize_alignment,
+    pool_reward,
+    select_top_b,
+    tads_score,
+)
 from .trajectory_anchor import TrajectoryAnchor
 from .utils import cuda_mem_str
 
@@ -47,13 +54,7 @@ def _flatten_cpu_float(x: torch.Tensor) -> torch.Tensor:
 
 
 def _unwrap(model):
-    """Strip DDP / PEFT wrappers to reach the underlying HF model.
-
-    Mirrors the unwrap chain in :func:`tads.modeling.loader.get_hidden_size`:
-    DDP exposes the inner module via ``.module``, and PEFT's ``PeftModel``
-    nests the base HF model under ``.base_model.model``. Either or both can
-    be present depending on training_mode and DDP launch.
-    """
+    """Strip DDP / PEFT wrappers to reach the underlying HF model."""
     m = model
     while hasattr(m, "module"):
         m = m.module
@@ -67,7 +68,6 @@ def _unwrap(model):
 @torch.no_grad()
 def collect_episode(
     model,
-    agent: PPOAgent,
     dataset,
     selection_ratio: float,
     *,
@@ -84,41 +84,26 @@ def collect_episode(
 ) -> Dict[str, Any]:
     """Run one episode over the candidate pool and return selection results.
 
-    ``exp_tag`` is a free-form string (e.g. ``"qwen2.5-7b/alpaca/tads"``) used
-    only for log readability. It does not affect any numerics.
-
-    Memory: ``empty_cache_interval=10`` keeps the CUDA caching allocator from
-    fragmenting across the ~3000 episode batches. With Llama-2-7B + episode_
-    batch_size=16 the per-batch peak is ~5 GB (logits + entropy intermediates);
-    a long run without periodic empty_cache can fragment the allocator until a
-    new ~1 GB block can't be placed even though gross free memory is high.
+    Memory: ``empty_cache_interval=10`` keeps the CUDA caching allocator
+    from fragmenting across the ~3000 episode batches. With Llama-2-7B +
+    episode_batch_size=16 the per-batch peak is ~5 GB (logits + entropy
+    intermediates); a long run without periodic empty_cache can fragment
+    the allocator until a new ~1 GB block can't be placed even though
+    gross free memory is high.
     """
     torch.manual_seed(seed + epoch)
-    # Remember the caller's training mode so we can restore it on exit;
-    # otherwise model stays in eval() through the entire SFT phase, which
-    # is currently fine (no BN/dropout that depends on mode) but silently
-    # wrong if either is added later.
     _was_training = model.training
-    _agent_was_training = agent.ac.training
     model.eval()
-    agent.ac.eval()
     # KV cache adds nothing during a feed-forward pass and just leaks memory
-    # batch over batch on Mistral / Qwen (both default to use_cache=True at
-    # the HF config level). The loader now pins use_cache=False once when
-    # gradient_checkpointing is enabled — this block is a belt-and-braces
-    # guard for runs where gradient_checkpointing happens to be off.
-    # NB: DDP and PEFT both wrap the base model; .config lives on the inner
-    # HF causal-LM, not on the wrapper.
+    # batch over batch. The loader pins use_cache=False once when
+    # gradient_checkpointing is on; this block is a belt-and-braces guard.
     base_model = _unwrap(model)
     if hasattr(base_model.config, "use_cache"):
         base_model.config.use_cache = False
 
-    all_states: List[torch.Tensor] = []
-    all_actions: List[torch.Tensor] = []
-    all_log_probs: List[torch.Tensor] = []
     all_r_loss: List[torch.Tensor] = []
     all_r_entropy: List[torch.Tensor] = []
-    all_alignment_raw: List[torch.Tensor] = []  # streaming alignment (per-batch)
+    all_alignment_raw: List[torch.Tensor] = []
 
     loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=False,
@@ -134,9 +119,7 @@ def collect_episode(
         and trajectory_anchor.is_fitted
     )
 
-    # Pre-cache the per-layer anchor directions on GPU (each is (H,) fp32, total
-    # ~512 KB for 32 layers × 4096 H). Done once outside the batch loop so we
-    # don't pay a CPU→GPU copy per batch per layer.
+    # Pre-cache the per-layer anchor directions on GPU.
     v_cache_gpu: Dict[int, torch.Tensor] = {}
     if apply_anchor:
         if not trajectory_anchor.layer_indices:
@@ -169,72 +152,48 @@ def collect_episode(
             output_hidden_states=True,
         )
 
-        # hidden_states[0] is the embedding; decoder layers occupy [1:].
-        # We always store the LAST decoder layer's last-token hidden as the
-        # state for the PPO actor (shape (B, H)). For multi-layer anchor mode
-        # we ALSO compute the per-batch NAIT Eq.5 alignment inline and only
-        # accumulate the (B,) scalar — instead of stacking (B, L, H) deltas
-        # and aggregating after the loop, which used to peak at ~27 GB on
-        # CPU for Llama-2-7B (52K samples × 32 layers × 4096 H × 4 bytes).
         decoder_hidden = out.hidden_states[1:]
-        lengths = attention_mask.sum(dim=1).clamp_min(1) - 1
-        lengths = lengths.to(decoder_hidden[0].device)
-        bidx = torch.arange(decoder_hidden[0].size(0), device=decoder_hidden[0].device)
-
-        # Always (B, H) — last layer, last real token. This is what the actor
-        # consumes both at action-sampling time AND inside agent.update.
-        agent_input = decoder_hidden[-1][bidx, lengths].detach().float().cpu()
+        B_local = input_ids.size(0)
 
         if apply_anchor:
-            B_local = input_ids.size(0)
+            # Paper Eq.6: align_i = (1/L) Σ_l <h̄_l(x_i), v_l>,
+            # where h̄_l(x_i) = (1/K_x) Σ_k h_l^(k)(x_i) is the
+            # sequence-mean of layer-l hidden states (padding excluded).
+            mask = attention_mask.to(decoder_hidden[0].dtype)  # (B, T)
+            valid_counts = mask.sum(dim=1).clamp_min(1).unsqueeze(-1)  # (B, 1)
+
             if trajectory_anchor.is_multi_layer:
-                # Σ_l ⟨Δh_l, v_l⟩  (NAIT Eq.5), accumulated on GPU and then
-                # moved to CPU as a small (B,) vector.
                 batch_align = torch.zeros(B_local, dtype=torch.float32, device=device)
                 for li in trajectory_anchor.layer_indices:
-                    h_l = decoder_hidden[li]
-                    first_h = h_l[:, 0, :]
-                    last_h = h_l[bidx, lengths]
-                    delta_l = (last_h - first_h).float()  # (B, H) fp32
-                    batch_align += delta_l @ v_cache_gpu[li]
-                    del delta_l
+                    h_l = decoder_hidden[li]                       # (B, T, H)
+                    masked = h_l * mask.unsqueeze(-1)
+                    mean_h_l = (masked.sum(dim=1) / valid_counts).float()  # (B, H)
+                    batch_align += mean_h_l @ v_cache_gpu[li]
+                    del mean_h_l, masked
+                # Paper Eq.6 divides by L; we accumulate then divide once.
+                batch_align /= float(len(trajectory_anchor.layer_indices))
                 all_alignment_raw.append(batch_align.detach().cpu())
                 del batch_align
             else:
-                # Legacy single-layer mode: dot-product the last-token hidden
-                # with the single anchor direction. Matches the pre-refactor
-                # `compute_alignment([N, H])` path (NOT the delta).
-                v = v_cache_gpu[trajectory_anchor.layer_indices[0]]
-                last_token_gpu = decoder_hidden[-1][bidx, lengths].float()
-                all_alignment_raw.append((last_token_gpu @ v).detach().cpu())
-                del last_token_gpu
+                # Legacy single-layer mode: project the sequence-mean of the
+                # one configured layer onto the single anchor direction.
+                li = trajectory_anchor.layer_indices[0]
+                v = v_cache_gpu[li]
+                h_l = decoder_hidden[li]
+                masked = h_l * mask.unsqueeze(-1)
+                mean_h_l = (masked.sum(dim=1) / valid_counts).float()  # (B, H)
+                all_alignment_raw.append((mean_h_l @ v).detach().cpu())
+                del mean_h_l, masked
 
-        all_states.append(agent_input)
         del decoder_hidden
 
-        # FIX: ignore per-batch r_weight (degenerate at batch_size=1).
-        # r_weight is computed once at dataset level after loop.
+        # Per-sample (L_i, H_i). Per-batch r_weight is degenerate at
+        # batch_size=1, so we accumulate and compute w at pool level later.
         r_loss, r_entropy, _ = compute_rewards(out.logits, labels)
+        all_r_loss.append(_flatten_cpu_float(r_loss))
+        all_r_entropy.append(_flatten_cpu_float(r_entropy))
 
-        r_loss_cpu = _flatten_cpu_float(r_loss)
-        r_entropy_cpu = _flatten_cpu_float(r_entropy)
-        # Drop the model output (logits is the heaviest tensor on GPU at this
-        # point — (B, T, V) bf16) BEFORE running the actor / appending CPU
-        # buffers, so the next batch's forward starts with maximum free space.
-        del out
-
-        states_for_agent = agent_input.to(agent.device, non_blocking=True)
-        action, log_prob, _ = agent.ac.get_action(states_for_agent)
-
-        # all_states already received agent_input above the compute_rewards
-        # block; here we only append the per-batch action / reward outputs.
-        all_actions.append(_flatten_cpu_float(action))
-        all_log_probs.append(_flatten_cpu_float(log_prob))
-        all_r_loss.append(r_loss_cpu)
-        all_r_entropy.append(r_entropy_cpu)
-
-        del input_ids, attention_mask, labels, states_for_agent
-        del action, log_prob, r_loss, r_entropy, r_loss_cpu, r_entropy_cpu
+        del out, input_ids, attention_mask, labels, r_loss, r_entropy
 
         if (
             torch.cuda.is_available()
@@ -255,148 +214,100 @@ def collect_episode(
                 elapsed / 60, sec_per_batch, cuda_mem_str(),
             )
 
-    if not all_states:
-        raise RuntimeError("collect_episode produced no states.")
+    if not all_r_loss:
+        raise RuntimeError("collect_episode produced no samples.")
 
-    all_states = torch.cat(all_states, dim=0)
-    all_actions = torch.cat(all_actions, dim=0)
-    all_log_probs = torch.cat(all_log_probs, dim=0)
-    all_r_loss = torch.cat(all_r_loss, dim=0)
-    all_r_entropy = torch.cat(all_r_entropy, dim=0)
+    all_r_loss_t = torch.cat(all_r_loss, dim=0)
+    all_r_entropy_t = torch.cat(all_r_entropy, dim=0)
 
-    # ---- Dataset-level adaptive weight r_weight (paper Eq. 5) ----
-    eps = 1e-8
-    if all_r_loss.numel() > 1:
-        var_loss = all_r_loss.var()
-        var_entropy = all_r_entropy.var()
-        r_weight = var_loss / (var_loss + var_entropy + eps)
-    else:
-        r_weight = torch.tensor(0.5)
-    r_weight_value = float(r_weight.item())
+    # ---- Pool-level composite reward (paper Eq.2-3) ----
+    R, r_weight_value = pool_reward(all_r_loss_t, all_r_entropy_t)
 
-    # ---- Composite reward per sample (paper Eq. 6) ----
-    all_rewards = r_weight * all_r_loss + (1.0 - r_weight) * all_r_entropy
+    # ---- Calibrated utility R̃ (paper Eq.8 inner) ----
+    R_tilde = calibrated_utility(R)
 
-    # ---- Selection score s_i = R_i · a_i · (1 + λ · Align_i) ----
-    R = all_rewards.view(-1)
-    a = all_actions.view(-1)
-
+    # ---- Alignment and final score (paper Eq.7 / Eq.8 outer) ----
     if apply_anchor:
-        # Streaming alignment: per-batch raw scores were accumulated inside the
-        # episode loop. Concat and apply the same min-max normalisation as
-        # `TrajectoryAnchor.compute_alignment` so downstream behaviour is
-        # bit-equivalent to the old "stack all states then project" path.
         alignment_raw = torch.cat(all_alignment_raw, dim=0).view(-1)
-        a_min, a_max = alignment_raw.min(), alignment_raw.max()
-        if (a_max - a_min) > 1e-8:
-            alignment = (alignment_raw - a_min) / (a_max - a_min)
-            _alignment_collapsed = False
-        else:
-            # All samples produced the same alignment score — usually means
-            # the anchor's PCA hit a degenerate covariance (zero gap) or
-            # multi-layer dot products perfectly cancel out. Silently setting
-            # alignment=0.5 would turn `boost = 1 + lam * 0.5 = const` and
-            # TADS would secretly behave as Data Agent (top-k of R*a). Log
-            # the collapse and record it in extras so the user notices.
-            alignment = torch.full_like(alignment_raw, 0.5)
-            _alignment_collapsed = True
+        alignment, _alignment_collapsed = normalize_alignment(alignment_raw)
+        if _alignment_collapsed:
             logger.error(
                 "TADS alignment COLLAPSED (max-min < 1e-8) | "
-                "alignment_raw.std=%.2e | min=%.4f | max=%.4f. "
-                "Selection reduces to Data Agent (R*a) for this epoch. "
-                "Check anchor PCA gap or multi-layer cancellation.",
+                "alignment_raw.std=%.2e. ã set to 0.5 for every sample → "
+                "boost becomes constant and TADS reduces to the calibrated-"
+                "utility baseline for this epoch. Check anchor PCA gap "
+                "or multi-layer cancellation.",
                 float(alignment_raw.std().item()),
-                float(a_min.item()), float(a_max.item()),
             )
-        boost = 1.0 + lam * alignment
-        score = R * a * boost
+        score = tads_score(R_tilde, alignment, lam)
         align_mean = float(alignment.mean().item())
         align_std = float(alignment.std().item())
-        boost_mean = float(boost.mean().item())
-        boost_max = float(boost.max().item())
+        boost = 1.0 + lam * alignment
         logger.info(
             "TADS score | epoch=%d | lam=%.3f | "
-            "align_mean=%.4f | align_std=%.4f | "
+            "R_mean=%.4f | R̃_mean=%.4f | align_mean=%.4f | align_std=%.4f | "
             "boost_mean=%.4f | boost_max=%.4f",
-            epoch, lam, align_mean, align_std, boost_mean, boost_max,
+            epoch, lam,
+            float(R.mean().item()), float(R_tilde.mean().item()),
+            align_mean, align_std,
+            float(boost.mean().item()), float(boost.max().item()),
         )
     else:
-        score = R * a
+        score = R_tilde
+        alignment = None
         align_mean = None
         align_std = None
-        logger.info("DataAgent score (no anchor) | epoch=%d", epoch)
+        _alignment_collapsed = False
+        logger.info(
+            "Calibrated-utility-only score (no anchor) | epoch=%d | "
+            "R_mean=%.4f | R̃_mean=%.4f",
+            epoch, float(R.mean().item()), float(R_tilde.mean().item()),
+        )
 
+    # ---- Top-B selection ----
     k = max(1, int(total_samples * selection_ratio))
     if total_samples == 0:
         raise RuntimeError(
             "collect_episode: total_samples == 0 — empty candidate pool. "
             "Check dataset_subset_size / data path.",
         )
-    if k <= 0:
-        raise RuntimeError(
-            f"collect_episode: would select 0 samples "
-            f"(total={total_samples}, ratio={selection_ratio}). "
-            "Increase selection_ratio or dataset size.",
-        )
-    # NaN / Inf scores: PPO actor or anchor produced bad numbers and topk
-    # over NaN is undefined. Fail loudly rather than silently picking
-    # arbitrary indices.
-    if torch.isnan(score).any() or torch.isinf(score).any():
-        raise RuntimeError(
-            "collect_episode: selection score contains NaN/Inf — likely "
-            "from a degenerate reward (var=0 → r_weight blew up) or a "
-            "diverged PPO actor. Check r_loss/r_entropy variance in the "
-            "preceding log line.",
-        )
-    selected_indices: List[int] = score.topk(k).indices.cpu().tolist()
+    selected_indices: List[int] = select_top_b(score, k).cpu().tolist()
     logger.info(
         "Selection topk | k=%d/%d | first5=%s",
         k, total_samples, selected_indices[:5],
     )
 
-    var_loss_val = float(all_r_loss.var().item()) if all_r_loss.numel() > 1 else 0.0
-    var_entropy_val = float(all_r_entropy.var().item()) if all_r_entropy.numel() > 1 else 0.0
+    var_loss_val = (
+        float(all_r_loss_t.var().item()) if all_r_loss_t.numel() > 1 else 0.0
+    )
+    var_entropy_val = (
+        float(all_r_entropy_t.var().item()) if all_r_entropy_t.numel() > 1 else 0.0
+    )
 
     elapsed = time.time() - t0
     logger.info(
         "Episode done | epoch=%d | selected=%d/%d | "
         "R_loss=%.4f (var=%.6f) | R_entropy=%.4f (var=%.6f) | "
-        "r_weight=%.4f | reward_mean=%.4f | elapsed=%.1fmin | %s",
+        "r_weight=%.4f | R_mean=%.4f | elapsed=%.1fmin | %s",
         epoch, k, total_samples,
-        all_r_loss.mean().item(), var_loss_val,
-        all_r_entropy.mean().item(), var_entropy_val,
+        float(all_r_loss_t.mean().item()), var_loss_val,
+        float(all_r_entropy_t.mean().item()), var_entropy_val,
         r_weight_value,
-        all_rewards.mean().item(),
+        float(R.mean().item()),
         elapsed / 60, cuda_mem_str(),
     )
 
-    r_loss_mean = float(all_r_loss.mean().item())
-    r_entropy_mean = float(all_r_entropy.mean().item())
+    r_loss_mean = float(all_r_loss_t.mean().item())
+    r_entropy_mean = float(all_r_entropy_t.mean().item())
 
-    # Restore the caller's training mode. Currently a no-op for downstream
-    # behaviour (sft_one_epoch calls model.train() anyway), but cheap and
-    # makes selector.py safe to reuse outside the main training loop.
     if _was_training:
         model.train()
-    if _agent_was_training:
-        agent.ac.train()
-
-    # No use_cache restore here: the loader pins use_cache=False once at
-    # model construction (when gradient_checkpointing is on) and the
-    # head of this function re-asserts False for safety. Leaving it
-    # False past collect_episode is correct for the subsequent SFT
-    # phase, which is also incompatible with KV cache. The earlier
-    # `if ... and _orig_use_cache is not None: base_model.config.use_cache
-    # = _orig_use_cache` block was a dangling reference (the variable
-    # was removed when the cache pinning moved to loader.py) and crashed
-    # tads/data_agent with `NameError: _orig_use_cache is not defined`.
 
     return {
         "selected_indices": selected_indices,
-        "states": all_states,
-        "actions": all_actions,
-        "log_probs": all_log_probs,
-        "rewards": all_rewards,
+        "rewards": R,
+        "calibrated_utility": R_tilde,
+        "alignment": alignment,
         "r_loss_mean": r_loss_mean,
         "r_entropy_mean": r_entropy_mean,
         "r_weight": r_weight_value,
@@ -410,7 +321,5 @@ def collect_episode(
         "use_anchor": apply_anchor,
         "align_mean": align_mean,
         "align_std": align_std,
-        "alignment_collapsed": (
-            _alignment_collapsed if apply_anchor else False
-        ),
+        "alignment_collapsed": _alignment_collapsed,
     }

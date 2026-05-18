@@ -34,7 +34,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.distributed as dist
 
-from ..core.agent import PPOAgent
 from ..core.selector import collect_episode
 from ..core.trajectory_anchor import TrajectoryAnchor
 from ..core.utils import is_main_process, local_rank, rank, world_size
@@ -196,7 +195,7 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None):
     return result
 
 
-def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, device):
+def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
     """Return (selected_indices, extras) for the given epoch."""
     n_total = len(dataset)
     ratio = float(cfg["selection_ratio"])
@@ -276,7 +275,6 @@ def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, d
             print("[trace] rank=0 BEFORE collect_episode", flush=True)
             episode = collect_episode(
                 model=model,
-                agent=agent,
                 dataset=dataset,
                 selection_ratio=ratio,
                 trajectory_anchor=anchor if method == "tads" else None,
@@ -306,19 +304,6 @@ def select_indices(method, *, model, agent, anchor, dataset, cfg, epoch, seed, d
                 "align_mean": episode["align_mean"],
                 "align_std": episode["align_std"],
             })
-
-            if agent is not None:
-                actor_loss, critic_loss = agent.update(
-                    states=episode["states"],
-                    actions=episode["actions"],
-                    old_log_probs=episode["log_probs"],
-                    rewards=episode["rewards"],
-                )
-                extras.update({"actor_loss": actor_loss, "critic_loss": critic_loss})
-                logger.info(
-                    "PPO update | actor_loss=%.4f | critic_loss=%.4f",
-                    actor_loss, critic_loss,
-                )
         except Exception as _e:
             print("[trace] rank=0 EXCEPTION in main branch: "
                   + type(_e).__name__ + ": " + str(_e), flush=True)

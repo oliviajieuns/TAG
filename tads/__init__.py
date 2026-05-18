@@ -5,21 +5,30 @@ Top-level convenience re-exports. Keep this file minimal — heavy modules
 """
 __version__ = "0.1.0"
 
-from tads.core.agent import PPOAgent
-from tads.core.reward import compute_rewards, composite_reward
+from tads.core.reward import compute_rewards
+from tads.core.scorer import (
+    calibrated_utility,
+    normalize_alignment,
+    pool_reward,
+    select_top_b,
+    tads_score,
+)
 from tads.core.selector import collect_episode
 from tads.core.trajectory_anchor import TrajectoryAnchor
-from tads.core.utils import set_seed, setup_logger, load_config, cuda_mem_str
+from tads.core.utils import cuda_mem_str, load_config, set_seed, setup_logger
 
 __all__ = [
     "__version__",
-    "PPOAgent",
-    "compute_rewards",
-    "composite_reward",
+    "calibrated_utility",
     "collect_episode",
-    "TrajectoryAnchor",
+    "compute_rewards",
+    "cuda_mem_str",
+    "load_config",
+    "normalize_alignment",
+    "pool_reward",
+    "select_top_b",
     "set_seed",
     "setup_logger",
-    "load_config",
-    "cuda_mem_str",
+    "tads_score",
+    "TrajectoryAnchor",
 ]

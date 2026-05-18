@@ -1,4 +1,9 @@
-# Llama-2-7B + Alpaca-GPT4 + TADS (λ=1, anchor on) at 10% selection
+# Llama-2-7B + Alpaca-GPT4 + TADS (paper Eq.8, anchor on) at 10% selection
+#
+# Score: s_i = R̃_i · (1 + λ · ã_i)   (paper Eq.8)
+#   R̃_i = σ((R_i - R̄) / (σ_R + 1e-6))   calibrated utility
+#   ã_i = min-max-norm( (1/L) Σ_l <h̄_l(x_i), v_l> )   sequence-mean alignment
+# PPO actor 완전 제거 — 모든 step이 deterministic pool-level 통계.
 defaults:
   - configs/base.yaml
   - configs/methods/tads.yaml
@@ -9,18 +14,3 @@ output_subdir: main_7b/llama2/tads_10
 selection_ratio: 0.1
 # epochs-reset(2026-05-16): 4 → 3. NAIT/대다수 IT-SFT 논문(Alpaca, LIMA, NAIT Table 8 등)이 3 epoch을 기준으로 보고하므로 매트릭스 전 셀을 3으로 환원해 baseline 비교 가능성 확보.
 train_epochs: 3
-
-anchor:
-  layer_idx: -1
-  # LLAMA-TUNE 2차 조정: 2048 → 1024 (1차 시도가 OOM). PCA 통과 시 hidden
-  # state 누적이 sample 수에 비례해서 SFT 잡과 메모리 경합. estimator 분산
-  # 개선보다 OOM 회피가 우선. pca_batch_size는 16 유지(per-step 영향 동일).
-  max_samples_for_pca: 1024
-  # LLAMA-TUNE 2차 조정: 16 → 8. forward 1회당 hidden_states 캐시 양을 반감해
-  # PCA 단계 자체의 peak 메모리를 줄임 (수렴엔 영향 없음, 통계량만).
-  pca_batch_size: 8
-
-# LLAMA-TUNE: bump PPO actor entropy slightly (same as data_agent_10 — keep
-# the comparison fair).
-agent:
-  entropy_coef: 0.02

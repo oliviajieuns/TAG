@@ -38,7 +38,7 @@ sealed epoch and is what ``tads.eval`` reads by default.
 Each run dir contains:
     cfg.yaml + cfg.json   — full resolved hyperparameter snapshot
     epoch_N/              — model weights, optimizer.pt, scheduler.pt,
-                            agent.pt, trajectory_anchor.pt, env_meta.json,
+                            trajectory_anchor.pt, env_meta.json,
                             anchor_history.json, _complete sentinel
     metrics.json          — per-epoch loss + selection diagnostics
     selected_indices_epoch{N}.json  — exact data subset used per epoch
@@ -76,7 +76,6 @@ import torch.distributed as dist
 from torch.utils.data import Subset
 from tads.core.schedulers import get_cosine_schedule_with_warmup
 
-from tads.core.agent import PPOAgent
 from tads.core.run_layout import (
     find_latest_complete_epoch,
     list_runs as _list_runs,
@@ -451,25 +450,7 @@ def main() -> None:
     warmup_ratio = float(cfg["warmup_ratio"])
     grad_clip = float(cfg["gradient_clip"])
 
-    agent: Optional[PPOAgent] = None
     anchor: Optional[TrajectoryAnchor] = None
-
-    if method in ("tads", "data_agent") and is_main_process():
-        agent_cfg = cfg.get("agent", {}) or {}
-        agent = PPOAgent(
-            state_dim=hidden_size,
-            lr=float(agent_cfg.get("lr", 3e-4)),
-            clip_eps=float(agent_cfg.get("clip_eps", 0.2)),
-            gamma=float(agent_cfg.get("gamma", 0.99)),
-            gae_lam=float(agent_cfg.get("gae_lam", 0.95)),
-            ppo_epochs=int(agent_cfg.get("ppo_epochs", 4)),
-            entropy_coef=float(agent_cfg.get("entropy_coef", 0.01)),
-            value_coef=float(agent_cfg.get("value_coef", 0.5)),
-            mb_size=int(agent_cfg.get("mb_size", 1024)),
-            advantage_mode=str(agent_cfg.get("advantage_mode", "group_relative")),
-            value_clip=bool(agent_cfg.get("value_clip", True)),
-            device=str(device),
-        )
 
     if method == "tads" and is_main_process():
         anchor_cfg = cfg.get("anchor", {}) or {}
@@ -649,16 +630,6 @@ def main() -> None:
             except Exception as e:
                 if is_main_process():
                     logger.warning("Could not restore scheduler (%s); using fresh state", e)
-        if agent is not None:
-            agent_path = resume_ckpt / "agent.pt"
-            if agent_path.exists() and hasattr(agent, "load"):
-                try:
-                    agent.load(str(agent_path))
-                    if is_main_process():
-                        logger.info("Restored PPO agent state from %s", agent_path)
-                except Exception as e:
-                    if is_main_process():
-                        logger.warning("Could not restore agent (%s)", e)
         if anchor is not None:
             anchor_path = resume_ckpt / "trajectory_anchor.pt"
             if anchor_path.exists():
@@ -704,7 +675,6 @@ def main() -> None:
         selected, extras = select_indices(
             method,
             model=model,
-            agent=agent,
             anchor=anchor,
             dataset=dataset,
             cfg=cfg,
@@ -828,9 +798,6 @@ def main() -> None:
             _safe("env_meta.json",
                   lambda: _atomic_json_dump(env_meta, ckpt_path / "env_meta.json"))
 
-            if agent is not None:
-                _safe("agent.pt",
-                      lambda: agent.save(str(ckpt_path / "agent.pt")))
             if anchor is not None:
                 _safe("trajectory_anchor.pt",
                       lambda: torch.save(anchor.state_dict(),
