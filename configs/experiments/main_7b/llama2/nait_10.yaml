@@ -1,11 +1,13 @@
 # Llama-2-7B + Alpaca-GPT4 + NAIT baseline at 10% selection (full fine-tune)
 #
-# 실행:
+# 실행 (시드 파일 없으면 ALPACA_DATA_FILES에서 자동 1500-sample 후 seeds/mix_auto.json에 cache):
 #   source scripts/setup_env.sh
 #   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.nait.train \
 #       --config configs/experiments/main_7b/llama2/nait_10.yaml \
-#       --seed_path <seeds.json> \
 #       --tag NAIT-Mix
+#
+# 또는 자체 seed JSON 있으면:
+#       --seed_path /path/to/seeds.json   를 추가
 #
 # 평가는 별도 root로:
 #   python -m tads.eval \

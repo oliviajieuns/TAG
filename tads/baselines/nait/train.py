@@ -39,11 +39,76 @@ from tads.pipelines.sft import make_dataloader, sft_one_epoch
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True)
-    p.add_argument("--seed_path", required=True, help="Path to NAIT seed JSON.")
+    p.add_argument(
+        "--seed_path",
+        default=None,
+        help=(
+            "Path to NAIT seed JSON. If omitted (or the file doesn't exist), "
+            "auto-build from cfg.data_files (= ALPACA_DATA_FILES) — random "
+            "sample of `n_seeds` rows, cached to seeds/mix_auto.json for reuse."
+        ),
+    )
     p.add_argument("--tag", required=True, help="Variant tag, e.g. NAIT-Mix.")
-    p.add_argument("--n_seeds", type=int, default=None,
-                   help="Sub-sample size for seeds (default: cfg.nait.n_seeds).")
+    p.add_argument(
+        "--n_seeds",
+        type=int,
+        default=None,
+        help=(
+            "Seed sample size. Default: cfg.nait.n_seeds. For auto-build, "
+            "NAIT paper Table 7 'mix' variant uses 1500."
+        ),
+    )
     return p.parse_args()
+
+
+def _ensure_seed_file(
+    seed_path,
+    *,
+    data_files_spec: str,
+    n_seeds: int,
+    seed: int,
+    logger,
+) -> str:
+    """Return a usable seed-JSON path; auto-build from Alpaca if missing.
+
+    Resolution order:
+        1. `seed_path` (CLI --seed_path) exists           → use as-is.
+        2. `seed_path` given but missing                  → build at that path.
+        3. `seed_path` is None  → use `seeds/mix_auto.json`; build if absent.
+    """
+    import glob as _glob
+
+    if seed_path and Path(seed_path).exists():
+        logger.info("Using user-provided seed file: %s", seed_path)
+        return seed_path
+
+    target = Path(seed_path) if seed_path else Path("seeds") / "mix_auto.json"
+    if target.exists():
+        logger.info("Reusing cached auto-built seed file: %s", target)
+        return str(target)
+
+    matches = sorted(_glob.glob(data_files_spec))
+    if not matches:
+        raise FileNotFoundError(
+            f"NAIT seed auto-build failed: cfg.data_files glob {data_files_spec!r} "
+            f"matched no files. Either pass --seed_path <existing.json>, or "
+            f"export ALPACA_DATA_FILES to a valid path before launching."
+        )
+    logger.info(
+        "Auto-building NAIT seed file from %d Alpaca file(s); target=%s, n=%d",
+        len(matches), target, n_seeds,
+    )
+    records = []
+    for f in matches:
+        with open(f) as h:
+            records.extend(json.load(h))
+    rng = random.Random(seed)
+    sample = rng.sample(records, n_seeds) if len(records) > n_seeds else records
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "w") as h:
+        json.dump(sample, h)
+    logger.info("Wrote %d seed items to %s", len(sample), target)
+    return str(target)
 
 
 def main() -> None:
@@ -78,13 +143,23 @@ def main() -> None:
     logger.info("NAIT baseline | tag=%s | seed_path=%s", args.tag, args.seed_path)
 
     # ---------- seeds ----------
-    with open(args.seed_path) as f:
+    # Default to 1500 (NAIT paper Table 7 'mix' variant). cfg.nait.n_seeds in
+    # the shipped methods/nait.yaml is set to a very large cap (100000) so it
+    # acts as no-op; users wanting a different mix size should pass --n_seeds.
+    n_seeds = int(args.n_seeds or cfg.get("nait", {}).get("n_seeds", 1500))
+    seed_path = _ensure_seed_file(
+        args.seed_path,
+        data_files_spec=str(cfg["data_files"]),
+        n_seeds=n_seeds,
+        seed=seed,
+        logger=logger,
+    )
+    with open(seed_path) as f:
         seed_items = json.load(f)
-    n_seeds = int(args.n_seeds or cfg.get("nait", {}).get("n_seeds", 100))
     if len(seed_items) > n_seeds:
-        random.seed(seed)
-        seed_items = random.sample(seed_items, n_seeds)
-    logger.info("Loaded %d seed items", len(seed_items))
+        rng = random.Random(seed)
+        seed_items = rng.sample(seed_items, n_seeds)
+    logger.info("Loaded %d seed items from %s", len(seed_items), seed_path)
 
     # ---------- model / dataset ----------
     tokenizer = load_tokenizer(cfg["model_path"])
