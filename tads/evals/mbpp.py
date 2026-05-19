@@ -254,7 +254,7 @@ class MBPPEvaluator(BenchmarkEvaluator):
         *,
         output_file: str,
         limit: Optional[int] = None,
-        prompt_style: str = "alpaca_default",  # unused (MBPP has its own format)
+        prompt_style: str = "alpaca_default",  # wraps 3-shot prompt in SFT template
         data_dir: Optional[str] = None,
         max_new_tokens: int = 512,
         num_fewshot: int = 3,
@@ -266,6 +266,13 @@ class MBPPEvaluator(BenchmarkEvaluator):
         # default and recovers ~2–3pt of pass@1 on llama-2-7B vs 10s.
         exec_timeout: float = 30.0,
         config: str = "sanitized",
+        # pass@k sampling. n_samples=1 (default) = greedy pass@1, paper-
+        # faithful and fastest. n_samples=10 + temperature=0.8 enables
+        # pass@10 (codex/HumanEval convention). pass@1 is always reported;
+        # pass@10 only when n_samples >= 10.
+        n_samples: int = 1,
+        temperature: float = 0.8,
+        top_p: float = 0.95,
         **kwargs,
     ) -> Dict[str, Any]:
         if data_dir is None:
@@ -430,19 +437,24 @@ class MBPPEvaluator(BenchmarkEvaluator):
 
         tokenizer.truncation_side = "left"
 
-        n_pass = 0
+        use_sampling = n_samples > 1
         per_problem: List[Dict[str, Any]] = []
+        # per-problem list of pass/fail (length = n_samples per problem) for
+        # unbiased pass@k estimation (Chen et al. codex Eq.1).
+        problem_results: List[List[bool]] = []
         for i, ex in enumerate(test_records):
-            prompt = _build_mbpp_prompt(demos, ex)
+            raw_prompt = _build_mbpp_prompt(demos, ex)
+            # Audit fix — wrap 3-shot prompt in the SFT template. Without
+            # this an SFT'd model (Llama-2-7B + Alpaca-GPT4) drops ~10pt
+            # below NAIT Table 2 51.58 on pass@1.
+            from tads.data.sft_prompts import mbpp_generation_prefix
+            prompt = mbpp_generation_prefix(raw_prompt, prompt_style=prompt_style)
             inputs = tokenizer(
                 prompt, return_tensors="pt",
                 truncation=True, max_length=max_input_tokens,
             ).to(device)
-            out = model.generate(
-                **inputs,
+            gen_kwargs = dict(
                 max_new_tokens=max_new_tokens,
-                do_sample=False,
-                temperature=0.0,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
                 stop_strings=[
                     # Only `\n[DONE]` — the no-newline `[DONE]` variant would
@@ -451,25 +463,51 @@ class MBPPEvaluator(BenchmarkEvaluator):
                     # completions that happen to mention "[DONE]".
                     "\n[DONE]",
                     "\nYou are an expert Python programmer",
+                    # Hallucinated next Alpaca turn (we wrap into ### Response).
+                    "\n### Instruction",
+                    "\n### Response",
                 ],
                 tokenizer=tokenizer,
             )
-            prompt_tok_len = inputs["input_ids"].shape[1]
-            raw = tokenizer.decode(
-                out[0, prompt_tok_len:], skip_special_tokens=True,
-            )
-            completion = _extract_completion(raw)
+            if use_sampling:
+                gen_kwargs.update(
+                    do_sample=True,
+                    temperature=temperature,
+                    top_p=top_p,
+                    num_return_sequences=n_samples,
+                )
+            else:
+                gen_kwargs.update(do_sample=False, temperature=0.0)
 
-            run = _run_in_subprocess(
-                completion, ex["test_list"], ex["test_setup_code"], exec_timeout,
-            )
-            ok = bool(run["passed"])
-            n_pass += int(ok)
+            out = model.generate(**inputs, **gen_kwargs)
+            prompt_tok_len = inputs["input_ids"].shape[1]
+
+            # `out` is (n_samples, seq_len) under sampling, (1, seq_len) greedy.
+            this_pass_flags: List[bool] = []
+            this_completions: List[str] = []
+            this_errors: List[Optional[str]] = []
+            for sample_idx in range(out.shape[0]):
+                raw = tokenizer.decode(
+                    out[sample_idx, prompt_tok_len:], skip_special_tokens=True,
+                )
+                completion = _extract_completion(raw)
+                run = _run_in_subprocess(
+                    completion, ex["test_list"], ex["test_setup_code"], exec_timeout,
+                )
+                ok = bool(run["passed"])
+                this_pass_flags.append(ok)
+                this_completions.append(completion)
+                this_errors.append(run["error"])
+
+            problem_results.append(this_pass_flags)
             per_problem.append({
                 "task_id": int(ex["task_id"]),
-                "passed": ok,
-                "error": run["error"],
-                "completion": completion,
+                "n_samples": n_samples,
+                "n_passed": sum(this_pass_flags),
+                "passed": this_pass_flags[0],  # greedy / first-sample pass
+                "any_passed": any(this_pass_flags),  # pass@k indicator
+                "error": this_errors[0],
+                "completion": this_completions[0],
             })
 
             del inputs, out
@@ -477,17 +515,38 @@ class MBPPEvaluator(BenchmarkEvaluator):
                 torch.cuda.empty_cache()
 
             if (i + 1) % 25 == 0:
+                _so_far_p1 = sum(r[0] for r in problem_results) / (i + 1)
+                _so_far_any = sum(any(r) for r in problem_results) / (i + 1)
                 logger.info(
-                    "  Progress: %d/%d | pass@1=%.4f",
-                    i + 1, len(test_records), n_pass / (i + 1),
+                    "  Progress: %d/%d | pass@1=%.4f | any-of-%d=%.4f",
+                    i + 1, len(test_records), _so_far_p1,
+                    n_samples, _so_far_any,
                 )
 
-        pass_at_1 = n_pass / len(test_records) if test_records else 0.0
-        summary = {
+        # Unbiased pass@k (codex paper Eq.1):
+        #   pass@k = E_problem[ 1 - C(n - c, k) / C(n, k) ]
+        # where n = total samples per problem, c = #passed samples.
+        # For n=k it reduces to "any sample passed". For n < k it's
+        # undefined; we report None.
+        def _pass_at_k(n_total: int, c: int, k: int) -> float:
+            if n_total - c < k:
+                return 1.0
+            import math
+            return 1.0 - math.comb(n_total - c, k) / math.comb(n_total, k)
+
+        # pass@1: codex convention — n samples used for unbiased estimate.
+        if test_records:
+            pass_at_1 = sum(
+                _pass_at_k(len(r), sum(r), 1) for r in problem_results
+            ) / len(test_records)
+        else:
+            pass_at_1 = 0.0
+
+        summary: Dict[str, Any] = {
             # `accuracy` aliases pass@1 for score-board uniformity.
             "accuracy": pass_at_1,
             "pass@1": pass_at_1,
-            "total_passed": n_pass,
+            "n_samples": n_samples,
             "total_questions": len(test_records),
             "config": config,
             "n_fewshot": len(demos),
@@ -495,10 +554,19 @@ class MBPPEvaluator(BenchmarkEvaluator):
             "per_problem": per_problem,
             "benchmark": "mbpp",
         }
+        log_extra = ""
+        if n_samples >= 10:
+            pass_at_10 = sum(
+                _pass_at_k(len(r), sum(r), 10) for r in problem_results
+            ) / max(1, len(test_records))
+            summary["pass@10"] = pass_at_10
+            summary["temperature"] = temperature
+            summary["top_p"] = top_p
+            log_extra = f" | pass@10={pass_at_10:.4f} (T={temperature})"
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)
         logger.info(
-            "MBPP pass@1: %.4f (%d/%d) | config=%s",
-            pass_at_1, n_pass, len(test_records), config,
+            "MBPP pass@1: %.4f (n_samples=%d, config=%s)%s",
+            pass_at_1, n_samples, config, log_extra,
         )
         return summary

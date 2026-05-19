@@ -362,3 +362,41 @@ def humaneval_generation_prefix(
     if prompt_style in ("llama_user_assistant", "deepseek_user_assistant"):
         return f"<|user|>\n{user}\n<|assistant|>\n"
     raise ValueError(f"Unknown prompt_style={prompt_style!r} for HumanEval")
+
+
+def mbpp_generation_prefix(
+    raw_prompt: str, *, prompt_style: str = "alpaca_default",
+) -> str:
+    """Wrap the 3-shot MBPP prompt in the SFT template — same rationale as
+    humaneval_generation_prefix.
+
+    `_build_mbpp_prompt` produces the bigcode-eval / Austin paper format
+    ("You are an expert..." demos + test problem ending in `[BEGIN]\\n`).
+    That format is base-model paper-faithful, but an SFT'd model
+    (Llama-2-7B + Alpaca-GPT4) is conditioned to respond only inside its
+    SFT template — feeding raw expert-prompts dropped pass@1 ~10pt below
+    NAIT Table 2's 51.58 reference (measured ~41 with no wrap). Wrapping
+    the whole 3-shot prompt as a single Alpaca instruction puts the
+    completion target back inside the model's trained `### Response:\\n`
+    region.
+
+    Note: the in-context demonstrations still contain `[BEGIN] / [DONE]`
+    markers, so the model learns the cue and emits `code\\n[DONE]` inside
+    the Alpaca response section. The stop_strings + _TRIM_PATTERNS in
+    `tads.evals.mbpp` then cut at the first `\\n[DONE]` or hallucinated
+    `### Instruction` boundary.
+    """
+    user = raw_prompt
+    if prompt_style == "alpaca_default":
+        return (
+            "Below is an instruction that describes a task. "
+            "Write a response that appropriately completes the request.\n\n"
+            f"### Instruction:\n{user}\n\n### Response:\n"
+        )
+    if prompt_style == "qwen_chatml":
+        return f"{IM_START}user\n{user}\n{IM_END}\n{IM_START}assistant\n"
+    if prompt_style == "mistral_instruct":
+        return f"[INST] {user} [/INST] "
+    if prompt_style in ("llama_user_assistant", "deepseek_user_assistant"):
+        return f"<|user|>\n{user}\n<|assistant|>\n"
+    raise ValueError(f"Unknown prompt_style={prompt_style!r} for MBPP")
