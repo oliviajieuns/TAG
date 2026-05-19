@@ -100,8 +100,19 @@ def _ensure_seed_file(
     )
     records = []
     for f in matches:
+        # Accept JSON-list or JSONL (mirrors load_dataset('json') behaviour).
         with open(f) as h:
-            records.extend(json.load(h))
+            head = h.read(1)
+            while head and head.isspace():
+                head = h.read(1)
+            h.seek(0)
+            if head == "[":
+                records.extend(json.load(h))
+            else:
+                for ln in h:
+                    ln = ln.strip()
+                    if ln:
+                        records.append(json.loads(ln))
     rng = random.Random(seed)
     sample = rng.sample(records, n_seeds) if len(records) > n_seeds else records
     target.parent.mkdir(parents=True, exist_ok=True)

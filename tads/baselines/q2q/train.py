@@ -72,14 +72,41 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _read_json_or_jsonl(path: str) -> list:
+    """Accept either JSON-list or JSONL (`load_dataset('json')`-compatible)."""
+    with open(path) as f:
+        head = f.read(1)
+        while head and head.isspace():
+            head = f.read(1)
+        f.seek(0)
+        if head == "[":
+            data = json.load(f)
+            if not isinstance(data, list):
+                raise TypeError(
+                    f"{path}: expected JSON list, got {type(data).__name__}"
+                )
+            return data
+        out: list = []
+        for lineno, ln in enumerate(f, start=1):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                out.append(json.loads(ln))
+            except json.JSONDecodeError as e:
+                raise json.JSONDecodeError(
+                    f"{e.msg} (file {path}, line {lineno})", e.doc, e.pos,
+                )
+        return out
+
+
 def _load_alpaca_raw(spec: str) -> list:
     matches = sorted(glob.glob(spec))
     if not matches:
         raise FileNotFoundError(f"Q2Q: data_files glob {spec!r} matched no files.")
     out = []
     for p in matches:
-        with open(p) as h:
-            out.extend(json.load(h))
+        out.extend(_read_json_or_jsonl(p))
     return out
 
 

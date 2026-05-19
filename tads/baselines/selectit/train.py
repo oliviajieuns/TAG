@@ -112,11 +112,50 @@ def _extract_ins_res(rec) -> tuple:
     )
 
 
+def _read_json_or_jsonl(path: str) -> list:
+    """Load a list of dicts from either JSON-list or JSONL layout.
+
+    Auto-detects by the first non-whitespace character of the file:
+        '[' → standard JSON list  (`json.load`)
+        else → JSONL (one object per line, `json.loads` each)
+
+    HF `load_dataset('json', ...)` accepts both layouts transparently, so a
+    Alpaca-GPT4 mirror in JSONL format works fine for the tokenised side
+    but breaks a naive `json.load` here — that mismatch is the root cause
+    of the `json.decoder.JSONDecodeError: Extra data: line 2 column 1`
+    we used to throw.
+    """
+    with open(path) as f:
+        head = f.read(1)
+        while head and head.isspace():
+            head = f.read(1)
+        f.seek(0)
+        if head == "[":
+            data = json.load(f)
+            if not isinstance(data, list):
+                raise TypeError(
+                    f"{path}: expected JSON list, got {type(data).__name__}"
+                )
+            return data
+        # JSONL — accept blank lines, reject malformed lines with context.
+        out = []
+        for lineno, ln in enumerate(f, start=1):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                out.append(json.loads(ln))
+            except json.JSONDecodeError as e:
+                raise json.JSONDecodeError(
+                    f"{e.msg} (file {path}, line {lineno})", e.doc, e.pos,
+                )
+        return out
+
+
 def _load_raw_records(data_files_spec: str) -> list:
     """Resolve the same glob `build_alpaca_dataset` would resolve, then read
-    every match as JSON and concatenate. Preserves on-disk order — which
-    matches the order HF `load_dataset('json', ...)` materialises the rows
-    in, so per-index alignment with the tokenised Dataset is exact.
+    every match (JSON-list or JSONL) and concatenate. Preserves on-disk
+    order so per-index alignment with the tokenised Dataset is exact.
     """
     matches = sorted(glob.glob(data_files_spec))
     if not matches:
@@ -125,14 +164,7 @@ def _load_raw_records(data_files_spec: str) -> list:
         )
     records = []
     for path in matches:
-        with open(path) as f:
-            data = json.load(f)
-        if not isinstance(data, list):
-            raise TypeError(
-                f"SelectIT: {path} is not a JSON list (got {type(data).__name__}). "
-                f"Only the canonical Alpaca-GPT4 list-of-dicts layout is supported."
-            )
-        records.extend(data)
+        records.extend(_read_json_or_jsonl(path))
     return records
 
 
