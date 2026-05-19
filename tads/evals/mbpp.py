@@ -142,7 +142,13 @@ def _build_mbpp_prompt(
         f"{tests_str}\n"
         f"[BEGIN]\n"
     )
-    return "".join(chunks)
+    # lm-eval-harness / Austin et al. MBPP convention: a blank line between
+    # demos. Previously `"".join(chunks)` glued `[DONE]\n` directly into the
+    # next demo's `You are an expert...` header so the model didn't see a
+    # clear demo boundary — ~5-10pt drop on pass@1 vs paper. `"\n".join`
+    # inserts a single extra newline between demos (each demo already ends
+    # in `\n`, so the result is the expected double-newline gap).
+    return "\n".join(chunks)
 
 
 # Strip everything from "[DONE]" / next "[BEGIN]" / "You are an expert"
@@ -183,19 +189,26 @@ def _run_in_subprocess(code: str, test_list: List[str], setup: str, timeout: flo
     Returns dict with ``passed`` (bool) and ``error`` (str | None).
     """
     # Inline test runner script — exits 0 iff every assert in test_list passes.
+    # Concatenate `setup + code + tests` into a single Python program and run
+    # one `exec` — matches the canonical bigcode-evaluation-harness MBPP
+    # runner. Previously we ran setup / code / each test in three separate
+    # `exec` calls. The shared `g` dict made the simple cases identical, but
+    # module-level side-effects (imports inside setup the body relies on,
+    # __all__ filtering, conditional class registration) behaved differently
+    # from a single-file execution.
     runner = textwrap.dedent("""
         import sys, json
         payload = json.loads(sys.stdin.read())
         code = payload["code"]
-        setup = payload.get("setup", "") or ""
+        setup = (payload.get("setup", "") or "").strip()
         tests = payload["tests"]
+        full = ""
+        if setup:
+            full += setup + "\\n"
+        full += code + "\\n" + "\\n".join(tests)
         g = {"__name__": "__main__"}
         try:
-            if setup.strip():
-                exec(setup, g)
-            exec(code, g)
-            for t in tests:
-                exec(t, g)
+            exec(full, g)
         except Exception as e:
             print(f"FAIL: {type(e).__name__}: {e}", file=sys.stderr)
             sys.exit(1)
@@ -432,7 +445,11 @@ class MBPPEvaluator(BenchmarkEvaluator):
                 temperature=0.0,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
                 stop_strings=[
-                    "\n[DONE]", "[DONE]",
+                    # Only `\n[DONE]` — the no-newline `[DONE]` variant would
+                    # match the literal token inside a docstring / comment /
+                    # string literal in the model's code and truncate valid
+                    # completions that happen to mention "[DONE]".
+                    "\n[DONE]",
                     "\nYou are an expert Python programmer",
                 ],
                 tokenizer=tokenizer,

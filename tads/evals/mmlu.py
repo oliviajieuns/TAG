@@ -14,13 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 CHOICES = ["A", "B", "C", "D"]
+# Hendrycks et al. 2021 canonical MMLU template — single-newline separators,
+# `A. B. C. D.` bullets (not `A) B) C) D)`), no blank line before `Answer:`.
+# Matches HF cais/mmlu README + lm-eval-harness so cross-paper numbers (NAIT
+# Table 2 46.87 etc.) are directly comparable.
 MMLU_TEMPLATE = """{question}
-
-A) {A}
-B) {B}
-C) {C}
-D) {D}
-
+A. {A}
+B. {B}
+C. {C}
+D. {D}
 Answer:"""
 
 
