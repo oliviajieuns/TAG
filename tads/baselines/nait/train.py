@@ -16,6 +16,19 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# transformers 5.0 eager-imports `from torchvision.io import VideoReader`
+# via its video model registry, which fails on torchvision builds without
+# ffmpeg support — even though our LLM-only training never touches video.
+# Stub the missing attribute BEFORE any transformers import (incl. via
+# tads.modeling.loader) so the import resolves to a harmless placeholder.
+# Same pattern as tads.train + every other tads/baselines/<m>/train.py.
+try:
+    import torchvision.io as _tv_io
+    if not hasattr(_tv_io, "VideoReader"):
+        _tv_io.VideoReader = type("VideoReader", (), {})
+except Exception:
+    pass
+
 import numpy as np
 import torch
 from torch.utils.data import Subset
