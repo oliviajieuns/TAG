@@ -420,17 +420,17 @@ class XQuADEvaluator(BenchmarkEvaluator):
         micro_em = tot_correct / tot_total if tot_total else 0.0
 
         summary = {
-            # `accuracy` aliases macro EM for score-board uniformity.
-            "accuracy": macro_em,
-            "accuracy_em": macro_em,           # alias 2 (TyDiQA-style key)
+            # `accuracy` aliases macro F1 — paper canonical headline metric
+            # for XQuAD (Artetxe et al. 2020; NAIT Table 2). EM stays as
+            # a secondary diagnostic. Keeping the `accuracy` key name so
+            # the score-board reader picks the right bench-level number
+            # without bench-specific branching.
+            "accuracy": macro_f1,
+            "accuracy_f1": macro_f1,
+            "accuracy_em": macro_em,
             "macro_em": macro_em,
-            "micro_em": micro_em,
-            # F1 — diagnostic only. When EM is low but F1 is high, the model
-            # is producing correct content with surface differences (word
-            # order, partial-token mismatch, extra article we forgot to
-            # strip); look at per_question[].prediction vs gold to identify
-            # the normalisation gap.
             "macro_f1": macro_f1,
+            "micro_em": micro_em,
             "per_language_f1": per_lang_f1,
             "total_correct": tot_correct,
             "total_questions": tot_total,

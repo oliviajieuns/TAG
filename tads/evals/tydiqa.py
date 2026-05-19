@@ -81,6 +81,46 @@ def _exact_match(pred: str, gold_list: List[str]) -> bool:
     return any(pn == _normalize(g) for g in gold_list)
 
 
+def _f1(pred: str, gold_list: List[str]) -> float:
+    """SQuAD token-overlap F1 — max over all gold references.
+
+    This is the metric NAIT (ICLR 2026) Table 2 reports for TyDiQA-GoldP
+    (the 39.48 baseline number), open-instruct uses via
+    `evaluate.load("squad")`, and the original TyDiQA paper (Clark et al.
+    2020) specifies as the primary GoldP metric.
+
+    Token split is whitespace after `_normalize`. For CJK/Thai with no
+    spaces this is coarser than ideal, but it matches the canonical SQuAD
+    F1 implementation so cross-paper comparison stays valid.
+    """
+    pred_tokens = _normalize(pred).split()
+    best = 0.0
+    for g in gold_list:
+        if not g:
+            continue
+        gold_tokens = _normalize(g).split()
+        if not pred_tokens or not gold_tokens:
+            score = 1.0 if pred_tokens == gold_tokens else 0.0
+        else:
+            common: Dict[str, int] = {}
+            for t in pred_tokens:
+                common[t] = common.get(t, 0) + 1
+            num_same = 0
+            for t in gold_tokens:
+                if common.get(t, 0) > 0:
+                    common[t] -= 1
+                    num_same += 1
+            if num_same == 0:
+                score = 0.0
+            else:
+                precision = num_same / len(pred_tokens)
+                recall = num_same / len(gold_tokens)
+                score = 2 * precision * recall / (precision + recall)
+        if score > best:
+            best = score
+    return best
+
+
 def _language_of(qa_id: Optional[str]) -> str:
     """Extract the language prefix from a TyDiQA QA id."""
     if not qa_id:
@@ -628,6 +668,7 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
         prefix_style = prompt_style
 
         correct = 0
+        f1_sum = 0.0
         results = []
         # Count samples that fell back to 0-shot because their language
         # couldn't be parsed (qa_id didn't match `lang--...`) or no demos
@@ -675,12 +716,15 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 pred = pred.splitlines()[0].strip()
 
             ok = _exact_match(pred, gold)
+            f1 = _f1(pred, gold)
             correct += int(ok)
+            f1_sum += f1
             results.append({
                 "question": ex["question"],
                 "language": ex.get("language", "unknown"),
                 "prediction": pred,
                 "correct": ok,
+                "f1": round(f1, 4),
             })
 
             # Release per-example CUDA tensors so the next 5-shot prompt
@@ -697,19 +741,34 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
 
             if (i + 1) % 100 == 0:
                 logger.info(
-                    "  Progress: %d/%d | EM: %.4f",
-                    i + 1, len(examples), correct / (i + 1),
+                    "  Progress: %d/%d | EM: %.4f | F1: %.4f",
+                    i + 1, len(examples),
+                    correct / (i + 1), f1_sum / (i + 1),
                 )
 
-        accuracy = correct / len(examples) if examples else 0.0
-        # Per-language accuracy breakdown (paper-style).
-        per_lang: Dict[str, Dict[str, int]] = {}
+        em_score = correct / len(examples) if examples else 0.0
+        f1_score = f1_sum / len(examples) if examples else 0.0
+        # NAIT / Clark et al. / open-instruct all report F1 as the headline
+        # TyDiQA-GoldP metric; EM is secondary. Expose F1 as `accuracy` so
+        # the cross-bench score-board reader picks up the paper-canonical
+        # number without bench-specific branching.
+        accuracy = f1_score
+        # Per-language EM + F1 breakdown (paper-style).
+        per_lang: Dict[str, Dict[str, Any]] = {}
         for r in results:
-            bucket = per_lang.setdefault(r["language"], {"correct": 0, "total": 0})
+            bucket = per_lang.setdefault(
+                r["language"],
+                {"correct": 0, "f1_sum": 0.0, "total": 0},
+            )
             bucket["total"] += 1
             bucket["correct"] += int(r["correct"])
+            bucket["f1_sum"] += float(r["f1"])
         per_lang_acc = {
-            lang: {**b, "accuracy": b["correct"] / b["total"] if b["total"] else 0.0}
+            lang: {
+                **b,
+                "accuracy_em": b["correct"] / b["total"] if b["total"] else 0.0,
+                "accuracy_f1": b["f1_sum"] / b["total"] if b["total"] else 0.0,
+            }
             for lang, b in per_lang.items()
         }
         if effective_fewshot and n_silent_zero_shot > 0:
@@ -721,11 +780,14 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 100.0 * n_silent_zero_shot / max(1, len(examples)),
             )
         summary = {
-            # `accuracy` is the cross-bench primary-metric alias the score-board
-            # reader picks up without bench-specific branching. `accuracy_em`
-            # remains the bench-natural key.
+            # `accuracy` aliases F1 — paper canonical (NAIT Table 2 39.48,
+            # Clark et al. 2020, open-instruct headline). EM stays as
+            # secondary diagnostic under `accuracy_em`.
             "accuracy": accuracy,
-            "accuracy_em": accuracy,
+            "accuracy_f1": f1_score,
+            "accuracy_em": em_score,
+            "f1": f1_score,
+            "em": em_score,
             "correct": correct,
             "total": len(examples),
             "n_fewshot": effective_fewshot,
@@ -748,12 +810,12 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
             json.dump(summary, f, indent=2)
         if fewshot_fallback_reason is not None:
             logger.error(
-                "TyDiQA EM: %.4f (%d/%d) | NOT paper-faithful (0-shot fallback)",
-                accuracy, correct, len(examples),
+                "TyDiQA F1: %.4f | EM: %.4f (%d/%d) | NOT paper-faithful (0-shot fallback)",
+                f1_score, em_score, correct, len(examples),
             )
         else:
             logger.info(
-                "TyDiQA EM: %.4f (%d/%d) | n_fewshot=%d",
-                accuracy, correct, len(examples), effective_fewshot,
+                "TyDiQA F1: %.4f | EM: %.4f (%d/%d) | n_fewshot=%d",
+                f1_score, em_score, correct, len(examples), effective_fewshot,
             )
         return summary
