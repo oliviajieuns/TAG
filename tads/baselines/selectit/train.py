@@ -47,6 +47,7 @@ except Exception:
 import torch
 from torch.utils.data import Subset
 
+from tads.core.data_io import read_records_glob
 from tads.core.schedulers import get_cosine_schedule_with_warmup
 from tads.core.utils import (
     clear_runtime_caches,
@@ -94,7 +95,8 @@ def _extract_ins_res(rec) -> tuple:
     """Pull (instruction, response) text from one raw Alpaca-GPT4 record.
 
     Alpaca-GPT4 canonical schema: {'instruction', 'input', 'output'}.
-    Some mirrors use the ShareGPT-style {'conversations': [...]} shape.
+    Some mirrors use the ShareGPT-style {'conversations': [...]} shape —
+    where each element can be a plain string OR a dict with a 'value' key.
     """
     if not isinstance(rec, dict):
         raise TypeError(f"raw record is not a dict: {type(rec)}")
@@ -106,66 +108,27 @@ def _extract_ins_res(rec) -> tuple:
         return ins, rec["output"]
     if "conversations" in rec and isinstance(rec["conversations"], list):
         convs = rec["conversations"]
-        return convs[0]["value"], convs[1]["value"]
+        if len(convs) < 2:
+            raise ValueError(
+                f"conversations record needs >=2 turns; got {len(convs)}"
+            )
+
+        def _txt(v):
+            if isinstance(v, str):
+                return v
+            if isinstance(v, dict):
+                return v.get("value") or v.get("content") or ""
+            return str(v)
+
+        return _txt(convs[0]), _txt(convs[1])
     raise KeyError(
         f"Cannot find instruction/output in record; keys={list(rec.keys())}"
     )
 
 
-def _read_json_or_jsonl(path: str) -> list:
-    """Load a list of dicts from either JSON-list or JSONL layout.
-
-    Auto-detects by the first non-whitespace character of the file:
-        '[' → standard JSON list  (`json.load`)
-        else → JSONL (one object per line, `json.loads` each)
-
-    HF `load_dataset('json', ...)` accepts both layouts transparently, so a
-    Alpaca-GPT4 mirror in JSONL format works fine for the tokenised side
-    but breaks a naive `json.load` here — that mismatch is the root cause
-    of the `json.decoder.JSONDecodeError: Extra data: line 2 column 1`
-    we used to throw.
-    """
-    with open(path) as f:
-        head = f.read(1)
-        while head and head.isspace():
-            head = f.read(1)
-        f.seek(0)
-        if head == "[":
-            data = json.load(f)
-            if not isinstance(data, list):
-                raise TypeError(
-                    f"{path}: expected JSON list, got {type(data).__name__}"
-                )
-            return data
-        # JSONL — accept blank lines, reject malformed lines with context.
-        out = []
-        for lineno, ln in enumerate(f, start=1):
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                out.append(json.loads(ln))
-            except json.JSONDecodeError as e:
-                raise json.JSONDecodeError(
-                    f"{e.msg} (file {path}, line {lineno})", e.doc, e.pos,
-                )
-        return out
-
-
 def _load_raw_records(data_files_spec: str) -> list:
-    """Resolve the same glob `build_alpaca_dataset` would resolve, then read
-    every match (JSON-list or JSONL) and concatenate. Preserves on-disk
-    order so per-index alignment with the tokenised Dataset is exact.
-    """
-    matches = sorted(glob.glob(data_files_spec))
-    if not matches:
-        raise FileNotFoundError(
-            f"SelectIT: data_files glob {data_files_spec!r} matched no files."
-        )
-    records = []
-    for path in matches:
-        records.extend(_read_json_or_jsonl(path))
-    return records
+    """Load raw records via the shared JSON / JSONL / Parquet helper."""
+    return read_records_glob(data_files_spec)
 
 
 def main() -> None:

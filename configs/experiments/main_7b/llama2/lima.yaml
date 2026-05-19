@@ -14,3 +14,5 @@ defaults:
   - configs/modes/full_ft.yaml
 
 output_subdir: main_7b/llama2/lima
+# Cross-method 비교를 위해 TADS/data_agent와 동일하게 3으로 고정.
+train_epochs: 3

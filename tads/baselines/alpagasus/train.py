@@ -44,6 +44,7 @@ except Exception:
 import torch
 from torch.utils.data import Subset
 
+from tads.core.data_io import read_records, read_records_glob
 from tads.core.schedulers import get_cosine_schedule_with_warmup
 from tads.core.utils import (
     clear_runtime_caches,
@@ -74,44 +75,9 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _read_json_or_jsonl(path: str) -> list:
-    """Accept either JSON-list or JSONL (`load_dataset('json')`-compatible)."""
-    with open(path) as f:
-        head = f.read(1)
-        while head and head.isspace():
-            head = f.read(1)
-        f.seek(0)
-        if head == "[":
-            data = json.load(f)
-            if not isinstance(data, list):
-                raise TypeError(
-                    f"{path}: expected JSON list, got {type(data).__name__}"
-                )
-            return data
-        out: list = []
-        for lineno, ln in enumerate(f, start=1):
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                out.append(json.loads(ln))
-            except json.JSONDecodeError as e:
-                raise json.JSONDecodeError(
-                    f"{e.msg} (file {path}, line {lineno})", e.doc, e.pos,
-                )
-        return out
-
-
 def _load_alpaca_raw(data_files_spec: str) -> list:
-    matches = sorted(glob.glob(data_files_spec))
-    if not matches:
-        raise FileNotFoundError(
-            f"AlpaGasus: cfg.data_files glob {data_files_spec!r} matched no files."
-        )
-    out: list = []
-    for p in matches:
-        out.extend(_read_json_or_jsonl(p))
-    return out
+    """Load Alpaca-GPT4 raw records via the shared JSON/JSONL/Parquet helper."""
+    return read_records_glob(data_files_spec)
 
 
 def _extract_instruction(rec) -> str:
@@ -229,8 +195,10 @@ def main() -> None:
         )
     logger.info("Alpaca-GPT4 size: %d", len(dataset))
 
-    with open(filtered_file) as f:
-        filtered = json.load(f)
+    # AlpaGasus filtered JSON ships as JSON-list in the official repo, but
+    # some forks redistribute as JSONL — go through the shared helper so we
+    # never re-introduce the "Extra data: line 2 column 1" bug.
+    filtered = read_records(filtered_file)
     logger.info("AlpaGasus filtered records: %d (from %s)", len(filtered), filtered_file)
 
     selected_indices = _match_indices(filtered, raw_records)

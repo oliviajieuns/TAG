@@ -33,6 +33,7 @@ except Exception:
 import torch
 from torch.utils.data import Subset
 
+from tads.core.data_io import read_records_glob
 from tads.core.schedulers import get_cosine_schedule_with_warmup
 from tads.core.utils import (
     clear_runtime_caches,
@@ -72,42 +73,9 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _read_json_or_jsonl(path: str) -> list:
-    """Accept either JSON-list or JSONL (`load_dataset('json')`-compatible)."""
-    with open(path) as f:
-        head = f.read(1)
-        while head and head.isspace():
-            head = f.read(1)
-        f.seek(0)
-        if head == "[":
-            data = json.load(f)
-            if not isinstance(data, list):
-                raise TypeError(
-                    f"{path}: expected JSON list, got {type(data).__name__}"
-                )
-            return data
-        out: list = []
-        for lineno, ln in enumerate(f, start=1):
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                out.append(json.loads(ln))
-            except json.JSONDecodeError as e:
-                raise json.JSONDecodeError(
-                    f"{e.msg} (file {path}, line {lineno})", e.doc, e.pos,
-                )
-        return out
-
-
 def _load_alpaca_raw(spec: str) -> list:
-    matches = sorted(glob.glob(spec))
-    if not matches:
-        raise FileNotFoundError(f"Q2Q: data_files glob {spec!r} matched no files.")
-    out = []
-    for p in matches:
-        out.extend(_read_json_or_jsonl(p))
-    return out
+    """Load Alpaca-GPT4 raw records via the shared JSON/JSONL/Parquet helper."""
+    return read_records_glob(spec)
 
 
 def _extract_ins_res(rec) -> tuple:
@@ -119,7 +87,19 @@ def _extract_ins_res(rec) -> tuple:
         return ins, rec["output"]
     if "conversations" in rec and isinstance(rec["conversations"], list):
         c = rec["conversations"]
-        return c[0]["value"], c[1]["value"]
+        if len(c) < 2:
+            raise ValueError(
+                f"conversations record needs >=2 turns; got {len(c)}"
+            )
+
+        def _txt(v):
+            if isinstance(v, str):
+                return v
+            if isinstance(v, dict):
+                return v.get("value") or v.get("content") or ""
+            return str(v)
+
+        return _txt(c[0]), _txt(c[1])
     raise KeyError(f"No instruction/output in record; keys={list(rec.keys())}")
 
 

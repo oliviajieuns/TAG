@@ -297,7 +297,7 @@ def setup_logger(
 
 # --------------------------------------------------------------------- backup
 def backup_latest_if_exists(output_dir: str) -> None:
-    """Copy latest.pt / agent.pt / metrics.json into backup_<ts>/ if present."""
+    """Copy latest.pt / metrics.json into backup_<ts>/ if present."""
     latest = Path(output_dir) / "latest.pt"
     if not latest.exists():
         return
@@ -305,7 +305,7 @@ def backup_latest_if_exists(output_dir: str) -> None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir = Path(output_dir) / f"backup_{ts}"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("latest.pt", "agent.pt", "metrics.json"):
+    for name in ("latest.pt", "metrics.json"):
         src = Path(output_dir) / name
         if src.exists():
             shutil.copy(src, backup_dir / name)

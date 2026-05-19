@@ -1,12 +1,10 @@
 # Llama-2-7B + Alpaca-GPT4 + SelectIT baseline at 10% selection (full fine-tune)
 #
-# **현재 동작 안 함** — `tads/baselines/selectit/train.py`는 NotImplementedError
-# stub. 본 구현이 채워지면 아래 명령으로 학습/평가 가능.
-#
-# 실행 (구현 후):
+# 실행:
 #   source scripts/setup_env.sh
 #   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.selectit.train \
-#       --config configs/experiments/main_7b/llama2/selectit_10.yaml
+#       --config configs/experiments/main_7b/llama2/selectit_10.yaml \
+#       --tag SelectIT-Token
 #
 # 평가는 별도 root로:
 #   python -m tads.eval \
@@ -22,3 +20,5 @@ defaults:
 
 output_subdir: main_7b/llama2/selectit_10
 selection_ratio: 0.1
+# Cross-method 비교를 위해 TADS/data_agent와 동일하게 3으로 고정.
+train_epochs: 3

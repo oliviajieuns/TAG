@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import random
 import time
 from datetime import datetime
@@ -98,27 +99,39 @@ def _ensure_seed_file(
         "Auto-building NAIT seed file from %d Alpaca file(s); target=%s, n=%d",
         len(matches), target, n_seeds,
     )
-    records = []
-    for f in matches:
-        # Accept JSON-list or JSONL (mirrors load_dataset('json') behaviour).
-        with open(f) as h:
-            head = h.read(1)
-            while head and head.isspace():
-                head = h.read(1)
-            h.seek(0)
-            if head == "[":
-                records.extend(json.load(h))
-            else:
-                for ln in h:
-                    ln = ln.strip()
-                    if ln:
-                        records.append(json.loads(ln))
-    rng = random.Random(seed)
-    sample = rng.sample(records, n_seeds) if len(records) > n_seeds else records
+    # Cross-process lock so two concurrent training jobs sharing this seeds/
+    # dir don't race on the cache write. filelock is already a pinned dep
+    # (requirements.txt) used by tads/data/alpaca.py for the same purpose.
+    try:
+        from filelock import FileLock  # type: ignore
+    except Exception:
+        FileLock = None  # type: ignore
     target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "w") as h:
-        json.dump(sample, h)
-    logger.info("Wrote %d seed items to %s", len(sample), target)
+    lock_path = str(target) + ".lock"
+
+    def _build_and_write():
+        # Re-check inside the lock — the other process may have just written it.
+        if target.exists():
+            logger.info("Reusing cached seed file built by a concurrent job: %s", target)
+            return
+        # Read via the shared loader so JSON / JSONL / Parquet all work.
+        from tads.core.data_io import read_records
+        records = []
+        for f in matches:
+            records.extend(read_records(f))
+        rng = random.Random(seed)
+        sample = rng.sample(records, n_seeds) if len(records) > n_seeds else records
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        with open(tmp, "w") as h:
+            json.dump(sample, h)
+        os.replace(tmp, target)
+        logger.info("Wrote %d seed items to %s", len(sample), target)
+
+    if FileLock is not None:
+        with FileLock(lock_path, timeout=300):
+            _build_and_write()
+    else:
+        _build_and_write()
     return str(target)
 
 

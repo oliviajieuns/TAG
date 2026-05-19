@@ -23,3 +23,5 @@ defaults:
 
 output_subdir: main_7b/llama2/nait_10
 selection_ratio: 0.1
+# Cross-method 비교를 위해 TADS/data_agent와 동일하게 3으로 고정 (base default와 동일).
+train_epochs: 3
