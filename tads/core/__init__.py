@@ -1,19 +1,29 @@
-"""Core algorithms: PPO agent, reward, selector, trajectory anchor, utils."""
-from .agent import PPOAgent, ActorCritic
+"""Core algorithms: reward / scorer (paper Eq.2-3, 7, 8), selector,
+trajectory anchor, utils."""
 from .reward import compute_rewards, composite_reward
+from .scorer import (
+    calibrated_utility,
+    normalize_alignment,
+    pool_reward,
+    select_top_b,
+    tads_score,
+)
 from .selector import collect_episode
 from .trajectory_anchor import TrajectoryAnchor
-from .utils import set_seed, setup_logger, load_config, cuda_mem_str
+from .utils import cuda_mem_str, load_config, set_seed, setup_logger
 
 __all__ = [
-    "PPOAgent",
-    "ActorCritic",
-    "compute_rewards",
-    "composite_reward",
+    "calibrated_utility",
     "collect_episode",
-    "TrajectoryAnchor",
+    "composite_reward",
+    "compute_rewards",
+    "cuda_mem_str",
+    "load_config",
+    "normalize_alignment",
+    "pool_reward",
+    "select_top_b",
     "set_seed",
     "setup_logger",
-    "load_config",
-    "cuda_mem_str",
+    "tads_score",
+    "TrajectoryAnchor",
 ]
