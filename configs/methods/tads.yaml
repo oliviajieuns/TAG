@@ -1,7 +1,7 @@
 # TADS — Trajectory-Anchored Data Selection (paper §3, Algorithm 1).
 # Deterministic pipeline (no PPO actor). Score:
 #   s_i = R̃_i · (1 + λ · ã_i)            (Eq.8)
-#   R̃_i = σ((R_i - R̄) / (σ_R + 1e-6))    calibrated utility (Eq.8 inner)
+#   R̃_i = (R_i - R̄) / (σ_R + 1e-6)       calibrated utility (z-score, no sigmoid)
 #   ã_i = min-max-norm( (1/L) Σ_l <h̄_l(x_i), v_l> )  sequence-mean alignment (Eq.6-7)
 # λ=0 reduces s_i to R̃_i (clean ablation = calibrated-utility-only baseline).
 method: tads

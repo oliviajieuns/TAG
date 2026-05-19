@@ -68,28 +68,31 @@ def calibrated_utility(
     R: torch.Tensor,
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """Paper Eq.8 inner: pool-level z-score followed by logistic.
+    """Paper Eq.8 inner: pool-level z-score.
 
-        R̃_i = σ( (R_i - R̄) / (σ_R + eps) )
+        R̃_i = (R_i - R̄) / (σ_R + eps)
 
-    The z-score centres out the additive task-mix-dependent baseline of
-    Eq.5/total-variance; the logistic map renders the result bounded in
-    (0,1) so it composes multiplicatively with the anchor factor in
-    Eq.8.  eps = 1e-6 matches the value cited in paper Eq.8.
+    Centres out the additive task-mix-dependent baseline of Eq.5/
+    total-variance and scales by the pool std so cross-task drift in
+    R-magnitude doesn't dominate the ranking.  Unlike the original paper
+    formulation, the logistic sigmoid is intentionally NOT applied — R̃
+    here is unbounded, so the multiplicative composition with the anchor
+    factor `(1 + λ·ã_i)` in tads_score preserves R-magnitude information
+    instead of squashing it. Sign is preserved (R below the pool mean →
+    negative R̃ → smaller s_i after the anchor multiply).
 
     Args:
         R: (N,) composite reward.
-        eps: numerical stabiliser added to the pool std.
+        eps: numerical stabiliser added to the pool std (paper: 1e-6).
 
     Returns:
-        R̃ of shape (N,), each entry strictly in (0, 1).
+        R̃ of shape (N,), real-valued (typically ≈ [-3, +3]).
     """
     if R.numel() == 0:
         return R
     mean = R.mean()
     std = R.std(unbiased=False) if R.numel() > 1 else torch.tensor(0.0, device=R.device)
-    z = (R - mean) / (std + eps)
-    return torch.sigmoid(z)
+    return (R - mean) / (std + eps)
 
 
 def normalize_alignment(

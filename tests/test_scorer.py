@@ -34,15 +34,17 @@ def test_pool_reward_equal_variance():
     assert torch.allclose(R, torch.tensor([0.0, 1.0]), atol=1e-2)
 
 
-def test_calibrated_utility_bounded_and_centred():
-    """R̃ should lie strictly in (0, 1) and equal 0.5 at the pool mean."""
+def test_calibrated_utility_zero_at_pool_mean():
+    """R̃ is a z-score: value at the pool mean is 0, monotone increasing in R."""
     R = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
     R_tilde = calibrated_utility(R)
-    # All entries in (0, 1).
-    assert torch.all(R_tilde > 0).item()
-    assert torch.all(R_tilde < 1).item()
-    # Element corresponding to the pool mean (R=3) should be ≈ 0.5.
-    assert abs(R_tilde[2].item() - 0.5) < 1e-3
+    # Pool mean is 3 → R_tilde[2] ≈ 0.
+    assert abs(R_tilde[2].item()) < 1e-3
+    # Monotone — larger R yields larger R̃.
+    diffs = R_tilde[1:] - R_tilde[:-1]
+    assert torch.all(diffs > 0).item()
+    # Sign-preserving — entries below pool mean are negative.
+    assert R_tilde[0].item() < 0 and R_tilde[-1].item() > 0
 
 
 def test_normalize_alignment_minmax():
@@ -66,12 +68,12 @@ def test_tads_score_lam_zero_recovers_calibrated_utility():
 
 
 def test_tads_score_multiplicative_boost():
-    """At λ=1 a top-alignment sample gets the full 2× boost."""
-    R_tilde = torch.tensor([0.5, 0.5])
+    """At λ=1 a top-alignment sample gets the full 2× boost (any R̃ scale)."""
+    R_tilde = torch.tensor([1.2, 1.2])
     a = torch.tensor([0.0, 1.0])
     s = tads_score(R_tilde, a, lam=1.0)
-    assert math.isclose(s[0].item(), 0.5, abs_tol=1e-6)
-    assert math.isclose(s[1].item(), 1.0, abs_tol=1e-6)
+    assert math.isclose(s[0].item(), 1.2, abs_tol=1e-6)
+    assert math.isclose(s[1].item(), 2.4, abs_tol=1e-6)
 
 
 def test_select_top_b_descending():
