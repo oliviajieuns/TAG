@@ -157,16 +157,27 @@ def main() -> None:
     logger.info("AlpaGasus baseline | tag=%s | output_dir=%s", args.tag, output_dir)
 
     # Resolve filtered file path: CLI > env > cfg.
-    filtered_file = (
-        args.filtered_file
-        or os.environ.get("ALPAGASUS_FILTERED_FILE")
-        or (cfg.get("alpagasus") or {}).get("filtered_file")
-    )
+    _cli_val = args.filtered_file
+    _env_val = os.environ.get("ALPAGASUS_FILTERED_FILE")
+    _cfg_val = (cfg.get("alpagasus") or {}).get("filtered_file")
+    filtered_file = _cli_val or _env_val or _cfg_val
     if not filtered_file or not Path(filtered_file).exists():
+        # Show exactly which of the three sources had what — usually pinpoints
+        # the missed step (no source, wrong path, dataset on different mount).
         raise FileNotFoundError(
-            "AlpaGasus: filtered JSON not found. Download "
-            "github.com/gpt4life/alpagasus/blob/main/data/filtered/chatgpt_9k.json "
-            "then set ALPAGASUS_FILTERED_FILE or pass --filtered_file."
+            "AlpaGasus: filtered JSON not found.\n"
+            f"  args.filtered_file (CLI)            = {_cli_val!r}\n"
+            f"  ALPAGASUS_FILTERED_FILE (env var)   = {_env_val!r}\n"
+            f"  cfg.alpagasus.filtered_file (yaml)  = {_cfg_val!r}\n"
+            f"  resolved (first non-empty)          = {filtered_file!r}\n"
+            f"  exists on disk                      = {bool(filtered_file) and Path(filtered_file).exists()}\n"
+            "Fix one of:\n"
+            "  1) `bash scripts/download_alpagasus.sh` (puts chatgpt_9k.json at\n"
+            "     the path setup_env.sh's ALPAGASUS_FILTERED_FILE points to)\n"
+            "  2) `--filtered_file /path/to/chatgpt_9k.json` directly on the\n"
+            "     training command\n"
+            "  3) `export ALPAGASUS_FILTERED_FILE=...` BEFORE launching python\n"
+            "     in the same shell session"
         )
 
     tokenizer = load_tokenizer(cfg["model_path"])
