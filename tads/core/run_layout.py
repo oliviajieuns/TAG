@@ -280,10 +280,17 @@ def resolve_eval_ckpt(
     """
     if explicit_ckpt:
         p = Path(explicit_ckpt)
-        if p.is_dir() and (p / "config.json").exists() or (p / "adapter_config.json").exists():
+        # Operator-precedence guard: `A and B or C` would evaluate C even for
+        # non-dir paths, mis-routing eval onto a stray sibling file. Explicit
+        # grouping forces `A and (B or C)`.
+        if p.is_dir() and (
+            (p / "config.json").exists() or (p / "adapter_config.json").exists()
+        ):
             return p
         # Fall through if explicit_ckpt is actually the experiment dir.
-        if p.is_dir() and (p / "_latest").exists() or (p / "_latest.txt").exists():
+        if p.is_dir() and (
+            (p / "_latest").exists() or (p / "_latest.txt").exists()
+        ):
             output_dir = p
             explicit_ckpt = None
         elif not p.exists():
