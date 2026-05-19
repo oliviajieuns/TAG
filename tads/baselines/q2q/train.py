@@ -52,6 +52,19 @@ from .score import compute_ifd_scores, select_top_proportion_by_ifd
 logger = logging.getLogger(__name__)
 
 
+def _atomic_json_dump(obj, path) -> None:
+    """tmp + fsync + rename — same pattern as tads.train and nait seed cache.
+    Prevents a kill mid-`json.dump` from leaving a truncated cache file the
+    resume path then chokes on."""
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
 _ALPACA_PROMPT_PREFIX = (
     "Below is an instruction that describes a task"
     "{input_part}. Write a response that appropriately completes the request.\n\n"
@@ -186,13 +199,13 @@ def main() -> None:
             max_length=int(cfg.get("max_seq_len", 2048)),
         )
         logger.info("IFD scoring done in %.1fs", time.time() - t0)
-        with open(scores_path, "w") as f:
-            json.dump(scores, f)
+        # Atomic write so a kill mid-dump doesn't leave a truncated JSON
+        # that the resume path then chokes on.
+        _atomic_json_dump(scores, scores_path)
         selected_indices = select_top_proportion_by_ifd(
             scores, proportion=proportion, ifd_low=ifd_low, ifd_high=ifd_high,
         )
-        with open(selected_path, "w") as f:
-            json.dump(selected_indices, f)
+        _atomic_json_dump(selected_indices, selected_path)
         logger.info("Selected %d / %d", len(selected_indices), len(scores))
 
     # ---------- SFT on selected subset ----------

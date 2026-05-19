@@ -91,6 +91,20 @@ def calibrated_utility(
         return R
     mean = R.mean()
     std = R.std(unbiased=False) if R.numel() > 1 else torch.tensor(0.0, device=R.device)
+    # Audit-2 guard: a near-degenerate pool (all L_i, H_i identical → std≈0)
+    # would blow R̃ up to ~1e6 magnitude via division by `eps=1e-6`, making
+    # top-B effectively determined by floating-point rounding noise of
+    # `(R - mean)`. NaN/Inf isn't triggered so `select_top_b` doesn't catch
+    # it. Fall back to the raw `R - mean` (no scaling) and log a warning.
+    _STD_FLOOR = 1e-4
+    if float(std.item()) < _STD_FLOOR:
+        logger.warning(
+            "calibrated_utility: pool R-std %.2e below floor %.1e — "
+            "skipping z-score scaling for this epoch to avoid 1e6-magnitude "
+            "explosion. Selection will rank by raw (R - mean) instead.",
+            float(std.item()), _STD_FLOOR,
+        )
+        return R - mean
     return (R - mean) / (std + eps)
 
 
@@ -160,10 +174,18 @@ def select_top_b(scores: torch.Tensor, b: int) -> torch.Tensor:
     """Return the top-B indices of `scores` in descending order."""
     if b <= 0:
         raise ValueError(f"select_top_b: b must be >= 1, got {b}")
+    if b > scores.numel():
+        # Silent shrink would mask a caller bug (selection_ratio×N rounding
+        # error, off-by-one in B calculation) and emit fewer indices than
+        # downstream code expects. Loud error.
+        raise ValueError(
+            f"select_top_b: b={b} exceeds pool size N={scores.numel()}. "
+            f"Caller computed an invalid top-B target."
+        )
     if torch.isnan(scores).any() or torch.isinf(scores).any():
         raise RuntimeError(
             "select_top_b: scores contain NaN/Inf — likely a degenerate "
             "reward (var=0 → calibrated utility blew up) or an alignment "
             "collapse upstream."
         )
-    return scores.topk(min(b, scores.numel())).indices
+    return scores.topk(b).indices

@@ -109,7 +109,19 @@ def build_lima_dataset(
                 "download a local mirror and set LIMA_DATA_FILES."
             )
         logger.info("LIMA: fetching GAIR/lima from HF hub (gated dataset)")
-        raw = load_dataset("GAIR/lima", split="train", cache_dir=cache_dir)
+        try:
+            raw = load_dataset("GAIR/lima", split="train", cache_dir=cache_dir)
+        except Exception as e:
+            # Surface the friendly hint above the raw datasets traceback;
+            # the gated 401 is otherwise opaque to users new to HF auth.
+            raise RuntimeError(
+                "LIMA: failed to fetch GAIR/lima from HF hub. This dataset is "
+                "GATED — you must (1) `huggingface-cli login` with a personal "
+                "access token, and (2) visit https://huggingface.co/datasets/GAIR/lima "
+                "and click 'Agree and access'. Alternatively, download a local "
+                "mirror and set LIMA_DATA_FILES=/path/to/lima.{json,jsonl}.\n"
+                f"Original error: {type(e).__name__}: {e}"
+            ) from e
         # Schema-normalise rows on the HF Dataset directly.
         raw = raw.map(_lima_record_to_alpaca, remove_columns=raw.column_names)
 

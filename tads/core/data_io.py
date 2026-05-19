@@ -26,8 +26,15 @@ logger = logging.getLogger(__name__)
 
 
 def _read_json_or_jsonl(path: Path) -> List[dict]:
-    """JSON-list vs JSONL auto-detect by first non-whitespace char."""
-    with open(path) as f:
+    """JSON-list vs JSONL auto-detect by first non-whitespace char.
+
+    `encoding="utf-8-sig"` strips an optional UTF-8 BOM (\\ufeff) that some
+    Windows-exported mirrors prepend — without it the BOM character would
+    survive the whitespace-strip loop (\\ufeff is not in ``str.isspace()``)
+    and break the `head == "["` discriminator, misrouting JSON-list files
+    into the JSONL branch where every `json.loads(ln)` raises.
+    """
+    with open(path, encoding="utf-8-sig") as f:
         head = f.read(1)
         while head and head.isspace():
             head = f.read(1)
@@ -84,11 +91,15 @@ def read_records(path: str) -> List[dict]:
 
 
 def read_records_glob(glob_spec: str) -> List[dict]:
-    """Resolve a glob and concat records from each matched file (sorted order)."""
-    matches = sorted(_glob.glob(glob_spec))
+    """Resolve a glob (with `~` expansion) and concat records from each
+    matched file (sorted order)."""
+    import os as _os
+    expanded = _os.path.expanduser(glob_spec)
+    matches = sorted(_glob.glob(expanded))
     if not matches:
         raise FileNotFoundError(
-            f"data_io: glob {glob_spec!r} matched no files."
+            f"data_io: glob {glob_spec!r} (expanded to {expanded!r}) "
+            f"matched no files."
         )
     out: List[dict] = []
     for p in matches:

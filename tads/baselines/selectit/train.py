@@ -62,6 +62,17 @@ from tads.pipelines.sft import make_dataloader, sft_one_epoch
 
 from .score import select_top_proportion, selectit_scores
 
+
+def _atomic_json_dump(obj, path) -> None:
+    """tmp + fsync + rename so a kill mid-dump can't leave a truncated cache."""
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
 logger = logging.getLogger(__name__)
 
 
@@ -229,11 +240,9 @@ def main() -> None:
             max_length=int(cfg.get("max_seq_len", 2048)),
         )
         logger.info("Scoring done in %.1fs", time.time() - t0)
-        with open(scores_path, "w") as f:
-            json.dump(scores, f)
+        _atomic_json_dump(scores, scores_path)
         selected_indices = select_top_proportion(scores, proportion=proportion)
-        with open(selected_path, "w") as f:
-            json.dump(selected_indices, f)
+        _atomic_json_dump(selected_indices, selected_path)
         logger.info("Selected %d / %d", len(selected_indices), len(scores))
 
     # ---------- SFT on selected subset ----------

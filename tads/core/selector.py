@@ -160,17 +160,35 @@ def collect_episode(
             # Paper Eq.6: align_i = (1/L) Σ_l <h̄_l(x_i), v_l>,
             # where h̄_l(x_i) = (1/K_x) Σ_k h_l^(k)(x_i) is the
             # sequence-mean of layer-l hidden states (padding excluded).
-            mask = attention_mask.to(decoder_hidden[0].dtype)  # (B, T)
-            valid_counts = mask.sum(dim=1).clamp_min(1).unsqueeze(-1)  # (B, 1)
+            #
+            # Cast mask to fp32 BEFORE multiplying with the (bf16/fp16) hidden
+            # state — fp16 sum-accumulator over T=512 positions with hidden-
+            # state magnitudes ~1.0 can overflow at fp16's 65 504 ceiling.
+            # bf16 has the dynamic range to handle it, but doing the multiply
+            # + sum in fp32 is uniformly safe across all model dtypes.
+            mask_f = attention_mask.to(torch.float32)              # (B, T) fp32
+            valid_counts_int = attention_mask.sum(dim=1)           # (B,) int
+            if (valid_counts_int == 0).any():
+                # All-padding row would silently contribute a zero vector to
+                # the alignment min-max — a sign the collate/truncation
+                # produced a degenerate batch. Warn but proceed (clamp_min(1)
+                # in the divisor below prevents NaN).
+                logger.warning(
+                    "collect_episode: %d row(s) in this batch have zero valid "
+                    "tokens — alignment for those rows will be 0. Likely a "
+                    "collate / left-truncation edge case.",
+                    int((valid_counts_int == 0).sum().item()),
+                )
+            valid_counts = valid_counts_int.clamp_min(1).unsqueeze(-1).float()  # (B,1)
 
             if trajectory_anchor.is_multi_layer:
                 batch_align = torch.zeros(B_local, dtype=torch.float32, device=device)
                 for li in trajectory_anchor.layer_indices:
-                    h_l = decoder_hidden[li]                       # (B, T, H)
-                    masked = h_l * mask.unsqueeze(-1)
-                    mean_h_l = (masked.sum(dim=1) / valid_counts).float()  # (B, H)
+                    h_l = decoder_hidden[li].float()               # (B, T, H) fp32
+                    masked = h_l * mask_f.unsqueeze(-1)            # (B, T, H) fp32
+                    mean_h_l = masked.sum(dim=1) / valid_counts     # (B, H) fp32
                     batch_align += mean_h_l @ v_cache_gpu[li]
-                    del mean_h_l, masked
+                    del mean_h_l, masked, h_l
                 # Paper Eq.6 divides by L; we accumulate then divide once.
                 batch_align /= float(len(trajectory_anchor.layer_indices))
                 all_alignment_raw.append(batch_align.detach().cpu())
@@ -180,11 +198,11 @@ def collect_episode(
                 # one configured layer onto the single anchor direction.
                 li = trajectory_anchor.layer_indices[0]
                 v = v_cache_gpu[li]
-                h_l = decoder_hidden[li]
-                masked = h_l * mask.unsqueeze(-1)
-                mean_h_l = (masked.sum(dim=1) / valid_counts).float()  # (B, H)
+                h_l = decoder_hidden[li].float()                   # fp32
+                masked = h_l * mask_f.unsqueeze(-1)
+                mean_h_l = masked.sum(dim=1) / valid_counts        # (B, H) fp32
                 all_alignment_raw.append((mean_h_l @ v).detach().cpu())
-                del mean_h_l, masked
+                del mean_h_l, masked, h_l
 
         del decoder_hidden
 

@@ -68,6 +68,19 @@ def resolve_rating_token_ids(tokenizer) -> List[int]:
             f"Resolved rating token ids are not unique: {ids}. This tokenizer "
             f"collapses digit tokens — SelectIT scoring won't work unmodified."
         )
+    # Audit-2 guard: confirm each resolved id actually decodes to the bare
+    # digit. On exotic tokenizers `convert_tokens_to_ids("1")` or the
+    # encode-last-token fallback can quietly return a multi-digit token
+    # like "10" — making `pro_softmax` aggregate the wrong vocabulary
+    # entries and producing a meaningless score.
+    for digit, tid in zip(("1", "2", "3", "4", "5"), ids):
+        decoded = tokenizer.decode([tid]).strip()
+        if decoded != digit:
+            raise ValueError(
+                f"Rating token id {tid} decodes to {decoded!r}, not {digit!r}. "
+                f"Tokenizer doesn't have a single-digit token for {digit} — "
+                f"SelectIT scoring needs a custom resolver for this model."
+            )
     return ids
 
 
@@ -82,8 +95,18 @@ def build_rating_prompt(rating_template: str, instruction: str, response: str) -
 
 
 def _double_softmax(probs5: np.ndarray) -> np.ndarray:
-    """The paper's extra normalisation pass: `exp(p/sum(p))` then renormalise."""
-    e = np.exp(probs5 / probs5.sum())
+    """The paper's extra normalisation pass: `exp(p/sum(p))` then renormalise.
+
+    NaN guard (audit-2): if the model puts ~all probability mass on
+    non-rating tokens (newline, "The", etc.), `probs5.sum()` underflows to
+    0 and `np.exp(0/0)` propagates NaN through the score. Argsort over
+    NaN is implementation-defined → returns a uniform distribution so the
+    sample gets a deterministic (low) score instead of a random rank.
+    """
+    s = probs5.sum()
+    if not np.isfinite(s) or s <= 0:
+        return np.full_like(probs5, 1.0 / len(probs5))
+    e = np.exp(probs5 / s)
     return e / e.sum()
 
 

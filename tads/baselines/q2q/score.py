@@ -41,17 +41,26 @@ def _mean_nll_of_response(
             truncation=True, max_length=max_length - 1,
         ).input_ids[0]
     else:
+        # Unconditional NLL — score y under the BOS-only context if the
+        # tokenizer adds BOS (LLaMA), else under empty context (Qwen has
+        # add_bos_token=False by default, so this returns length-0 ids).
         prefix_ids = tokenizer(
             "", return_tensors="pt", add_special_tokens=True,
             truncation=True, max_length=max_length,
         ).input_ids[0]
     response_ids = tokenizer(
         response_text, return_tensors="pt", add_special_tokens=False,
-        truncation=True, max_length=max(1, max_length - len(prefix_ids)),
+        truncation=True, max_length=max(1, max_length - max(1, len(prefix_ids))),
     ).input_ids[0]
     if response_ids.numel() == 0:
         return float("nan")
 
+    # Audit-2: when prefix_ids is empty (Qwen no-BOS tokenizer), we still
+    # need at least one token in `full_ids` to anchor the LM's first
+    # prediction. Treat the first response token as "free" (not scored) in
+    # that case so the conditional and unconditional NLLs cover the same
+    # set of (n_response - bos_count) response tokens — keeping the IFD
+    # ratio comparable across tokenizers.
     full_ids = torch.cat([prefix_ids, response_ids], dim=0).unsqueeze(0).to(device)
     out = model(full_ids)
     logits = out.logits[0, :-1, :]
@@ -61,8 +70,13 @@ def _mean_nll_of_response(
     n_prefix = prefix_ids.numel()
     mask = torch.zeros_like(target, dtype=torch.float32)
     # Position i in `target` predicts token at position i+1 in full_ids.
-    # So response positions in `target` are indices >= n_prefix - 1 (the
-    # last prefix token transitions to the first response token).
+    # When prefix has ≥1 token (typical LLaMA case with BOS), response
+    # positions in `target` start at index `n_prefix - 1` (the last
+    # prefix token's transition to the first response token).
+    # When prefix is empty (Qwen no-BOS), `target` is `response_ids[1:]`
+    # and we score all of it — response_ids[0] is unconditional and not
+    # part of either NLL average, so conditional vs unconditional NLL
+    # cover the same `n_response - 1` positions either way.
     start = max(0, n_prefix - 1)
     mask[start:] = 1.0
 
@@ -112,8 +126,12 @@ def compute_ifd_scores(
                     response_text=res,
                     max_length=max_length,
                 )
-                # IFD = exp(nll_cond - nll_uncond). Clamp to avoid inf.
-                diff = max(-50.0, min(50.0, nll_cond - nll_uncond))
+                # IFD = exp(nll_cond - nll_uncond). Clamp to [-15, +15]
+                # (≈ exp ratio of 3e-7 .. 3e+6) — tighter than the prior
+                # ±50 (exp ratio 5e21). 50 caused legitimate outliers to
+                # dominate the fallback top-K branch in `select_top_proportion_by_ifd`
+                # when the in-range [ifd_low, ifd_high] pool shrank.
+                diff = max(-15.0, min(15.0, nll_cond - nll_uncond))
                 ifd = math.exp(diff)
             except Exception as ex:
                 logger.warning("IFD scoring failed on sample %d: %s — score=nan", i, ex)
