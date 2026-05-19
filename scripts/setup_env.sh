@@ -112,6 +112,34 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 # Example to flip backend for a single run:
 #   TADS_DDP_BACKEND=gloo torchrun --nproc_per_node=4 -m tads.train ...
 
+# -----------------------------------------------------------------------------
+# HuggingFace API token (for gated datasets like GAIR/lima)
+# -----------------------------------------------------------------------------
+# Three ways to set it (pick ONE — they're tried in order below):
+#
+#   1) [BEST] `huggingface-cli login` once. Writes ~/.huggingface/token. All
+#      HF libs auto-detect — no env var needed. Token never appears in any
+#      committed file. RECOMMENDED.
+#
+#   2) Put `export HF_TOKEN=hf_xxxxxxxxxx...` in your shell rc (~/.bashrc /
+#      ~/.zshrc) BEFORE sourcing this file. Same effect, slightly less safe
+#      (token visible to anyone reading your rc).
+#
+#   3) Create ~/.tads_secrets.sh with `export HF_TOKEN=hf_xxxx` and `chmod 600`
+#      it. Lines below auto-source it if present. Convenient for scripts.
+#
+# SECURITY: do NOT hardcode a real token directly inside this file —
+# scripts/setup_env.sh is git-tracked, so a real token would leak the moment
+# anyone runs `git push`. The placeholder below stays empty.
+if [ -f "$HOME/.tads_secrets.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.tads_secrets.sh"
+fi
+export HF_TOKEN="${HF_TOKEN:-}"
+# `datasets` and `huggingface_hub` accept the alternate name too — keep both
+# in sync so we don't have to know which lib the caller hits first.
+export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-$HF_TOKEN}"
+
 # --- HF cache redirect (user-volume protection) ---
 # Hugging Face libraries default to ~/.cache/huggingface/{hub,datasets,...}.
 # On this cluster ~ lives on a 50 GB user-volume, and concurrent training /
@@ -239,6 +267,13 @@ echo "  NAIT_EVAL_RESULTS_ROOT      = $NAIT_EVAL_RESULTS_ROOT      (NAIT baselin
 echo "  SELECTIT_EVAL_RESULTS_ROOT  = $SELECTIT_EVAL_RESULTS_ROOT  (SelectIT baseline)"
 echo "  ALPAGASUS_FILTERED_FILE     = $ALPAGASUS_FILTERED_FILE  (AlpaGasus pre-filtered JSON)"
 echo "  LIMA_DATA_FILES             = $LIMA_DATA_FILES  (LIMA train.jsonl, gated GAIR/lima)"
+if [ -n "$HF_TOKEN" ]; then
+    echo "  HF_TOKEN                    = set (${#HF_TOKEN} chars)"
+elif [ -f "$HOME/.huggingface/token" ]; then
+    echo "  HF_TOKEN                    = (using ~/.huggingface/token from huggingface-cli login)"
+else
+    echo "  HF_TOKEN                    = (UNSET — run \`huggingface-cli login\` or set HF_TOKEN for gated datasets)"
+fi
 echo "  ALPACA_DATA_FILES           = $ALPACA_DATA_FILES"
 
 unset -f _tads_warn
