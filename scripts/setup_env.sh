@@ -62,6 +62,13 @@ export BBH_DATA_DIR="${BBH_DATA_DIR:-/group-volume/IT-datasets/bbh}"
 # Alternatives shipped by the same script: claude_t45.json, random_9k.json.
 export ALPAGASUS_FILTERED_FILE="${ALPAGASUS_FILTERED_FILE:-/group-volume/IT-datasets/alpagasus/chatgpt_9k.json}"
 
+# --- LIMA dataset (Zhou et al., 2023) — GAIR/lima, 1030 rows, GATED HF ---
+# Pre-requisites: `huggingface-cli login` + visit huggingface.co/datasets/GAIR/lima
+# and click "Agree and access". Then fetch with
+#   bash scripts/download_lima.sh
+# (writes train.jsonl exactly where this env var points).
+export LIMA_DATA_FILES="${LIMA_DATA_FILES:-/group-volume/IT-datasets/lima/train.jsonl}"
+
 # --- Runtime hygiene ---
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -210,6 +217,7 @@ _tads_warn TYDIQA_DATA_DIR        "$TYDIQA_DATA_DIR"        "TyDiQA dir (HF parq
 _tads_warn XQUAD_DATA_DIR         "$XQUAD_DATA_DIR"         "XQuAD dir (xquad.<lang>.json files for 11 languages — run scripts/download_xquad.sh \$XQUAD_DATA_DIR)"
 _tads_warn BBH_DATA_DIR           "$BBH_DATA_DIR"           "BBH directory (contains <task>.json + optional cot-prompts/)"
 _tads_warn ALPAGASUS_FILTERED_FILE "$ALPAGASUS_FILTERED_FILE" "AlpaGasus pre-filtered JSON (chatgpt_9k.json) — run scripts/download_alpagasus.sh to fetch; only required for the AlpaGasus baseline"
+_tads_warn LIMA_DATA_FILES        "$LIMA_DATA_FILES"        "LIMA train.jsonl — run scripts/download_lima.sh (needs huggingface-cli login + dataset access agreement); only required for the LIMA baseline"
 
 # -----------------------------------------------------------------------------
 # Final summary
@@ -230,6 +238,7 @@ echo "  EVAL_RESULTS_ROOT           = $EVAL_RESULTS_ROOT      (TADS family: rand
 echo "  NAIT_EVAL_RESULTS_ROOT      = $NAIT_EVAL_RESULTS_ROOT      (NAIT baseline)"
 echo "  SELECTIT_EVAL_RESULTS_ROOT  = $SELECTIT_EVAL_RESULTS_ROOT  (SelectIT baseline)"
 echo "  ALPAGASUS_FILTERED_FILE     = $ALPAGASUS_FILTERED_FILE  (AlpaGasus pre-filtered JSON)"
+echo "  LIMA_DATA_FILES             = $LIMA_DATA_FILES  (LIMA train.jsonl, gated GAIR/lima)"
 echo "  ALPACA_DATA_FILES           = $ALPACA_DATA_FILES"
 
 unset -f _tads_warn
