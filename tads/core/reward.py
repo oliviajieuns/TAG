@@ -1,22 +1,26 @@
-"""Reward computation for instruction-tuning data selection.
+"""Per-sample (L_i, H_i) inputs to the TADS composite reward (paper Eq.2).
 
-Implements paper Eq. 1, 3, 5, 6:
-    r_loss_i    = mean CE loss over response tokens of sample i      (Eq. 1)
-    r_entropy_i = mean predictive entropy over response tokens       (Eq. 3)
-    r_weight    = Var(r_loss) / (Var(r_loss) + Var(r_entropy) + eps) (Eq. 5)
-    R_i         = r_weight * r_loss_i + (1 - r_weight) * r_entropy_i (Eq. 6)
+This module provides ONLY the per-sample forward-pass derivations:
+    L_i = mean cross-entropy loss over response tokens of sample i
+    H_i = mean predictive entropy over response tokens of sample i
+
+The pool-level composite reward R_i = w·L_i + (1-w)·H_i (paper Eq.2) and
+the variance-ratio weight w (paper Eq.3) are computed in
+``tads.core.scorer.pool_reward`` after the per-sample arrays are
+accumulated across the whole epoch.
 
 Naming
 ------
-r_loss     — optimization-impact signal (mean CE loss over response tokens).
-             Originally referred to as ``rdiff`` in the Data Agent paper.
-r_entropy  — predictive-uncertainty signal (mean predictive entropy).
-             Originally referred to as ``rconf`` in the Data Agent paper.
-r_weight   — variance-ratio weight that auto-balances the two signals.
-             Originally referred to as ``r`` in the Data Agent paper.
+r_loss / L_i     — optimization-impact signal (mean CE loss over response
+                   tokens). Historically referred to as ``rdiff`` in the
+                   Data Agent paper.
+r_entropy / H_i  — predictive-uncertainty signal (mean predictive entropy).
+                   Historically referred to as ``rconf`` in the Data Agent paper.
 
-For metric compatibility with older Data Agent analysis scripts, callers may
-log both names (e.g. ``rdiff_mean = r_loss_mean``) in their metrics.json.
+For metric compatibility with older Data Agent analysis scripts, callers
+may log both names (e.g. ``rdiff_mean = r_loss_mean``) in their
+metrics.json. None of these carry RL semantics in TADS — every step is a
+closed-form deterministic operation over pool-level statistics.
 """
 from __future__ import annotations
 

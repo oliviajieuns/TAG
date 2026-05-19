@@ -122,7 +122,7 @@ def parse_args() -> argparse.Namespace:
         "--override",
         nargs="*",
         default=[],
-        help="Top-level or dotted nested overrides, e.g. selection_ratio=0.3 anchor.layer_idx=-1 agent.lr=5e-5",
+        help="Top-level or dotted nested overrides, e.g. selection_ratio=0.3 anchor.max_samples_for_pca=2048 tads.lam=0.5",
     )
     p.add_argument(
         "--run_tag",
@@ -158,9 +158,9 @@ def _apply_overrides(cfg: Dict[str, Any], overrides) -> None:
 
     Examples:
         selection_ratio=0.3
+        anchor.max_samples_for_pca=2048
         anchor.layer_idx=-1
-        agent.lr=5.0e-5
-        tads.lam=2.0
+        tads.lam=0.5
 
     Values are parsed as bool/int/float when possible, else kept as string.
     """

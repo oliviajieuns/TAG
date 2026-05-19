@@ -42,7 +42,7 @@ def test_calibrated_utility_zero_at_pool_mean():
     assert abs(R_tilde[2].item()) < 1e-3
     # Monotone — larger R yields larger R̃.
     diffs = R_tilde[1:] - R_tilde[:-1]
-    assert torch.all(diffs > 0).item()
+    assert torch.all(diffs > 0)
     # Sign-preserving — entries below pool mean are negative.
     assert R_tilde[0].item() < 0 and R_tilde[-1].item() > 0
 

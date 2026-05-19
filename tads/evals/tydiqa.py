@@ -506,10 +506,8 @@ def _load_demos_by_language(
         bucket = by_lang.setdefault(ex["language"], [])
         if len(bucket) < n_fewshot:
             bucket.append((ex["context"], ex["question"], gold))
-        # All buckets full → done.
-        if all(len(v) >= n_fewshot for v in by_lang.values()) and len(by_lang) >= 9:
-            # 9 = number of TyDiQA gold-passage languages; loose check.
-            pass  # don't break — we may not have seen all languages yet.
+        # No early break — we may not have seen all 9 TyDiQA languages yet
+        # at the point all *visible* buckets are full.
     return by_lang
 
 

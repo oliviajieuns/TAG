@@ -2,8 +2,7 @@
 
 Pure-function utilities for the deterministic TADS selection pipeline. No
 PPO actor, no learned components — every step is a closed-form operation
-over pool-level statistics. Replaces the old `tads.core.agent` module that
-used to host the (now-deprecated) PPO Actor-Critic.
+over pool-level statistics.
 
 Pipeline composition (one epoch):
     L_i, H_i           = per-sample loss / entropy            (compute_rewards in reward.py)
