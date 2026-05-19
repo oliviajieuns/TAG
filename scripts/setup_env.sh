@@ -56,6 +56,12 @@ export TYDIQA_DATA_DIR="${TYDIQA_DATA_DIR:-/group-volume/IT-datasets/tydiqa}"
 export XQUAD_DATA_DIR="${XQUAD_DATA_DIR:-/group-volume/IT-datasets/xquad}"
 export BBH_DATA_DIR="${BBH_DATA_DIR:-/group-volume/IT-datasets/bbh}"
 
+# --- AlpaGasus pre-filtered selection JSON (Chen et al., 2024) ---
+# `chatgpt_9k.json` (primary, GPT-4 score ≥4.5 → ~9k of Alpaca 52k). Fetch with
+#   bash scripts/download_alpagasus.sh
+# Alternatives shipped by the same script: claude_t45.json, random_9k.json.
+export ALPAGASUS_FILTERED_FILE="${ALPAGASUS_FILTERED_FILE:-/group-volume/IT-datasets/alpagasus/chatgpt_9k.json}"
+
 # --- Runtime hygiene ---
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -203,6 +209,7 @@ _tads_warn MBPP_DATA_DIR          "$MBPP_DATA_DIR"          "MBPP dir (sanitized
 _tads_warn TYDIQA_DATA_DIR        "$TYDIQA_DATA_DIR"        "TyDiQA dir (HF parquet: validation-00000-of-00001.parquet + train-00000-of-00001.parquet — run scripts/download_tydiqa.sh \$TYDIQA_DATA_DIR to fetch)"
 _tads_warn XQUAD_DATA_DIR         "$XQUAD_DATA_DIR"         "XQuAD dir (xquad.<lang>.json files for 11 languages — run scripts/download_xquad.sh \$XQUAD_DATA_DIR)"
 _tads_warn BBH_DATA_DIR           "$BBH_DATA_DIR"           "BBH directory (contains <task>.json + optional cot-prompts/)"
+_tads_warn ALPAGASUS_FILTERED_FILE "$ALPAGASUS_FILTERED_FILE" "AlpaGasus pre-filtered JSON (chatgpt_9k.json) — run scripts/download_alpagasus.sh to fetch; only required for the AlpaGasus baseline"
 
 # -----------------------------------------------------------------------------
 # Final summary
@@ -222,6 +229,7 @@ echo "  OUTPUT_ROOT                 = $OUTPUT_ROOT"
 echo "  EVAL_RESULTS_ROOT           = $EVAL_RESULTS_ROOT      (TADS family: random/full/data_agent/tads)"
 echo "  NAIT_EVAL_RESULTS_ROOT      = $NAIT_EVAL_RESULTS_ROOT      (NAIT baseline)"
 echo "  SELECTIT_EVAL_RESULTS_ROOT  = $SELECTIT_EVAL_RESULTS_ROOT  (SelectIT baseline)"
+echo "  ALPAGASUS_FILTERED_FILE     = $ALPAGASUS_FILTERED_FILE  (AlpaGasus pre-filtered JSON)"
 echo "  ALPACA_DATA_FILES           = $ALPACA_DATA_FILES"
 
 unset -f _tads_warn
