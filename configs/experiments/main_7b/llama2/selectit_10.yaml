@@ -2,7 +2,7 @@
 #
 # 실행:
 #   source scripts/setup_env.sh
-#   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.selectit.train \
+#   CUDA_VISIBLE_DEVICES=0 python -m baselines.selectit.train \
 #       --config configs/experiments/main_7b/llama2/selectit_10.yaml \
 #       --tag SelectIT-Token
 #

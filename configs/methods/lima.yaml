@@ -1,4 +1,4 @@
-# LIMA (Zhou et al., 2023) baseline — uses `python -m tads.baselines.lima.train`.
+# LIMA (Zhou et al., 2023) baseline — uses `python -m baselines.lima.train`.
 #
 # LIMA은 selection 알고리즘이 아니라 1030-sample hand-curated 데이터셋이다.
 # `selection_ratio`는 무의미하지만 cross-method 비교를 위해 1.0으로 둠.

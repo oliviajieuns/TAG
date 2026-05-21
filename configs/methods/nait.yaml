@@ -1,4 +1,4 @@
-# NAIT baseline — uses `python -m tads.baselines.nait.train`.
+# NAIT baseline — uses `python -m baselines.nait.train`.
 # Defaults below mirror the ICLR 2026 NAIT paper (Chen et al.):
 #   - selection_ratio: 0.1                 (paper Table 2 uses 10%)
 #   - layers: all 32 layers of Llama-2-7B  (paper Algorithm 1 sums over L)

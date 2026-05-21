@@ -1,4 +1,4 @@
-# AlpaGasus (Chen et al., 2024) baseline — uses `python -m tads.baselines.alpagasus.train`.
+# AlpaGasus (Chen et al., 2024) baseline — uses `python -m baselines.alpagasus.train`.
 #
 # Official repo의 pre-filtered JSON (`chatgpt_9k.json` etc.) 사용 — GPT-4 API
 # 호출 불필요. Filtered 9k instruction 텍스트를 우리 Alpaca-GPT4 raw와 매칭해

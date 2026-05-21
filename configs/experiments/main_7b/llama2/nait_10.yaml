@@ -2,7 +2,7 @@
 #
 # 실행 (시드 파일 없으면 ALPACA_DATA_FILES에서 자동 1500-sample 후 seeds/mix_auto.json에 cache):
 #   source scripts/setup_env.sh
-#   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.nait.train \
+#   CUDA_VISIBLE_DEVICES=0 python -m baselines.nait.train \
 #       --config configs/experiments/main_7b/llama2/nait_10.yaml \
 #       --tag NAIT-Mix
 #

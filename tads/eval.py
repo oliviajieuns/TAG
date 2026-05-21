@@ -8,7 +8,7 @@ Usage:
         --out_dir results/light_tads_05b/
 
 ``tads.train`` writes ``epoch_last/`` only (final epoch); comparison
-baselines under ``tads.baselines.<method>`` write ``epoch_N/`` per
+baselines under ``baselines.<method>`` write ``epoch_N/`` per
 epoch — pass whichever the run dir actually contains.
 
 The benchmark list is split by commas; each name is looked up in the

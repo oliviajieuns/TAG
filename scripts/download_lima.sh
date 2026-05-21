@@ -10,7 +10,7 @@
 #
 # After completion:
 #   <target_dir>/
-#     train.jsonl    # exactly the file tads.baselines.lima.data expects
+#     train.jsonl    # exactly the file baselines.lima.data expects
 #
 # Pre-requisites (1회만):
 #   1. `huggingface-cli login`
@@ -76,6 +76,6 @@ echo "LIMA ready at $OUT"
 echo ""
 echo "Next:"
 echo "  export LIMA_DATA_FILES=$OUT"
-echo "  python -m tads.baselines.lima.train \\"
+echo "  python -m baselines.lima.train \\"
 echo "      --config configs/experiments/main_7b/llama2/lima.yaml \\"
 echo "      --tag LIMA"

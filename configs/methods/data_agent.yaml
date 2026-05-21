@@ -1,8 +1,8 @@
 # Data Agent (Yang et al., ICML 2026) — PPO-based dynamic data selection.
 #
-# Implementation lives under tads/baselines/data_agent/ (separate from
+# Implementation lives under baselines/data_agent/ (separate from
 # tads.train which only handles random / full / tads). Launch with:
-#     python -m tads.baselines.data_agent.train --config <experiment_yaml> --tag <variant>
+#     python -m baselines.data_agent.train --config <experiment_yaml> --tag <variant>
 #
 # Selection rule (paper §3 / Jackbrocp/Data-Agent reference repo):
 #     state s_i  = sequence-mean of last decoder layer's hidden states

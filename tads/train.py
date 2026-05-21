@@ -5,8 +5,11 @@ Usage:
     torchrun --nproc_per_node=4 -m tads.train \\
         --config configs/experiments/7b_fullft_tads_50.yaml
 
-The method (random/full/data_agent/tads) is selected by the ``method`` key
-inside the YAML config.
+The method (random/full/tads) is selected by the ``method`` key inside
+the YAML config. Comparison baselines (data_agent / nait / selectit /
+lima / alpagasus / q2q) live under ``baselines.<method>.train`` and
+have their own entrypoints — ``tads.train`` rejects them with an
+actionable redirect error.
 
 Run layout (history-preserving)
 -------------------------------
@@ -39,7 +42,7 @@ Each run dir contains:
     cfg.yaml + cfg.json   — full resolved hyperparameter snapshot
     epoch_last/           — final-epoch weights only (tads.train writes
                             just the last epoch to save disk). Comparison
-                            baselines under tads.baselines.<method> still
+                            baselines under baselines.<method> still
                             emit epoch_N/ per epoch.
                             Contents: optimizer.pt, scheduler.pt,
                             trajectory_anchor.pt, env_meta.json,

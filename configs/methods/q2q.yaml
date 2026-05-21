@@ -1,4 +1,4 @@
-# Q2Q / Cherry_LLM (Li et al., 2024 NAACL) baseline — uses `python -m tads.baselines.q2q.train`.
+# Q2Q / Cherry_LLM (Li et al., 2024 NAACL) baseline — uses `python -m baselines.q2q.train`.
 #
 # IFD(x,y) = PPL(y|x) / PPL(y)로 sample 별 score 계산. paper §3.3에 따라
 # IFD ∈ [ifd_low, ifd_high] (default 0.5–1.0) 필터 후 selection_ratio top-K.

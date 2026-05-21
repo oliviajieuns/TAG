@@ -14,7 +14,7 @@
 #     claude_t45.json    # alternative: Claude-rated ≥4.5
 #     random_9k.json     # random baseline of matching size
 #
-# `tads/baselines/alpagasus/train.py` reads whichever filtered JSON the user
+# `baselines/alpagasus/train.py` reads whichever filtered JSON the user
 # points $ALPAGASUS_FILTERED_FILE (or --filtered_file) at. The default in
 # setup_env.sh is chatgpt_9k.json (the paper's primary variant).
 #
@@ -62,6 +62,6 @@ ls -lh "${TARGET}"/*.json
 echo ""
 echo "Next:"
 echo "  export ALPAGASUS_FILTERED_FILE=${TARGET}/chatgpt_9k.json"
-echo "  python -m tads.baselines.alpagasus.train \\"
+echo "  python -m baselines.alpagasus.train \\"
 echo "      --config configs/experiments/main_7b/llama2/alpagasus.yaml \\"
 echo "      --tag AlpaGasus-ChatGPT-9k"

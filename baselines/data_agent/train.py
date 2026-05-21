@@ -12,7 +12,7 @@ Per-epoch loop:
 
 Usage:
     source scripts/setup_env.sh
-    CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.data_agent.train \\
+    CUDA_VISIBLE_DEVICES=0 python -m baselines.data_agent.train \\
         --config configs/experiments/main_7b/llama2/data_agent_10.yaml \\
         --tag DataAgent-PPO
 """

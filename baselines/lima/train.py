@@ -9,7 +9,7 @@ Usage:
     #   huggingface-cli login
     #   visit https://huggingface.co/datasets/GAIR/lima and accept terms
     # Or download to disk and set LIMA_DATA_FILES.
-    CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.lima.train \\
+    CUDA_VISIBLE_DEVICES=0 python -m baselines.lima.train \\
         --config configs/experiments/main_7b/llama2/lima.yaml \\
         --tag LIMA
 

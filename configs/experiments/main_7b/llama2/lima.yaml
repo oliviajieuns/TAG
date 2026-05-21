@@ -4,7 +4,7 @@
 #   source scripts/setup_env.sh
 #   # 데이터: huggingface-cli login + GAIR/lima access 동의
 #   # 또는 export LIMA_DATA_FILES=/path/to/lima.json
-#   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.lima.train \
+#   CUDA_VISIBLE_DEVICES=0 python -m baselines.lima.train \
 #       --config configs/experiments/main_7b/llama2/lima.yaml \
 #       --tag LIMA
 defaults:

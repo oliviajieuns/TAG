@@ -1,4 +1,4 @@
-# SelectIT (Liu et al., 2024b) baseline — uses `python -m tads.baselines.selectit.train`.
+# SelectIT (Liu et al., 2024b) baseline — uses `python -m baselines.selectit.train`.
 #
 # Faithful port of github.com/Blue-Raincoat/SelectIT (token-level + sentence-level
 # self-reflection scoring → top-`selection_ratio` → SFT).
@@ -20,6 +20,6 @@ selectit:
   # Std penalty for sentence-level only. SelectIT paper default = 0.2.
   alpha: 0.2
   # The 9 rating prompts shipped with the package
-  # (tads/baselines/selectit/rating_prompts.txt) come from the official repo
+  # (baselines/selectit/rating_prompts.txt) come from the official repo
   # verbatim. To use a custom set, pass `--rating-prompts-file <path>` to
   # the train entrypoint.

@@ -22,7 +22,7 @@ R_i is the PPO training signal only; the actor's a_i alone determines top-K.
 
 Training entrypoint
 -------------------
-    python -m tads.baselines.data_agent.train \\
+    python -m baselines.data_agent.train \\
         --config configs/experiments/main_7b/llama2/data_agent_10.yaml \\
         --tag DataAgent-PPO
 """

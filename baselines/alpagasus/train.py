@@ -19,7 +19,7 @@ Usage:
     # then:
     source scripts/setup_env.sh
     export ALPAGASUS_FILTERED_FILE=/path/to/chatgpt_9k.json
-    CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.alpagasus.train \\
+    CUDA_VISIBLE_DEVICES=0 python -m baselines.alpagasus.train \\
         --config configs/experiments/main_7b/llama2/alpagasus.yaml \\
         --tag AlpaGasus-ChatGPT-9k
 """

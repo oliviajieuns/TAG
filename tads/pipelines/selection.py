@@ -3,7 +3,7 @@
 Wraps the three selection methods (random / full / tads) handled by
 ``tads.train``. Comparison baselines (data_agent / nait / selectit /
 lima / alpagasus / q2q) have their own entrypoints under
-``tads.baselines.<method>.train`` and bypass this dispatcher.
+``baselines.<method>.train`` and bypass this dispatcher.
 
 For ``method=tads`` the heavy collect_episode runs on rank 0 only;
 other ranks share the resulting indices through a filesystem sentinel
@@ -224,9 +224,9 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
             f"method={method!r} is a comparison baseline — `tads.train` only "
             f"handles random / full / tads.\n"
             f"Use the dedicated entrypoint instead:\n"
-            f"    python -m tads.baselines.{method}.train \\\n"
+            f"    python -m baselines.{method}.train \\\n"
             f"        --config <experiment_yaml> --tag <variant_tag>\n"
-            f"See tads/baselines/{method}/train.py docstring for the exact "
+            f"See baselines/{method}/train.py docstring for the exact "
             f"command + any required env vars (e.g. ALPAGASUS_FILTERED_FILE, "
             f"LIMA_DATA_FILES)."
         )
@@ -234,7 +234,7 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
         raise ValueError(
             f"Unknown method: {method!r}. Valid in `tads.train`: random, "
             f"full, tads. Baseline methods (data_agent/lima/nait/selectit/"
-            f"alpagasus/q2q) have their own entrypoints in tads/baselines/."
+            f"alpagasus/q2q) have their own entrypoints in baselines/."
         )
 
     # ---------- selection cache: skip collect_episode if a prior run

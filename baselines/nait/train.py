@@ -1,7 +1,7 @@
 """NAIT (ICLR 2026) baseline training.
 
 Usage:
-    python -m tads.baselines.nait.train \\
+    python -m baselines.nait.train \\
         --config configs/methods/nait.yaml \\
         --seed_path seeds/mix.json --tag NAIT-Mix
 """
@@ -21,7 +21,7 @@ from pathlib import Path
 # ffmpeg support — even though our LLM-only training never touches video.
 # Stub the missing attribute BEFORE any transformers import (incl. via
 # tads.modeling.loader) so the import resolves to a harmless placeholder.
-# Same pattern as tads.train + every other tads/baselines/<m>/train.py.
+# Same pattern as tads.train + every other baselines/<m>/train.py.
 try:
     import torchvision.io as _tv_io
     if not hasattr(_tv_io, "VideoReader"):
@@ -43,7 +43,7 @@ from tads.core.utils import (
 )
 from tads.data.alpaca import build_alpaca_dataset
 from tads.modeling.loader import load_model, load_tokenizer
-from tads.baselines.nait.direction import (
+from baselines.nait.direction import (
     extract_delta_from_seed,
     fit_directions,
     score_candidates,

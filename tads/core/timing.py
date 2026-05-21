@@ -1,6 +1,6 @@
 """Phase-level timing for cross-method comparison.
 
-Each training script (``tads.train``, ``tads.baselines.{nait,selectit,
+Each training script (``tads.train``, ``baselines.{nait,selectit,
 data_agent,lima,alpagasus,q2q}.train``) brackets its expensive sections
 with ``timer.phase(name, category=...)``. At end-of-training we dump
 a JSON report and log a comparison table so different selection

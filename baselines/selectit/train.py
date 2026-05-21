@@ -4,7 +4,7 @@ Faithful port of github.com/Blue-Raincoat/SelectIT — uncertainty-aware
 self-reflection scoring of every Alpaca example, top-K by score, then SFT
 on the selected subset.
 
-Pipeline (mirrors tads/baselines/nait/train.py):
+Pipeline (mirrors baselines/nait/train.py):
     1. Load Alpaca-GPT4 (HF Dataset, tokenised) AND its raw records (raw
        (instruction, output) text needed by SelectIT scoring).
     2. Run forward-only scoring per sample using `selectit_scores` (token
@@ -14,7 +14,7 @@ Pipeline (mirrors tads/baselines/nait/train.py):
 
 Usage:
     source scripts/setup_env.sh
-    CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.selectit.train \\
+    CUDA_VISIBLE_DEVICES=0 python -m baselines.selectit.train \\
         --config configs/experiments/main_7b/llama2/selectit_10.yaml \\
         --tag SelectIT-Token
 

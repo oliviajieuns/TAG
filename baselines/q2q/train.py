@@ -8,7 +8,7 @@ take top-`selection_ratio` by IFD, then SFT.
 
 Usage:
     source scripts/setup_env.sh
-    CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.q2q.train \\
+    CUDA_VISIBLE_DEVICES=0 python -m baselines.q2q.train \\
         --config configs/experiments/main_7b/llama2/q2q_10.yaml \\
         --tag Q2Q-Top10
 """
