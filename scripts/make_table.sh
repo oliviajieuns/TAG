@@ -163,19 +163,51 @@ def collect_all_results(root: Path):
     포함된다. method dir 위치는 더 이상 신뢰 source 가 아님.
     """
     by_method = {m[2]: {} for m in METHODS if m[2]}
+    n_total = 0
+    n_parsed = 0
+    n_fail = 0
+    n_skipped = 0
+    fail_log = []  # (path, exc_type, exc_msg) for the footer noti
     for jp in _all_json_files(root):
+        n_total += 1
         try:
-            payload = json.load(open(jp))
-        except Exception:
+            with open(jp) as f:
+                payload = json.load(f)
+        except Exception as e:
+            n_fail += 1
+            msg = f"{type(e).__name__}: {e}"
+            fail_log.append((jp, msg))
+            # 즉시 stderr 로 surface — 어떤 파일이 깨졌는지 사용자가 바로 확인.
+            try:
+                rel = jp.relative_to(root)
+            except Exception:
+                rel = jp
+            sys.stderr.write(
+                f"[make_table] JSON parse fail: {rel}  ←  {msg}\n"
+            )
             continue
+        n_parsed += 1
         mdir = _identify_method(jp, payload)
         if mdir is None:
+            n_skipped += 1
             continue
         for bench, _ in BENCHES:
             for v in _accs_from_payload(payload, bench):
                 cur = by_method[mdir].get(bench)
                 if cur is None or v > cur[0]:
                     by_method[mdir][bench] = (v, jp)
+    # Footer stats — print AFTER per-file lines so the summary is at the bottom.
+    sys.stderr.write(
+        f"[make_table] scanned={n_total}  parsed={n_parsed}  "
+        f"parse_fail={n_fail}  skipped_unmatched_method={n_skipped}\n"
+    )
+    if fail_log:
+        sys.stderr.write(
+            f"[make_table] {len(fail_log)} file(s) failed JSON parse — see "
+            "lines above. Common causes: half-written file (kill mid-dump), "
+            "trailing junk bytes, BOM, or non-JSON content saved with .json "
+            "extension by mistake.\n"
+        )
     return by_method
 
 
