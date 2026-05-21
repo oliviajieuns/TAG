@@ -40,6 +40,7 @@ except Exception:
 import torch
 
 from tads.core.schedulers import get_cosine_schedule_with_warmup
+from tads.core.timing import PhaseTimer
 from tads.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
@@ -95,14 +96,18 @@ def main() -> None:
     setup_logger(str(log_dir), name=f"lima_{tag_slug}_{ts}")
     logger.info("LIMA baseline | tag=%s | output_dir=%s", args.tag, output_dir)
 
-    tokenizer = load_tokenizer(cfg["model_path"])
-    model = load_model(
-        cfg["model_path"],
-        training_mode=str(cfg.get("training_mode", "full")),
-        lora_cfg=cfg.get("lora"),
-        use_ddp=False,
-        gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
-    )
+    timer = PhaseTimer(log=logger, method="lima")
+
+    with timer.phase("tokenizer_load", "setup"):
+        tokenizer = load_tokenizer(cfg["model_path"])
+    with timer.phase("model_load", "setup"):
+        model = load_model(
+            cfg["model_path"],
+            training_mode=str(cfg.get("training_mode", "full")),
+            lora_cfg=cfg.get("lora"),
+            use_ddp=False,
+            gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
+        )
     device = next(model.parameters()).device
 
     # Resolution: --data_files CLI > $LIMA_DATA_FILES env > cfg.lima.data_files
@@ -117,13 +122,14 @@ def main() -> None:
         "LIMA data_files resolution | cli=%r | env=%r | cfg=%r | resolved=%r",
         _cli_val, _env_val, _cfg_val, data_files,
     )
-    dataset = build_lima_dataset(
-        tokenizer=tokenizer,
-        cache_dir=cfg["data_cache"],
-        max_seq_len=int(cfg["max_seq_len"]),
-        data_files=data_files,
-        prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
-    )
+    with timer.phase("dataset_build", "data"):
+        dataset = build_lima_dataset(
+            tokenizer=tokenizer,
+            cache_dir=cfg["data_cache"],
+            max_seq_len=int(cfg["max_seq_len"]),
+            data_files=data_files,
+            prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
+        )
     logger.info("LIMA dataset size: %d", len(dataset))
 
     train_epochs = int(cfg["train_epochs"])
@@ -146,28 +152,32 @@ def main() -> None:
     metrics_log = []
     for epoch in range(1, train_epochs + 1):
         logger.info("=== LIMA epoch %d/%d ===", epoch, train_epochs)
-        loader = make_dataloader(
-            dataset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
-        )
         t0 = time.time()
-        avg_loss = sft_one_epoch(
-            model=model, loader=loader,
-            optimizer=optimizer, scheduler=scheduler,
-            grad_accum=grad_accum, grad_clip=float(cfg["gradient_clip"]),
-            device=device, epoch=epoch, logger=logger,
-        )
+        with timer.phase(f"sft_epoch{epoch}", "sft"):
+            loader = make_dataloader(
+                dataset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
+            )
+            avg_loss = sft_one_epoch(
+                model=model, loader=loader,
+                optimizer=optimizer, scheduler=scheduler,
+                grad_accum=grad_accum, grad_clip=float(cfg["gradient_clip"]),
+                device=device, epoch=epoch, logger=logger,
+            )
         metrics_log.append({
             "epoch": epoch, "train_loss": avg_loss, "n": len(dataset),
             "wall_sec": round(time.time() - t0, 2),
         })
-        ckpt = output_dir / f"epoch_{epoch}"
-        ckpt.mkdir(parents=True, exist_ok=True)
-        m = model.module if hasattr(model, "module") else model
-        m.save_pretrained(str(ckpt))
-        tokenizer.save_pretrained(str(ckpt))
-        with open(output_dir / "metrics.json", "w") as f:
-            json.dump(metrics_log, f, indent=2)
+        with timer.phase(f"checkpoint_epoch{epoch}", "checkpoint"):
+            ckpt = output_dir / f"epoch_{epoch}"
+            ckpt.mkdir(parents=True, exist_ok=True)
+            m = model.module if hasattr(model, "module") else model
+            m.save_pretrained(str(ckpt))
+            tokenizer.save_pretrained(str(ckpt))
+            with open(output_dir / "metrics.json", "w") as f:
+                json.dump(metrics_log, f, indent=2)
 
+    timer.save_report(output_dir / "timing_breakdown.json")
+    timer.log_table()
     logger.info("LIMA training complete. Tag: %s", args.tag)
 
 

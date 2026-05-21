@@ -46,6 +46,7 @@ from torch.utils.data import Subset
 
 from tads.core.data_io import read_records, read_records_glob
 from tads.core.schedulers import get_cosine_schedule_with_warmup
+from tads.core.timing import PhaseTimer
 from tads.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
@@ -156,6 +157,8 @@ def main() -> None:
     setup_logger(str(log_dir), name=f"alpagasus_{tag_slug}_{ts}")
     logger.info("AlpaGasus baseline | tag=%s | output_dir=%s", args.tag, output_dir)
 
+    timer = PhaseTimer(log=logger, method="alpagasus")
+
     # Resolve filtered file path: CLI > env > cfg.
     _cli_val = args.filtered_file
     _env_val = os.environ.get("ALPAGASUS_FILTERED_FILE")
@@ -180,25 +183,29 @@ def main() -> None:
             "     in the same shell session"
         )
 
-    tokenizer = load_tokenizer(cfg["model_path"])
-    model = load_model(
-        cfg["model_path"],
-        training_mode=str(cfg.get("training_mode", "full")),
-        lora_cfg=cfg.get("lora"),
-        use_ddp=False,
-        gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
-    )
+    with timer.phase("tokenizer_load", "setup"):
+        tokenizer = load_tokenizer(cfg["model_path"])
+    with timer.phase("model_load", "setup"):
+        model = load_model(
+            cfg["model_path"],
+            training_mode=str(cfg.get("training_mode", "full")),
+            lora_cfg=cfg.get("lora"),
+            use_ddp=False,
+            gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
+        )
     device = next(model.parameters()).device
 
-    dataset = build_alpaca_dataset(
-        tokenizer=tokenizer,
-        cache_dir=cfg["data_cache"],
-        max_seq_len=int(cfg["max_seq_len"]),
-        dataset_name=cfg.get("dataset_name"),
-        data_files=cfg.get("data_files"),
-        prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
-    )
-    raw_records = _load_alpaca_raw(str(cfg["data_files"]))
+    with timer.phase("dataset_build", "data"):
+        dataset = build_alpaca_dataset(
+            tokenizer=tokenizer,
+            cache_dir=cfg["data_cache"],
+            max_seq_len=int(cfg["max_seq_len"]),
+            dataset_name=cfg.get("dataset_name"),
+            data_files=cfg.get("data_files"),
+            prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
+        )
+    with timer.phase("raw_records_load", "data"):
+        raw_records = _load_alpaca_raw(str(cfg["data_files"]))
     if len(raw_records) != len(dataset):
         raise RuntimeError(
             f"AlpaGasus: raw ({len(raw_records)}) vs tokenised dataset "
@@ -209,10 +216,12 @@ def main() -> None:
     # AlpaGasus filtered JSON ships as JSON-list in the official repo, but
     # some forks redistribute as JSONL — go through the shared helper so we
     # never re-introduce the "Extra data: line 2 column 1" bug.
-    filtered = read_records(filtered_file)
+    with timer.phase("alpagasus.load_filtered", "selection"):
+        filtered = read_records(filtered_file)
     logger.info("AlpaGasus filtered records: %d (from %s)", len(filtered), filtered_file)
 
-    selected_indices = _match_indices(filtered, raw_records)
+    with timer.phase("alpagasus.match_indices", "selection"):
+        selected_indices = _match_indices(filtered, raw_records)
     if not selected_indices:
         raise RuntimeError(
             "AlpaGasus: zero indices matched. Filtered JSON's instruction text "
@@ -248,29 +257,33 @@ def main() -> None:
     metrics_log = []
     for epoch in range(1, train_epochs + 1):
         logger.info("=== AlpaGasus epoch %d/%d ===", epoch, train_epochs)
-        loader = make_dataloader(
-            subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
-        )
         t0 = time.time()
-        avg_loss = sft_one_epoch(
-            model=model, loader=loader,
-            optimizer=optimizer, scheduler=scheduler,
-            grad_accum=grad_accum, grad_clip=float(cfg["gradient_clip"]),
-            device=device, epoch=epoch, logger=logger,
-        )
+        with timer.phase(f"sft_epoch{epoch}", "sft"):
+            loader = make_dataloader(
+                subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
+            )
+            avg_loss = sft_one_epoch(
+                model=model, loader=loader,
+                optimizer=optimizer, scheduler=scheduler,
+                grad_accum=grad_accum, grad_clip=float(cfg["gradient_clip"]),
+                device=device, epoch=epoch, logger=logger,
+            )
         metrics_log.append({
             "epoch": epoch, "train_loss": avg_loss,
             "selected": len(selected_indices),
             "wall_sec": round(time.time() - t0, 2),
         })
-        ckpt = output_dir / f"epoch_{epoch}"
-        ckpt.mkdir(parents=True, exist_ok=True)
-        m = model.module if hasattr(model, "module") else model
-        m.save_pretrained(str(ckpt))
-        tokenizer.save_pretrained(str(ckpt))
-        with open(output_dir / "metrics.json", "w") as f:
-            json.dump(metrics_log, f, indent=2)
+        with timer.phase(f"checkpoint_epoch{epoch}", "checkpoint"):
+            ckpt = output_dir / f"epoch_{epoch}"
+            ckpt.mkdir(parents=True, exist_ok=True)
+            m = model.module if hasattr(model, "module") else model
+            m.save_pretrained(str(ckpt))
+            tokenizer.save_pretrained(str(ckpt))
+            with open(output_dir / "metrics.json", "w") as f:
+                json.dump(metrics_log, f, indent=2)
 
+    timer.save_report(output_dir / "timing_breakdown.json")
+    timer.log_table()
     logger.info("AlpaGasus training complete. Tag: %s", args.tag)
 
 
