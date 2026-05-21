@@ -14,3 +14,22 @@ output_subdir: main_7b/llama2/tads_10
 selection_ratio: 0.1
 # epochs-reset(2026-05-16): 4 → 3. NAIT/대다수 IT-SFT 논문(Alpaca, LIMA, NAIT Table 8 등)이 3 epoch을 기준으로 보고하므로 매트릭스 전 셀을 3으로 환원해 baseline 비교 가능성 확보.
 train_epochs: 3
+
+# TADS-only 성능 lever (2026-05-21) — λ=1 / sequence-mean alignment / probe size
+# 모두 paper-faithful 유지하고, SFT optimizer 측에서만 다음 3개 조정. 다른
+# method (random / data_agent / full / baselines) 는 base/mode default 그대로.
+#
+#   use_8bit_optimizer  true → false  : fp32 AdamW 로 수렴 안정성 ↑. 메모리
+#                                       빠듯할 수 있어 4×A100 80GB 기준.
+#   warmup_ratio        0.03 → 0.06   : 10% × 52K = 5.2K samples × eff_batch
+#                                       128 → ~40 step/epoch × 3 = 120 step.
+#                                       짧은 총 step 수 대비 warmup 비율 ↑.
+#   gradient_clip       1.0 → 0.5     : SFT gradient noise ↓.
+#
+# Trade-off: cross-method 비교가 "SFT optimizer hyperparameter" 까지 다르게
+# 되어 paper-faithful 셀의 비교 정확성은 약간 손해. 그래서 random_10 /
+# data_agent_10 / full_100 baseline 과의 직접 비교 시 이 차이를 인지하고
+# 해석해야 함.
+use_8bit_optimizer: false
+warmup_ratio: 0.06
+gradient_clip: 0.5
