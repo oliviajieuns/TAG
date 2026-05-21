@@ -139,9 +139,19 @@ def build_lima_dataset(
         offline = os.environ.get("HF_DATASETS_OFFLINE", "0") == "1"
         if offline:
             raise RuntimeError(
-                "LIMA: HF_DATASETS_OFFLINE=1 and no LIMA_DATA_FILES set. "
-                "Either export HF_DATASETS_OFFLINE=0 to fetch GAIR/lima, or "
-                "download a local mirror and set LIMA_DATA_FILES."
+                "LIMA: HF_DATASETS_OFFLINE=1 and `data_files` is None — "
+                "the local-mirror path resolved to no value, so we'd have "
+                "to hit the HF hub, but offline mode blocks that.\n"
+                f"  $LIMA_DATA_FILES         = {os.environ.get('LIMA_DATA_FILES')!r}\n"
+                f"  $HF_DATASETS_OFFLINE     = {os.environ.get('HF_DATASETS_OFFLINE')!r}\n"
+                "Fix one of:\n"
+                "  1) pass `--data_files /path/to/lima.jsonl` on the training\n"
+                "     command (most reliable — bypasses env entirely)\n"
+                "  2) `export LIMA_DATA_FILES=/path/to/lima.jsonl` in the SAME\n"
+                "     shell session as the python invocation (nohup / new\n"
+                "     tmux session need their own export)\n"
+                "  3) `HF_DATASETS_OFFLINE=0` inline + huggingface-cli login\n"
+                "     to fetch from HF hub at runtime"
             )
         logger.info("LIMA: fetching GAIR/lima from HF hub (gated dataset)")
         try:

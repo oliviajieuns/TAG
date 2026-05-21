@@ -59,6 +59,16 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True)
     p.add_argument("--tag", default="LIMA", help="Variant tag (e.g. LIMA).")
+    p.add_argument(
+        "--data_files",
+        default=None,
+        help=(
+            "Path / glob to LIMA train.jsonl (or .json / .parquet). Overrides "
+            "$LIMA_DATA_FILES and cfg.lima.data_files. Use this when the env "
+            "var doesn't survive into the python process (nohup / new tmux "
+            "session / cron / etc.)."
+        ),
+    )
     return p.parse_args()
 
 
@@ -95,10 +105,17 @@ def main() -> None:
     )
     device = next(model.parameters()).device
 
-    # LIMA_DATA_FILES env var > cfg.lima.data_files > HF hub fallback.
-    data_files = (
-        os.environ.get("LIMA_DATA_FILES")
-        or (cfg.get("lima") or {}).get("data_files")
+    # Resolution: --data_files CLI > $LIMA_DATA_FILES env > cfg.lima.data_files
+    # > HF hub fallback. Empty string is treated as None so an `export
+    # LIMA_DATA_FILES=` (or accidentally unquoted shell var) doesn't silently
+    # route us into the offline-fail branch.
+    _cli_val = args.data_files
+    _env_val = os.environ.get("LIMA_DATA_FILES") or None
+    _cfg_val = (cfg.get("lima") or {}).get("data_files") or None
+    data_files = _cli_val or _env_val or _cfg_val
+    logger.info(
+        "LIMA data_files resolution | cli=%r | env=%r | cfg=%r | resolved=%r",
+        _cli_val, _env_val, _cfg_val, data_files,
     )
     dataset = build_lima_dataset(
         tokenizer=tokenizer,
