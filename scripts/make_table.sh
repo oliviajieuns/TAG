@@ -78,67 +78,97 @@ BENCHES = [
 MISSING = "[??.??]"
 
 
-def find_summary(method_dir: Path) -> Path:
-    """Return newest *-eval_summary.json under method_dir, honouring the
-    `runs/_latest/` symlink convention. None if nothing found."""
+def _all_json_files(method_dir: Path):
+    """Yield every *.json under method_dir recursively (runs/, _latest/,
+    legacy/, flat, any depth). Skips .tmp / .lock side-files."""
     if not method_dir.exists():
-        return None
-    # (1) explicit _latest symlink/dir
-    latest = method_dir / "_latest"
-    if latest.exists():
-        hits = sorted(latest.glob("*-eval_summary.json"))
-        if hits:
-            return hits[-1]
-    # (2) newest runs/<tag>/...
-    hits = list(method_dir.glob("runs/*/*-eval_summary.json"))
-    if hits:
-        hits.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        return hits[0]
-    # (3) flat layout
-    hits = sorted(method_dir.glob("*-eval_summary.json"))
-    if hits:
-        return hits[-1]
-    return None
-
-
-def extract_bench(summary_path: Path, bench: str):
-    """Return float accuracy (× 100) for bench, or None if missing/non-numeric."""
-    try:
-        with open(summary_path) as f:
-            payload = json.load(f)
-    except Exception:
-        return None
-    for s in payload.get("summaries", []) or []:
-        if s.get("benchmark") != bench:
+        return
+    for p in method_dir.rglob("*.json"):
+        if not p.is_file():
             continue
-        v = s.get("accuracy")
-        if isinstance(v, (int, float)):
-            return float(v) * 100.0
-    return None
+        if p.name.endswith(".tmp") or ".lock" in p.name:
+            continue
+        yield p
+
+
+def _accs_from_payload(payload, bench: str):
+    """Pull every accuracy reading for `bench` out of one decoded JSON
+    payload. Handles three shapes:
+
+      (a) Combined summary file emitted by tads.eval — top-level
+          {"summaries": [{"benchmark": "...", "accuracy": ...}, ...]}.
+      (b) Per-bench file emitted by each evaluator directly —
+          {"benchmark": "...", "accuracy": ...}.
+      (c) Stray dicts that happen to include "benchmark" + "accuracy" at
+          some inner key (defensive — older runs may have nested layouts).
+
+    Returns a list of floats (× 100), possibly empty.
+    """
+    out = []
+    if isinstance(payload, dict):
+        if payload.get("benchmark") == bench:
+            v = payload.get("accuracy")
+            if isinstance(v, (int, float)):
+                out.append(float(v) * 100.0)
+        for s in payload.get("summaries", []) or []:
+            if isinstance(s, dict) and s.get("benchmark") == bench:
+                v = s.get("accuracy")
+                if isinstance(v, (int, float)):
+                    out.append(float(v) * 100.0)
+    return out
+
+
+def collect_bench_max(method_dir: Path):
+    """Walk every *.json under method_dir, return (best[bench], sources).
+
+    For each bench we pick the MAX accuracy across all files — multiple
+    eval runs (different timestamps, sweep tags, legacy/ dirs, etc.) all
+    contribute and the best result wins.
+
+    `sources[bench]` = path of the file that supplied the winning value
+    (for the footer log so the user can verify the table came from where).
+    """
+    best = {b: None for b, _ in BENCHES}
+    sources = {b: None for b, _ in BENCHES}
+    for jp in _all_json_files(method_dir):
+        try:
+            payload = json.load(open(jp))
+        except Exception:
+            continue
+        for bench, _ in BENCHES:
+            for v in _accs_from_payload(payload, bench):
+                if best[bench] is None or v > best[bench]:
+                    best[bench] = v
+                    sources[bench] = jp
+    return best, sources
 
 
 def fmt_cell(v):
     return MISSING if v is None else f"{v:.2f}"
 
 
+def best_or_none(vals, bench):
+    """Format `vals[idx_of_bench]` for the footer log (or "—" if missing)."""
+    idx_by_bench = {b: i for i, (b, _) in enumerate(BENCHES)}
+    v = vals[idx_by_bench[bench]]
+    return "—" if v is None else f"{v:.2f}"
+
+
 # ---- gather ----
-rows = []  # list of (id, name, [val_or_None×8], avg_or_None)
+rows = []  # list of (id, name, [val_or_None×8], avg_or_None, sources_dict)
 for mid, mname, mdir in METHODS:
     if not mdir:
-        rows.append((mid, mname, [None] * len(BENCHES), None))
+        rows.append((mid, mname, [None] * len(BENCHES), None, {}))
         continue
-    summary = find_summary(ROOT / mdir)
-    if summary is None:
-        rows.append((mid, mname, [None] * len(BENCHES), None))
-        continue
-    vals = [extract_bench(summary, b) for b, _ in BENCHES]
+    best, sources = collect_bench_max(ROOT / mdir)
+    vals = [best[b] for b, _ in BENCHES]
     present = [v for v in vals if v is not None]
     avg = sum(present) / len(present) if present else None
-    rows.append((mid, mname, vals, avg))
+    rows.append((mid, mname, vals, avg, sources))
 
 # Full FT W-AVG for Δ
 full_avg = None
-for mid, _mname, _vals, avg in rows:
+for mid, _mname, _vals, avg, _src in rows:
     if mid == "01":
         full_avg = avg
         break
@@ -156,34 +186,42 @@ HEADERS = ["ID", "Method"] + [b for _, b in BENCHES] + ["W-AVG", "Δ vs Full FT"
 
 if OUT_FMT == "csv" or OUT_FMT == "tsv":
     sep = "," if OUT_FMT == "csv" else "\t"
-    # Flatten the 2-line bench headers to single-line for CSV/TSV.
     headers_flat = ["ID", "Method"] + [b.split("\n")[0] for _, b in BENCHES] + ["W-AVG", "Δ"]
     print(sep.join(headers_flat))
-    for mid, mname, vals, avg in rows:
+    for mid, mname, vals, avg, _src in rows:
         cells = [mid, mname] + [fmt_cell(v) for v in vals]
         cells.append(fmt_cell(avg))
         cells.append(fmt_delta(avg))
         print(sep.join(cells))
 else:  # markdown
-    # Use the second line of the bench header as the sub-header for readability.
     line1 = ["ID", "Method"] + [b.split("\n")[0] for _, b in BENCHES] + ["W-AVG", "Δ"]
     line2 = ["", ""] + [b.split("\n", 1)[1] if "\n" in b else "" for _, b in BENCHES] + ["weighted", "vs Full FT"]
     print("| " + " | ".join(line1) + " |")
     print("| " + " | ".join("---" for _ in line1) + " |")
     print("| " + " | ".join(line2) + " |")
-    for mid, mname, vals, avg in rows:
+    for mid, mname, vals, avg, _src in rows:
         cells = [mid, mname] + [fmt_cell(v) for v in vals]
         cells.append(fmt_cell(avg))
         cells.append(fmt_delta(avg))
         print("| " + " | ".join(cells) + " |")
 
-# ---- footer: per-method bench presence count + source path ----
+# ---- footer: bench-presence + source-of-MAX per (method, bench) ----
 sys.stderr.write("\n[make_table] source root: " + str(ROOT) + "\n")
-for mid, mname, vals, _avg in rows:
-    if not METHODS[[m[0] for m in METHODS].index(mid)][2]:
+sys.stderr.write("[make_table] per-bench source = file that supplied the MAX value\n")
+mdir_by_id = {m[0]: m[2] for m in METHODS}
+for mid, mname, vals, _avg, sources in rows:
+    if not mdir_by_id[mid]:
         continue
     present = sum(v is not None for v in vals)
-    summary = find_summary(ROOT / METHODS[[m[0] for m in METHODS].index(mid)][2])
-    src = str(summary) if summary else "(not found)"
-    sys.stderr.write(f"  [{mid}] {mname:38s}  bench={present}/{len(BENCHES)}  ← {src}\n")
+    sys.stderr.write(f"  [{mid}] {mname}  ({present}/{len(BENCHES)} bench)\n")
+    for bench, _ in BENCHES:
+        src = sources.get(bench)
+        if src is None:
+            sys.stderr.write(f"      {bench:10s} —  (no value found)\n")
+        else:
+            try:
+                rel = src.relative_to(ROOT)
+            except Exception:
+                rel = src
+            sys.stderr.write(f"      {bench:10s} {best_or_none(vals, bench):>6s}  ← {rel}\n")
 PY
