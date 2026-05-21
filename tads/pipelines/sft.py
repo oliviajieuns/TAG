@@ -154,9 +154,9 @@ def sft_one_epoch(
         r, epoch, n_batches, grad_accum, no_sync_enabled, cuda_mem_str(),
     )
 
-    # Free anything left over from collect_episode / agent.update so the SFT
-    # forward starts on a clean allocator and the first step's memory peak
-    # isn't competing with stale CPU buffers.
+    # Free anything left over from collect_episode so the SFT forward
+    # starts on a clean allocator and the first step's memory peak isn't
+    # competing with stale CPU buffers.
     try:
         gc.collect()
         if torch.cuda.is_available():

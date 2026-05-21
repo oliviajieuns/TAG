@@ -92,7 +92,7 @@ def compute_rewards(
     # r_weight=0 because both variances collapse — selector.collect_episode
     # recomputes a DATASET-LEVEL r_weight after the loop and discards this
     # one. Document that here so a direct caller of compute_rewards doesn't
-    # accidentally use the per-batch weight as if it were paper Eq. 5.
+    # accidentally use the per-batch weight as if it were paper Eq. 3.
     r_weight = var_loss / (var_loss + var_entropy + eps)
     return r_loss.detach(), r_entropy.detach(), r_weight.detach()
 
@@ -102,5 +102,5 @@ def composite_reward(
     r_entropy: torch.Tensor,
     r_weight: torch.Tensor,
 ) -> torch.Tensor:
-    """R = r_weight * r_loss + (1 - r_weight) * r_entropy  (paper Eq. 6)."""
+    """R = r_weight * r_loss + (1 - r_weight) * r_entropy  (paper Eq. 2)."""
     return r_weight * r_loss + (1.0 - r_weight) * r_entropy

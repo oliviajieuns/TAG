@@ -3,9 +3,13 @@
 Usage:
     python -m tads.eval \\
         --config configs/experiments/light_tads_05b.yaml \\
-        --ckpt /path/to/epoch_3 \\
+        --ckpt /path/to/epoch_last \\
         --benchmarks mmlu,gsm8k,humaneval,tydiqa \\
         --out_dir results/light_tads_05b/
+
+``tads.train`` writes ``epoch_last/`` only (final epoch); comparison
+baselines under ``tads.baselines.<method>`` write ``epoch_N/`` per
+epoch — pass whichever the run dir actually contains.
 
 The benchmark list is split by commas; each name is looked up in the
 :mod:`tads.evals` registry. Data paths for each benchmark come from the
@@ -44,8 +48,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Checkpoint directory (LoRA adapter or full). If omitted, resolves "
-            "to <output_dir>/_latest/<latest epoch_N>; pass --epoch N to pick "
-            "a specific epoch within _latest."
+            "to <output_dir>/_latest/<epoch_last or largest epoch_N>; pass "
+            "--epoch N to select a specific epoch_N within _latest (baselines "
+            "only — tads.train only writes epoch_last)."
         ),
     )
     p.add_argument(

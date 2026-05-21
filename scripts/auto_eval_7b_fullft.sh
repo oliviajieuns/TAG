@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Watch <OUTPUT_ROOT>/7b_fullft/<run>/epoch_3/ to appear, then run multi-benchmark
-# eval and write results under <EVAL_RESULTS_ROOT>/7b_fullft/<run>/.
+# Watch <OUTPUT_ROOT>/7b_fullft/<run>/epoch_last/ (or epoch_3/ for older legacy
+# runs that wrote per-epoch dirs) to appear, then run multi-benchmark eval
+# and write results under <EVAL_RESULTS_ROOT>/7b_fullft/<run>/.
 #
 # Usage: bash scripts/auto_eval_7b_fullft.sh <gpu_id> [run_subdirs ...]
 #

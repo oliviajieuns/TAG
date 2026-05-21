@@ -1,4 +1,7 @@
-"""SelectIT (Liu et al., 2024b) — placeholder.
+"""SelectIT (Liu et al., 2024b) — uncertainty-based data selection.
 
-Implementation TBD. See tads.baselines.nait for the reference baseline layout.
+Ported from https://github.com/Blue-Raincoat/SelectIT. Scoring lives in
+``score.py`` (token-level Eq.2 + sentence-level Eq.4 over a fixed
+rating-prompt template, with a ``_double_softmax`` NaN guard). Training
+entrypoint is ``python -m tads.baselines.selectit.train``.
 """

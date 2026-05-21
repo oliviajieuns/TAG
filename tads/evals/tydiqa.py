@@ -638,9 +638,10 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 f"train.json not found at {train_file} — running 0-shot. "
                 f"NAIT paper Table 2 reports 5-shot; 0-shot typically scores "
                 f"10-15pt lower EM, so this run is NOT directly comparable. "
-                f"Download from "
-                f"https://storage.googleapis.com/tydiqa/v1.1/tydiqa-goldp-v1.1-train.json "
-                f"to enable 5-shot."
+                f"To enable 5-shot, fetch the TyDiQA GoldP train split (e.g. "
+                f"`datasets.load_dataset('google-research-datasets/tydiqa', "
+                f"'secondary_task', split='train')` and re-emit as "
+                f"tydiqa-goldp-v1.1-train.json into {train_file.parent})."
             )
             logger.error("TyDiQA FALLBACK: %s", fewshot_fallback_reason)
             effective_fewshot = 0

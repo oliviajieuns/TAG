@@ -44,6 +44,9 @@ export DATA_CACHE="${DATA_CACHE:-/group-volume/minsoo3.kim/tads-checkpoints/cach
 export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/tads-eval-results}"
 export NAIT_EVAL_RESULTS_ROOT="${NAIT_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/nait-eval-results}"
 export SELECTIT_EVAL_RESULTS_ROOT="${SELECTIT_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/selectit-eval-results}"
+export LIMA_EVAL_RESULTS_ROOT="${LIMA_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/lima-eval-results}"
+export ALPAGASUS_EVAL_RESULTS_ROOT="${ALPAGASUS_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/alpagasus-eval-results}"
+export Q2Q_EVAL_RESULTS_ROOT="${Q2Q_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/q2q-eval-results}"
 
 # --- Benchmark data dirs ---
 export MMLU_DATA_DIR="${MMLU_DATA_DIR:-/group-volume/IT-datasets/mmlu/all}"

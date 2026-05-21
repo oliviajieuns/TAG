@@ -37,9 +37,13 @@ sealed epoch and is what ``tads.eval`` reads by default.
 
 Each run dir contains:
     cfg.yaml + cfg.json   — full resolved hyperparameter snapshot
-    epoch_N/              — model weights, optimizer.pt, scheduler.pt,
+    epoch_last/           — final-epoch weights only (tads.train writes
+                            just the last epoch to save disk). Comparison
+                            baselines under tads.baselines.<method> still
+                            emit epoch_N/ per epoch.
+                            Contents: optimizer.pt, scheduler.pt,
                             trajectory_anchor.pt, env_meta.json,
-                            anchor_history.json, _complete sentinel
+                            anchor_history.json, _complete sentinel.
     metrics.json          — per-epoch loss + selection diagnostics
     selected_indices_epoch{N}.json  — exact data subset used per epoch
     logs/                 — train_<method>_<ts>_r<rank>.log
@@ -568,7 +572,7 @@ def main() -> None:
         num_training_steps=total_steps,
     )
 
-    # ---------- resume: restore optimizer/scheduler/agent/anchor/metrics ----------
+    # ---------- resume: restore optimizer/scheduler/anchor/metrics ----------
     metrics_log = []
     if resume_ckpt is not None:
         # bitsandbytes 8-bit optimizer state is bnb-version-coupled; mismatched

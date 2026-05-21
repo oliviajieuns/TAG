@@ -2,9 +2,10 @@
 # Evaluate every checkpoint produced by run_main_7b.sh.
 #
 # For each (model, method) in main_7b/, locate the most recent saved
-# epoch under ${OUTPUT_ROOT}/main_7b/<model>/<method>/epoch_* and run
-# `python -m tads.eval` on it. Results land under
-# ${EVAL_RESULTS_ROOT}/<model>/<method>/.
+# epoch under ${OUTPUT_ROOT}/main_7b/<model>/<method>/ — prefers
+# epoch_last/ (tads.train layout) and falls back to the largest
+# epoch_N/ (comparison-baseline layout) — and run `python -m tads.eval`
+# on it. Results land under ${EVAL_RESULTS_ROOT}/<model>/<method>/.
 #
 # GPU selection
 # -------------

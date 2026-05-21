@@ -1,7 +1,10 @@
-"""Big-Bench Hard (BBH) evaluator — 5-shot Chain-of-Thought.
+"""Big-Bench Hard (BBH) evaluator — 3-shot Chain-of-Thought.
 
-Paper context: NAIT (ICLR 2026, Appendix D) reports 5-shot CoT on BBH's
-27 sub-tasks. Final score = mean of per-task accuracy.
+Paper context: NAIT (ICLR 2026, Appendix D) reports CoT on BBH's
+27 sub-tasks; we use the official ``cot-prompts/`` (3-shot CoT) when
+available and fall back to ``n_fewshot``-shot direct-answer prompts
+from the task's own examples otherwise. Final score = mean of
+per-task accuracy.
 
 Expected layout under ``data_dir`` (matches the official suzgun/BIG-Bench-Hard
 distribution):
@@ -155,7 +158,8 @@ def _build_prompt(
 
 @register("bbh")
 class BBHEvaluator(BenchmarkEvaluator):
-    """Big-Bench Hard with 5-shot CoT (NAIT Appendix D)."""
+    """Big-Bench Hard with 3-shot CoT (official cot-prompts/) and
+    ``n_fewshot``-shot direct-answer fallback (NAIT Appendix D)."""
 
     def evaluate(
         self,

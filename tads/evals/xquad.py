@@ -6,12 +6,13 @@ Setup
   loaded from per-language JSON files (``xquad.<lang>.json``).
   Romanian (`ro`) is also included if present locally — `--languages`
   CLI override lets you drop it for paper-exact comparison.
-- **EM macro-average over languages** — NAIT Table 2 reports XQuAD as a
-  macro mean of per-language EM scores so a tiny language can't be
-  swamped by a larger one. Each XQuAD language ships 1,190 questions
-  (the same English SQuAD test split, professionally translated), so
-  the per-language sizes are uniform anyway, but macro keeps us paper-
-  consistent.
+- **F1 macro-average over languages** is the headline metric (the code
+  aliases ``accuracy = macro_f1``); EM macro is also computed and kept
+  in the JSON for diagnostics. NAIT Table 2 / Artetxe et al. 2020 both
+  use macro-F1 for XQuAD so a tiny language can't be swamped by a
+  larger one. Each XQuAD language ships 1,190 questions (the same
+  English SQuAD test split, professionally translated), so per-language
+  sizes are uniform; macro keeps us paper-consistent regardless.
 - **5-shot demonstrations** are drawn from the SAME language's first
   N items (and the eval skips those N). Matches the lm-eval-harness
   cross-lingual SQuAD convention.
@@ -188,7 +189,8 @@ def _build_demos(
 
 @register("xquad")
 class XQuADEvaluator(BenchmarkEvaluator):
-    """XQuAD 11-language, 5-shot, EM macro-avg over languages."""
+    """XQuAD 11-language (plus optional ``ro``), 5-shot, F1 macro-avg
+    over languages (EM macro is also reported as a diagnostic)."""
 
     def evaluate(
         self,

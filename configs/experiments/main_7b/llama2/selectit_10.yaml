@@ -9,7 +9,7 @@
 # 평가는 별도 root로:
 #   python -m tads.eval \
 #       --config configs/experiments/main_7b/llama2/selectit_10.yaml \
-#       --ckpt ${OUTPUT_ROOT}/main_7b/llama2/selectit_10/_latest/epoch_3 \
+#       --ckpt ${OUTPUT_ROOT}/main_7b/llama2/selectit_10/epoch_3 \
 #       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
 #       --out_dir ${SELECTIT_EVAL_RESULTS_ROOT}/llama2/selectit_10/
 defaults:

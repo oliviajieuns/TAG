@@ -152,7 +152,8 @@ def tads_score(
     [1, 1+λ] (since ã ∈ [0,1]) so the score is bounded by R̃ · (1+λ).
 
     Args:
-        R_tilde: (N,) calibrated utility, each in (0, 1).
+        R_tilde: (N,) calibrated utility (pool z-score), real-valued
+            (typically ≈ [-3, +3]; matches `calibrated_utility` above).
         alignment_norm: (N,) min-max-normalised alignment, each in [0, 1].
         lam: anchor weighting λ ≥ 0. λ = 0 disables the anchor factor.
 

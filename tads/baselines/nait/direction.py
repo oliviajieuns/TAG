@@ -5,14 +5,17 @@ top-1 PCA direction (sign-calibrated), and scores candidate samples by
 the same Δh projection onto that direction (paper Eq 5:
 ``s_y = Σ_l ⟨Δh_l(y), v_l⟩``).
 
-The seed and candidate sides must use the SAME definition of the
-contextualization vector — the directions were fitted on Δh variance,
-so projecting anything else (mean-pooled hidden state, last-token
-hidden state alone, etc.) onto v_l is not the inner product the paper
-defines and produces a different ranking. The TADS variant in
-``tads/core/trajectory_anchor.py`` follows the same Δh convention on
-both sides; keeping this file aligned avoids method-vs-method
-inconsistencies in the main 7B matrix.
+For NAIT, the seed and candidate sides intentionally use the SAME
+definition of the contextualization vector (Δh on both) — the directions
+were fitted on Δh variance, so projecting anything else (mean-pooled
+hidden state, last-token hidden state alone, etc.) onto v_l is not the
+inner product the NAIT paper defines and produces a different ranking.
+
+Note: TADS (tads/core/selector.py) intentionally departs from this — it
+extracts v_l from the same Δh PCA (tads/core/trajectory_anchor.py) but
+SCORES candidates by sequence-mean h̄_l projection (paper Eq.6). So the
+two methods share the anchor-extraction side and differ on the scoring
+side by design; that's the algorithmic distinction between TADS and NAIT.
 
 This module deduplicates the ``extract_delta_from_seed`` definitions in
 the original ``train_nait_v2.py`` (which had two identical copies).

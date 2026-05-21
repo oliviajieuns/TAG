@@ -1,13 +1,17 @@
-"""Trajectory Anchor — multi-layer capability direction (NAIT Eq 2 + Eq 5).
+"""Trajectory Anchor — multi-layer capability direction v_l.
 
 For each layer l and sample x, the contextualization vector is
     Δh_l(x; θ_t) := h_l^last(x; θ_t) - h_l^first(x; θ_t).
 For each layer we PCA the set {Δh_l(x; θ_t)} over a probe subset and take
 the top-1 eigenvector as that layer's capability direction v_l (sign
-calibrated so ⟨v_l, E[Δh_l]⟩ > 0).
+calibrated so ⟨v_l, E[Δh_l]⟩ > 0). This v_l extraction is shared between
+TADS and NAIT (both consume the same {Δh_l} PCA).
 
-At scoring time NAIT (Eq 5) aggregates across layers:
-    s_y = Σ_{l ∈ layer_indices} ⟨Δh_l(y), v_l⟩
+At scoring time:
+    TADS (paper Eq.6): align_i = (1/L) Σ_l ⟨h̄_l(x_i), v_l⟩,
+        where h̄_l = (1/K_x) Σ_k h_l^(k) is the sequence-mean of layer-l
+        hidden states (padding excluded). Inlined in tads.core.selector.
+    NAIT (Eq 5):       s_y = Σ_l ⟨Δh_l(y), v_l⟩  (same delta as anchor side).
 
 Layer selection (``layer_indices`` arg):
     "all"             → every decoder layer (NAIT paper, recommended)
@@ -74,7 +78,7 @@ class TrajectoryAnchor:
         self,
         layer_idx: int = -1,
         layer_indices: LayerSpec = None,
-        max_samples_for_pca: int = 2000,
+        max_samples_for_pca: int = 1024,
         pca_batch_size: int = 4,
         device: str = "cuda",
     ):
@@ -422,7 +426,7 @@ class TrajectoryAnchor:
         # Config.
         self.layer_idx = state.get("layer_idx", -1)
         self.layer_indices_spec = state.get("layer_indices_spec", None)
-        self.max_samples_for_pca = state.get("max_samples_for_pca", 2000)
+        self.max_samples_for_pca = state.get("max_samples_for_pca", 1024)
         # Legacy single-layer alias.
         if not self.is_multi_layer and self.layer_indices:
             self.v = self.v_by_layer.get(self.layer_indices[0])
