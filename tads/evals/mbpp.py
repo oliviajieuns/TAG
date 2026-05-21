@@ -437,6 +437,41 @@ class MBPPEvaluator(BenchmarkEvaluator):
 
         tokenizer.truncation_side = "left"
 
+        # SFT-wrap toggle (env var override, default OFF = paper-faithful).
+        # - OFF (default): raw bigcode 3-shot prompt, matches NAIT / bigcode-
+        #   evaluation-harness convention. Best for paper reproduction.
+        # - ON: wrap whole 3-shot prompt in `### Instruction:/Response:`.
+        #   Same trick as HumanEval (humaneval_generation_prefix), which
+        #   recovered 0.08→0.27 there. For MBPP the 3-shot demos themselves
+        #   contain `[BEGIN]/[DONE]` markers, so wrapping may put the model
+        #   out-of-SFT-distribution — measure both and compare.
+        #   Toggle: `TADS_MBPP_USE_SFT_WRAP=1 python -m tads.eval ...`
+        use_sft_wrap = os.environ.get("TADS_MBPP_USE_SFT_WRAP", "0") == "1"
+        if use_sft_wrap:
+            from tads.data.sft_prompts import mbpp_generation_prefix as _wrap
+        else:
+            _wrap = None  # type: ignore
+
+        # stop_strings — base set always; SFT template markers added only
+        # when wrap is on (otherwise model never emits `### Instruction`).
+        _base_stops = [
+            # Only `\n[DONE]` — no-newline `[DONE]` would match the literal
+            # token inside a docstring / comment / string literal in the
+            # model's code and truncate valid completions.
+            "\n[DONE]",
+            "\nYou are an expert Python programmer",
+        ]
+        if use_sft_wrap:
+            _base_stops.extend([
+                "\n### Instruction",
+                "\n### Response",
+            ])
+        logger.info(
+            "MBPP gen-config | wrap=%s | n_samples=%d | T=%.2f | top_p=%.2f",
+            ("alpaca" if use_sft_wrap else "raw-bigcode"),
+            n_samples, temperature, top_p,
+        )
+
         use_sampling = n_samples > 1
         per_problem: List[Dict[str, Any]] = []
         # per-problem list of pass/fail (length = n_samples per problem) for
@@ -444,11 +479,11 @@ class MBPPEvaluator(BenchmarkEvaluator):
         problem_results: List[List[bool]] = []
         for i, ex in enumerate(test_records):
             raw_prompt = _build_mbpp_prompt(demos, ex)
-            # Audit fix — wrap 3-shot prompt in the SFT template. Without
-            # this an SFT'd model (Llama-2-7B + Alpaca-GPT4) drops ~10pt
-            # below NAIT Table 2 51.58 on pass@1.
-            from tads.data.sft_prompts import mbpp_generation_prefix
-            prompt = mbpp_generation_prefix(raw_prompt, prompt_style=prompt_style)
+            prompt = (
+                _wrap(raw_prompt, prompt_style=prompt_style)
+                if _wrap is not None
+                else raw_prompt
+            )
             inputs = tokenizer(
                 prompt, return_tensors="pt",
                 truncation=True, max_length=max_input_tokens,
@@ -456,17 +491,7 @@ class MBPPEvaluator(BenchmarkEvaluator):
             gen_kwargs = dict(
                 max_new_tokens=max_new_tokens,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                stop_strings=[
-                    # Only `\n[DONE]` — the no-newline `[DONE]` variant would
-                    # match the literal token inside a docstring / comment /
-                    # string literal in the model's code and truncate valid
-                    # completions that happen to mention "[DONE]".
-                    "\n[DONE]",
-                    "\nYou are an expert Python programmer",
-                    # Hallucinated next Alpaca turn (we wrap into ### Response).
-                    "\n### Instruction",
-                    "\n### Response",
-                ],
+                stop_strings=list(_base_stops),
                 tokenizer=tokenizer,
             )
             if use_sampling:
@@ -547,6 +572,7 @@ class MBPPEvaluator(BenchmarkEvaluator):
             "accuracy": pass_at_1,
             "pass@1": pass_at_1,
             "n_samples": n_samples,
+            "use_sft_wrap": use_sft_wrap,
             "total_questions": len(test_records),
             "config": config,
             "n_fewshot": len(demos),
