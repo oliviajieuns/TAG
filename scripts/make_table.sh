@@ -78,17 +78,52 @@ BENCHES = [
 MISSING = "[??.??]"
 
 
-def _all_json_files(method_dir: Path):
-    """Yield every *.json under method_dir recursively (runs/, _latest/,
-    legacy/, flat, any depth). Skips .tmp / .lock side-files."""
-    if not method_dir.exists():
+def _all_json_files(root: Path):
+    """Yield every *.json under root recursively (regardless of method-dir
+    layout). Skips .tmp / .lock side-files."""
+    if not root.exists():
         return
-    for p in method_dir.rglob("*.json"):
+    for p in root.rglob("*.json"):
         if not p.is_file():
             continue
         if p.name.endswith(".tmp") or ".lock" in p.name:
             continue
         yield p
+
+
+def _identify_method(jp: Path, payload):
+    """Return one of METHODS[*].mdir if the file looks like a result for
+    that method, else None. Identification sources (first match wins):
+      (1) payload['experiment']  e.g. "llama2_tads_10" → tads_10
+      (2) filename prefix         e.g. "llama2_tads_10-mmlu.json" → tads_10
+      (3) any parent dir name     e.g. ".../tads_10/runs/.../*.json" → tads_10
+
+    Matching against METHODS:
+      - exact equality, OR
+      - candidate ends with "_<mdir>" (model-prefix variant), OR
+      - candidate ends with mdir (suffix match — handles misc layouts).
+    """
+    candidates = []
+    if isinstance(payload, dict):
+        exp = payload.get("experiment")
+        if exp:
+            candidates.append(str(exp))
+    # filename prefix (before the last '-bench' suffix or whole stem)
+    stem = jp.stem
+    if "-" in stem:
+        candidates.append(stem.rsplit("-", 1)[0])
+    candidates.append(stem)
+    # parent dirs (closest first)
+    for p in jp.parents:
+        candidates.append(p.name)
+
+    for cand in candidates:
+        for _id, _name, mdir in METHODS:
+            if not mdir:
+                continue
+            if cand == mdir or cand.endswith("_" + mdir) or cand.endswith("/" + mdir):
+                return mdir
+    return None
 
 
 def _accs_from_payload(payload, bench: str):
@@ -118,29 +153,30 @@ def _accs_from_payload(payload, bench: str):
     return out
 
 
-def collect_bench_max(method_dir: Path):
-    """Walk every *.json under method_dir, return (best[bench], sources).
+def collect_all_results(root: Path):
+    """Walk every *.json under root, return {mdir: {bench: (max_acc, src_path)}}.
 
-    For each bench we pick the MAX accuracy across all files — multiple
-    eval runs (different timestamps, sweep tags, legacy/ dirs, etc.) all
-    contribute and the best result wins.
-
-    `sources[bench]` = path of the file that supplied the winning value
-    (for the footer log so the user can verify the table came from where).
+    method 식별은 file path 가 아니라 payload['experiment'] / filename /
+    parent dir name 으로 — 사용자가 --out_dir 를 다른 위치로 잘못 지정해
+    결과 JSON 이 엉뚱한 폴더에 떨어진 경우에도 (1) experiment label 이나
+    (2) <exp>-<bench>.json 파일명 만 우리 method list 와 매칭되면 표에
+    포함된다. method dir 위치는 더 이상 신뢰 source 가 아님.
     """
-    best = {b: None for b, _ in BENCHES}
-    sources = {b: None for b, _ in BENCHES}
-    for jp in _all_json_files(method_dir):
+    by_method = {m[2]: {} for m in METHODS if m[2]}
+    for jp in _all_json_files(root):
         try:
             payload = json.load(open(jp))
         except Exception:
             continue
+        mdir = _identify_method(jp, payload)
+        if mdir is None:
+            continue
         for bench, _ in BENCHES:
             for v in _accs_from_payload(payload, bench):
-                if best[bench] is None or v > best[bench]:
-                    best[bench] = v
-                    sources[bench] = jp
-    return best, sources
+                cur = by_method[mdir].get(bench)
+                if cur is None or v > cur[0]:
+                    by_method[mdir][bench] = (v, jp)
+    return by_method
 
 
 def fmt_cell(v):
@@ -154,14 +190,25 @@ def best_or_none(vals, bench):
     return "—" if v is None else f"{v:.2f}"
 
 
-# ---- gather ----
+# ---- gather (single walk over ENTIRE root, then bucket by identified method) ----
+all_results = collect_all_results(ROOT)
+
 rows = []  # list of (id, name, [val_or_None×8], avg_or_None, sources_dict)
 for mid, mname, mdir in METHODS:
     if not mdir:
         rows.append((mid, mname, [None] * len(BENCHES), None, {}))
         continue
-    best, sources = collect_bench_max(ROOT / mdir)
-    vals = [best[b] for b, _ in BENCHES]
+    by_bench = all_results.get(mdir, {})
+    vals = []
+    sources = {}
+    for bench, _ in BENCHES:
+        entry = by_bench.get(bench)
+        if entry is None:
+            vals.append(None)
+            sources[bench] = None
+        else:
+            vals.append(entry[0])
+            sources[bench] = entry[1]
     present = [v for v in vals if v is not None]
     avg = sum(present) / len(present) if present else None
     rows.append((mid, mname, vals, avg, sources))
