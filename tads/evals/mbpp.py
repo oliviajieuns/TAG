@@ -162,6 +162,16 @@ _TRIM_PATTERNS = [
     # Hallucinated next Alpaca turn (when use_sft_wrap=true).
     re.compile(r"\n\s*### Instruction"),
     re.compile(r"\n\s*### Response"),
+    # Hallucinated extra top-level code that the test harness shouldn't
+    # see — `if __name__ == "__main__":` / `print(...)` / a second
+    # top-level `def` / a `class` after the target function. Mirrors
+    # HumanEval's stop-sequence convention (humaneval.py:28-46). MBPP
+    # gold answers are essentially always single-function so these
+    # column-0 patterns reliably indicate "model went beyond the answer".
+    re.compile(r"\nif __name__"),
+    re.compile(r"\nprint\("),
+    re.compile(r"\nclass "),
+    re.compile(r"\ndef test_"),  # model's own self-test
 ]
 
 # Leading code-fence opener — chat-style models often wrap their code in
@@ -170,6 +180,9 @@ _TRIM_PATTERNS = [
 _LEADING_FENCE_RE = re.compile(r"^\s*```(?:python|py)?\s*\n", re.IGNORECASE)
 # Trailing closing fence — the closing ``` after the code body.
 _TRAILING_FENCE_RE = re.compile(r"\n\s*```\s*$")
+# Leading `[BEGIN]` line that some models echo from the prompt before
+# starting the function. Pure literal — never valid Python at column 0.
+_LEADING_BEGIN_RE = re.compile(r"^\s*\[BEGIN\]\s*\n", re.IGNORECASE)
 
 # Common Alpaca / chat-style preamble openings the SFT model emits before
 # the function body. If the first non-empty line starts with any of these
@@ -224,13 +237,19 @@ def _extract_completion(text: str) -> str:
         4. Trailing-trim at closing ``` fence.
     """
     out = text
-    # (1) leading fence
+    # (1) leading code fence  ```python\n
     m = _LEADING_FENCE_RE.match(out)
+    if m:
+        out = out[m.end():]
+    # (1b) leading `[BEGIN]` echo — some models repeat the prompt's last
+    # token before starting the function body. Strip exactly one occurrence
+    # at the very top of the completion.
+    m = _LEADING_BEGIN_RE.match(out)
     if m:
         out = out[m.end():]
     # (2) leading prose preamble
     out = _strip_prose_preamble(out)
-    # (3) trailing demo / SFT-turn boundaries
+    # (3) trailing demo / SFT-turn / hallucinated-toplevel boundaries
     for pat in _TRIM_PATTERNS:
         m = pat.search(out)
         if m:
@@ -527,6 +546,13 @@ class MBPPEvaluator(BenchmarkEvaluator):
             # model's code and truncate valid completions.
             "\n[DONE]",
             "\nYou are an expert Python programmer",
+            # Hallucinated top-level after the answer function (mirrors
+            # HumanEval stop-set). MBPP answers are essentially single-
+            # function so these column-0 patterns are reliable terminators.
+            "\nif __name__",
+            "\nprint(",
+            "\nclass ",
+            "\ndef test_",
         ]
         if use_sft_wrap:
             _base_stops.extend([
