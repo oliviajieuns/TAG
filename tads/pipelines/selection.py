@@ -211,8 +211,24 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
         logger.info("Random selection | k=%d/%d", len(selected), n_total)
         return selected, extras
 
+    _BASELINE_METHODS = {"lima", "nait", "selectit", "alpagasus", "q2q"}
+    if method in _BASELINE_METHODS:
+        raise ValueError(
+            f"method={method!r} is a comparison baseline — `tads.train` only "
+            f"handles random / full / data_agent / tads.\n"
+            f"Use the dedicated entrypoint instead:\n"
+            f"    python -m tads.baselines.{method}.train \\\n"
+            f"        --config <experiment_yaml> --tag <variant_tag>\n"
+            f"See tads/baselines/{method}/train.py docstring for the exact "
+            f"command + any required env vars (e.g. ALPAGASUS_FILTERED_FILE, "
+            f"LIMA_DATA_FILES)."
+        )
     if method not in ("tads", "data_agent"):
-        raise ValueError("Unknown method: " + repr(method))
+        raise ValueError(
+            f"Unknown method: {method!r}. Valid in `tads.train`: random, "
+            f"full, data_agent, tads. Baseline methods (lima/nait/selectit/"
+            f"alpagasus/q2q) have their own entrypoints in tads/baselines/."
+        )
 
     # ---------- selection cache: skip collect_episode if a prior run
     # ---------- already produced selected_indices_epoch{N}.json
