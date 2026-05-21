@@ -6,8 +6,7 @@ compute:
     L_i        = mean CE loss over response tokens                (== rdiff legacy name)
     H_i        = mean predictive entropy over response tokens     (== rconf legacy name)
     R_i        = w·L_i + (1-w)·H_i  composite reward              (paper Eq.2)
-    R̃_i       = (R_i - R̄) / (σ_R + 1e-6)  calibrated utility    (paper Eq.8 inner,
-                                                                  z-score only — sigmoid removed)
+    R̃_i       = (R_i - R̄) / (σ_R + 1e-6)  calibrated utility    (paper Eq.8 inner, pool z-score)
     ã_i       = min-max-norm( Σ_l <h̄_l(x_i), v_l> / L )           (paper Eq.7)
     s_i        = R̃_i · (1 + λ · ã_i)                             (paper Eq.8 outer)
 

@@ -7,7 +7,7 @@ over pool-level statistics.
 Pipeline composition (one epoch):
     L_i, H_i           = per-sample loss / entropy            (compute_rewards in reward.py)
     R_i, w             = pool_reward(L_arr, H_arr)            (Eq.2 / Eq.3)
-    R̃_i               = calibrated_utility(R_arr)             (Eq.8 inner: σ(z-score))
+    R̃_i               = calibrated_utility(R_arr)             (Eq.8 inner: pool z-score)
     align_i (raw)      = Σ_l <h̄_l(x_i), v_l> / L              (Eq.6, computed in selector)
     ã_i                = normalize_alignment(align_raw)        (Eq.7)
     s_i                = tads_score(R̃, ã, λ)                  (Eq.8 outer: multiplicative boost)
@@ -73,12 +73,11 @@ def calibrated_utility(
 
     Centres out the additive task-mix-dependent baseline of Eq.5/
     total-variance and scales by the pool std so cross-task drift in
-    R-magnitude doesn't dominate the ranking.  Unlike the original paper
-    formulation, the logistic sigmoid is intentionally NOT applied — R̃
-    here is unbounded, so the multiplicative composition with the anchor
-    factor `(1 + λ·ã_i)` in tads_score preserves R-magnitude information
-    instead of squashing it. Sign is preserved (R below the pool mean →
-    negative R̃ → smaller s_i after the anchor multiply).
+    R-magnitude doesn't dominate the ranking. R̃ is real-valued (typically
+    ≈ [-3, +3]); multiplicative composition with the anchor factor
+    `(1 + λ·ã_i)` in tads_score preserves both sign and R-magnitude
+    information (R below the pool mean → negative R̃ → smaller s_i after
+    the anchor multiply).
 
     Args:
         R: (N,) composite reward.
