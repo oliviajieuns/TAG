@@ -1,9 +1,40 @@
-# Data Agent baseline = TADS λ=0 + anchor off.  PPO actor 폐기에 따라 본
-# 셀의 학습 흐름은 "calibrated-utility-only" (s_i = R̃_i, Eq.8 with λ=0).
-# 별도 코드 변경 없이 TADS와 같은 collect_episode 경로를 재사용한다.
+# Data Agent (Yang et al., ICML 2026) — PPO-based dynamic data selection.
+#
+# Implementation lives under tads/baselines/data_agent/ (separate from
+# tads.train which only handles random / full / tads). Launch with:
+#     python -m tads.baselines.data_agent.train --config <experiment_yaml> --tag <variant>
+#
+# Selection rule (paper §3 / Jackbrocp/Data-Agent reference repo):
+#     state s_i  = sequence-mean of last decoder layer's hidden states
+#     a_i        = Beta(α_i, β_i).sample()         # stochastic, NOT the mean
+#     R_diff     = (L_i - L_min) / (L_max - L_min + ε)
+#     R_conf     = H_i / (H_max + ε)
+#     r          = Var(R_diff) / (Var(R_diff) + Var(R_conf) + ε)
+#     R_i        = r·R_diff + (1-r)·R_conf
+#     top-K      = torch.topk(a_i, k=⌊N·selection_ratio⌋)
+#   PPO update on (s, a, log_prob, R) at every epoch; selection score
+#   is a_i alone (R serves only as the PPO training signal).
 method: data_agent
-# Episode collection forward-only; safe to use a much larger batch on A100 80GB.
+
+# Episode forward batch (eval-only forward; same memory profile as the TADS path).
 episode_batch_size: 16
-tads:
-  lam: 0.0
-  use_anchor: false
+
+data_agent:
+  # PPO hyperparameters (paper Eq.7 / Eq.9 + reference repo PPO.py defaults).
+  ppo_eps_clip: 0.2
+  ppo_k_epochs: 4
+  ppo_gamma: 0.99
+  ppo_gae_lambda: 0.95
+  ppo_mb_size: 1024
+  # "group_relative" is the safer default for LLM episodes (single-step rewards
+  # with no temporal coupling). Switch to "gae" to match the paper symbol Eq.9
+  # literally; the reference repo's effective advantage is also a std-normalised
+  # group-relative score (see PPO.py: `advantages /= advantages.std() + 1e-8`).
+  advantage_mode: group_relative
+  # paper has no entropy term and no value clip; both available for stability ablations.
+  entropy_coef: 0.0
+  value_coef: 0.5
+  value_clip: false
+  # Actor MLP (3-layer; reference repo uses hidden=128).
+  hidden_dim: 128
+  actor_lr: 3.0e-4

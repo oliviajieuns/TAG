@@ -33,6 +33,7 @@ import numpy as np
 import torch
 from torch.utils.data import Subset
 from tads.core.schedulers import get_cosine_schedule_with_warmup
+from tads.core.timing import PhaseTimer
 from tads.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
@@ -179,48 +180,54 @@ def main() -> None:
     logger = setup_logger(str(log_dir), name=f"nait_{args.tag}_{ts}")
     logger.info("NAIT baseline | tag=%s | seed_path=%s", args.tag, args.seed_path)
 
+    timer = PhaseTimer(log=logger, method="nait")
+
     # ---------- seeds ----------
     # Default to 1500 (NAIT paper Table 7 'mix' variant). cfg.nait.n_seeds in
     # the shipped methods/nait.yaml is set to a very large cap (100000) so it
     # acts as no-op; users wanting a different mix size should pass --n_seeds.
-    n_seeds = int(args.n_seeds or cfg.get("nait", {}).get("n_seeds", 1500))
-    seed_path = _ensure_seed_file(
-        args.seed_path,
-        data_files_spec=str(cfg["data_files"]),
-        n_seeds=n_seeds,
-        seed=seed,
-        logger=logger,
-    )
-    with open(seed_path) as f:
-        seed_items = json.load(f)
-    if len(seed_items) > n_seeds:
-        rng = random.Random(seed)
-        seed_items = rng.sample(seed_items, n_seeds)
-    logger.info("Loaded %d seed items from %s", len(seed_items), seed_path)
+    with timer.phase("seed_build", "data"):
+        n_seeds = int(args.n_seeds or cfg.get("nait", {}).get("n_seeds", 1500))
+        seed_path = _ensure_seed_file(
+            args.seed_path,
+            data_files_spec=str(cfg["data_files"]),
+            n_seeds=n_seeds,
+            seed=seed,
+            logger=logger,
+        )
+        with open(seed_path) as f:
+            seed_items = json.load(f)
+        if len(seed_items) > n_seeds:
+            rng = random.Random(seed)
+            seed_items = rng.sample(seed_items, n_seeds)
+        logger.info("Loaded %d seed items from %s", len(seed_items), seed_path)
 
     # ---------- model / dataset ----------
-    tokenizer = load_tokenizer(cfg["model_path"])
-    model = load_model(
-        cfg["model_path"],
-        training_mode=str(cfg.get("training_mode", "full")),
-        lora_cfg=cfg.get("lora"),
-        use_ddp=False,
-        gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
-    )
+    with timer.phase("tokenizer_load", "setup"):
+        tokenizer = load_tokenizer(cfg["model_path"])
+    with timer.phase("model_load", "setup"):
+        model = load_model(
+            cfg["model_path"],
+            training_mode=str(cfg.get("training_mode", "full")),
+            lora_cfg=cfg.get("lora"),
+            use_ddp=False,
+            gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
+        )
     device = next(model.parameters()).device
 
-    dataset = build_alpaca_dataset(
-        tokenizer=tokenizer,
-        cache_dir=cfg["data_cache"],
-        max_seq_len=int(cfg["max_seq_len"]),
-        dataset_name=cfg.get("dataset_name"),
-        data_files=cfg.get("data_files"),
-        # `or "alpaca_default"` (not just `.get(..., "alpaca_default")`)
-        # so a YAML that sets prompt_style: "" or null falls back instead
-        # of passing the empty string down to tokenize_alpaca, which would
-        # then raise ValueError("Unknown prompt_style=''").
-        prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
-    )
+    with timer.phase("dataset_build", "data"):
+        dataset = build_alpaca_dataset(
+            tokenizer=tokenizer,
+            cache_dir=cfg["data_cache"],
+            max_seq_len=int(cfg["max_seq_len"]),
+            dataset_name=cfg.get("dataset_name"),
+            data_files=cfg.get("data_files"),
+            # `or "alpaca_default"` (not just `.get(..., "alpaca_default")`)
+            # so a YAML that sets prompt_style: "" or null falls back instead
+            # of passing the empty string down to tokenize_alpaca, which would
+            # then raise ValueError("Unknown prompt_style=''").
+            prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
+        )
     logger.info("Dataset size: %d", len(dataset))
 
     nait_cfg = cfg.get("nait", {}) or {}
@@ -229,16 +236,16 @@ def main() -> None:
 
     # ---------- direction extraction ----------
     logger.info("Step 1: extracting delta from seeds ...")
-    t0 = time.time()
-    delta_per_layer = extract_delta_from_seed(
-        model, tokenizer, seed_items, device, layers,
-        max_seq_len=int(cfg["max_seq_len"]),
-        logger=logger,
-    )
-    logger.info("  Δ extracted in %.1fs", time.time() - t0)
+    with timer.phase("nait.delta_extract", "selection"):
+        delta_per_layer = extract_delta_from_seed(
+            model, tokenizer, seed_items, device, layers,
+            max_seq_len=int(cfg["max_seq_len"]),
+            logger=logger,
+        )
 
     logger.info("Step 2: fitting top-1 PCA directions ...")
-    directions = fit_directions(delta_per_layer)
+    with timer.phase("nait.pca_fit", "selection"):
+        directions = fit_directions(delta_per_layer)
     for l, v in directions.items():
         logger.info("  layer=%d | norm=%.4f | dim=%d", l, v.norm().item(), v.size(0))
 
@@ -250,17 +257,17 @@ def main() -> None:
             selected_indices = json.load(f)
     else:
         logger.info("Step 3: scoring candidates ...")
-        t0 = time.time()
-        scores = score_candidates(
-            model, dataset, directions, device, nait_batch_size, logger,
-        )
-        logger.info("  Scoring done in %.1fs", time.time() - t0)
-        k = max(1, int(len(dataset) * float(cfg["selection_ratio"])))
-        selected_indices = scores.topk(k).indices.cpu().tolist()
-        with open(selected_path, "w") as f:
-            json.dump(selected_indices, f)
-        with open(output_dir / "scores.json", "w") as f:
-            json.dump(scores.tolist(), f)
+        with timer.phase("nait.score_candidates", "selection"):
+            scores = score_candidates(
+                model, dataset, directions, device, nait_batch_size, logger,
+            )
+        with timer.phase("nait.topk", "selection"):
+            k = max(1, int(len(dataset) * float(cfg["selection_ratio"])))
+            selected_indices = scores.topk(k).indices.cpu().tolist()
+            with open(selected_path, "w") as f:
+                json.dump(selected_indices, f)
+            with open(output_dir / "scores.json", "w") as f:
+                json.dump(scores.tolist(), f)
         logger.info("Selected %d/%d", k, len(dataset))
 
     # ---------- SFT ----------
@@ -285,13 +292,14 @@ def main() -> None:
     metrics_log = []
     for epoch in range(1, train_epochs + 1):
         logger.info("=== NAIT epoch %d/%d ===", epoch, train_epochs)
-        loader = make_dataloader(subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch)
-        avg_loss = sft_one_epoch(
-            model=model, loader=loader,
-            optimizer=optimizer, scheduler=scheduler,
-            grad_accum=grad_accum, grad_clip=float(cfg["gradient_clip"]),
-            device=device, epoch=epoch, logger=logger,
-        )
+        with timer.phase(f"sft_epoch{epoch}", "sft"):
+            loader = make_dataloader(subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch)
+            avg_loss = sft_one_epoch(
+                model=model, loader=loader,
+                optimizer=optimizer, scheduler=scheduler,
+                grad_accum=grad_accum, grad_clip=float(cfg["gradient_clip"]),
+                device=device, epoch=epoch, logger=logger,
+            )
         metrics = {
             "epoch": epoch,
             "train_loss": avg_loss,
@@ -300,14 +308,17 @@ def main() -> None:
         metrics_log.append(metrics)
         logger.info("Epoch %d done | %s", epoch, metrics)
 
-        ckpt = output_dir / f"epoch_{epoch}"
-        ckpt.mkdir(parents=True, exist_ok=True)
-        m = model.module if hasattr(model, "module") else model
-        m.save_pretrained(str(ckpt))
-        tokenizer.save_pretrained(str(ckpt))
-        with open(output_dir / "metrics.json", "w") as f:
-            json.dump(metrics_log, f, indent=2)
+        with timer.phase(f"checkpoint_epoch{epoch}", "checkpoint"):
+            ckpt = output_dir / f"epoch_{epoch}"
+            ckpt.mkdir(parents=True, exist_ok=True)
+            m = model.module if hasattr(model, "module") else model
+            m.save_pretrained(str(ckpt))
+            tokenizer.save_pretrained(str(ckpt))
+            with open(output_dir / "metrics.json", "w") as f:
+                json.dump(metrics_log, f, indent=2)
 
+    timer.save_report(output_dir / "timing_breakdown.json")
+    timer.log_table()
     logger.info("NAIT training complete. Tag: %s", args.tag)
 
 

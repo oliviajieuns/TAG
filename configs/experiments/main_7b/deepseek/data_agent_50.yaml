@@ -1,3 +1,18 @@
+# DeepSeek-7B + Alpaca-GPT4 + Data Agent (Yang et al., ICML 2026) at 50% selection
+#
+# 실행:
+#   source scripts/setup_env.sh
+#   CUDA_VISIBLE_DEVICES=0 python -m tads.baselines.data_agent.train \
+#       --config configs/experiments/main_7b/deepseek/data_agent_50.yaml \
+#       --tag DataAgent-PPO
+#
+# 평가 (별도 root):
+#   python -m tads.eval \
+#       --config configs/experiments/main_7b/deepseek/data_agent_50.yaml \
+#       --ckpt ${OUTPUT_ROOT}/main_7b/deepseek/data_agent_50/data_agent_dataagent_ppo/epoch_3 \
+#       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
+#       --out_dir ${EVAL_RESULTS_ROOT}/main_7b/deepseek/data_agent_50/
+
 defaults:
   - configs/base.yaml
   - configs/methods/data_agent.yaml

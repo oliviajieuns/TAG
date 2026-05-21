@@ -1,9 +1,14 @@
 """Per-epoch sample selection dispatch.
 
-Wraps the four selection methods behind a single function. For data_agent
-and tads the heavy collect_episode runs on rank 0 only; other ranks share
-the resulting indices through a filesystem sentinel + poll, NOT through
-an NCCL barrier — that was the deadlock that crashed runs after epoch 1.
+Wraps the three selection methods (random / full / tads) handled by
+``tads.train``. Comparison baselines (data_agent / nait / selectit /
+lima / alpagasus / q2q) have their own entrypoints under
+``tads.baselines.<method>.train`` and bypass this dispatcher.
+
+For ``method=tads`` the heavy collect_episode runs on rank 0 only;
+other ranks share the resulting indices through a filesystem sentinel
++ poll, NOT through an NCCL barrier — that was the deadlock that
+crashed runs after epoch 1.
 
 Why polling, not dist.barrier:
     Rank 0 spends 30+ minutes inside collect_episode (52K samples × 32
@@ -211,11 +216,13 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
         logger.info("Random selection | k=%d/%d", len(selected), n_total)
         return selected, extras
 
-    _BASELINE_METHODS = {"lima", "nait", "selectit", "alpagasus", "q2q"}
+    _BASELINE_METHODS = {
+        "data_agent", "lima", "nait", "selectit", "alpagasus", "q2q",
+    }
     if method in _BASELINE_METHODS:
         raise ValueError(
             f"method={method!r} is a comparison baseline — `tads.train` only "
-            f"handles random / full / data_agent / tads.\n"
+            f"handles random / full / tads.\n"
             f"Use the dedicated entrypoint instead:\n"
             f"    python -m tads.baselines.{method}.train \\\n"
             f"        --config <experiment_yaml> --tag <variant_tag>\n"
@@ -223,16 +230,16 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
             f"command + any required env vars (e.g. ALPAGASUS_FILTERED_FILE, "
             f"LIMA_DATA_FILES)."
         )
-    if method not in ("tads", "data_agent"):
+    if method != "tads":
         raise ValueError(
             f"Unknown method: {method!r}. Valid in `tads.train`: random, "
-            f"full, data_agent, tads. Baseline methods (lima/nait/selectit/"
+            f"full, tads. Baseline methods (data_agent/lima/nait/selectit/"
             f"alpagasus/q2q) have their own entrypoints in tads/baselines/."
         )
 
     # ---------- selection cache: skip collect_episode if a prior run
     # ---------- already produced selected_indices_epoch{N}.json
-    # collect_episode for tads/data_agent takes 30+ min on 7B. If a previous
+    # collect_episode for tads takes 30+ min on 7B. If a previous
     # run made it through scoring but hung in the post-broadcast NCCL step,
     # the indices already exist on disk and we can reuse them directly. This
     # path is ONLY hit when the file is present; a fresh start still runs

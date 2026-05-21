@@ -79,6 +79,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import Subset
 from tads.core.schedulers import get_cosine_schedule_with_warmup
+from tads.core.timing import PhaseTimer
 
 from tads.core.run_layout import (
     find_latest_complete_epoch,
@@ -323,6 +324,7 @@ def main() -> None:
         dist.barrier()
 
     logger = setup_logger(str(log_dir), name=f"train_{method}")
+    timer = PhaseTimer(log=logger if is_main_process() else None, method=method)
     if is_main_process():
         logger.info("=" * 60)
         logger.info(
@@ -353,7 +355,8 @@ def main() -> None:
 
     # ---------- tokenizer / model ----------
     # Load tokenizer from base path (does not change between epochs).
-    tokenizer = load_tokenizer(cfg["model_path"])
+    with timer.phase("tokenizer_load", "setup"):
+        tokenizer = load_tokenizer(cfg["model_path"])
 
     # If resuming, load model weights from the checkpoint dir; else from base.
     model_load_path = str(resume_ckpt) if resume_ckpt is not None else cfg["model_path"]
@@ -391,16 +394,17 @@ def main() -> None:
         if training_mode == "lora" and _has_adapter:
             _adapter_path = str(resume_ckpt)
             model_load_path = cfg["model_path"]
-    model = load_model(
-        model_load_path,
-        training_mode=training_mode,
-        lora_cfg=cfg.get("lora"),
-        use_ddp=use_ddp,
-        local_rank=local_rank(),
-        gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
-        attn_implementation=cfg.get("attn_implementation"),
-        adapter_path=_adapter_path,
-    )
+    with timer.phase("model_load", "setup"):
+        model = load_model(
+            model_load_path,
+            training_mode=training_mode,
+            lora_cfg=cfg.get("lora"),
+            use_ddp=use_ddp,
+            local_rank=local_rank(),
+            gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
+            attn_implementation=cfg.get("attn_implementation"),
+            adapter_path=_adapter_path,
+        )
     device = (
         torch.device(f"cuda:{local_rank()}") if torch.cuda.is_available()
         else torch.device("cpu")
@@ -426,14 +430,15 @@ def main() -> None:
     )
     if is_main_process():
         logger.info("HF datasets cache: %s", effective_cache)
-    dataset = build_alpaca_dataset(
-        tokenizer=tokenizer,
-        cache_dir=effective_cache,
-        max_seq_len=int(cfg["max_seq_len"]),
-        dataset_name=cfg.get("dataset_name"),
-        data_files=cfg.get("data_files"),
-        prompt_style=style_key,
-    )
+    with timer.phase("dataset_build", "data"):
+        dataset = build_alpaca_dataset(
+            tokenizer=tokenizer,
+            cache_dir=effective_cache,
+            max_seq_len=int(cfg["max_seq_len"]),
+            dataset_name=cfg.get("dataset_name"),
+            data_files=cfg.get("data_files"),
+            prompt_style=style_key,
+        )
     n_total_full = len(dataset)
 
     sub_n = cfg.get("dataset_subset_size")
@@ -676,17 +681,18 @@ def main() -> None:
             logger.info("=" * 60)
         t0 = time.time()
 
-        selected, extras = select_indices(
-            method,
-            model=model,
-            anchor=anchor,
-            dataset=dataset,
-            cfg=cfg,
-            epoch=epoch,
-            seed=seed,
-            device=device,
-        )
-        save_selection(run_dir, epoch, selected)
+        with timer.phase(f"selection_epoch{epoch}", "selection"):
+            selected, extras = select_indices(
+                method,
+                model=model,
+                anchor=anchor,
+                dataset=dataset,
+                cfg=cfg,
+                epoch=epoch,
+                seed=seed,
+                device=device,
+            )
+            save_selection(run_dir, epoch, selected)
 
         if len(selected) == 0:
             raise RuntimeError(
@@ -698,17 +704,18 @@ def main() -> None:
         loader = make_dataloader(
             subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
         )
-        avg_loss = sft_one_epoch(
-            model=model,
-            loader=loader,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            grad_accum=grad_accum,
-            grad_clip=grad_clip,
-            device=device,
-            epoch=epoch,
-            logger=logger,
-        )
+        with timer.phase(f"sft_epoch{epoch}", "sft"):
+            avg_loss = sft_one_epoch(
+                model=model,
+                loader=loader,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                grad_accum=grad_accum,
+                grad_clip=grad_clip,
+                device=device,
+                epoch=epoch,
+                logger=logger,
+            )
         elapsed = time.time() - t0
         metrics = {
             "epoch": epoch,
@@ -761,6 +768,8 @@ def main() -> None:
             ckpt_path = run_dir / "epoch_last"
             ckpt_path.mkdir(parents=True, exist_ok=True)
             save_errors: list = []
+            _ckpt_timer_phase = timer.phase(f"checkpoint_epoch{epoch}", "checkpoint")
+            _ckpt_timer_phase.__enter__()
 
             def _safe(step_name: str, fn) -> bool:
                 """Run a save step; on exception record it and keep going."""
@@ -849,6 +858,7 @@ def main() -> None:
                     )
                 except Exception:
                     pass
+            _ckpt_timer_phase.__exit__(None, None, None)
 
             # keep_last_n_checkpoints is now a no-op with the epoch_last layout
             # (only one ckpt dir per run by construction). Left intact in cfg
@@ -880,6 +890,8 @@ def main() -> None:
             dist.barrier()
 
     if is_main_process():
+        timer.save_report(run_dir / "timing_breakdown.json")
+        timer.log_table()
         logger.info("Training complete (%d epochs).", train_epochs)
     if use_ddp:
         dist.destroy_process_group()

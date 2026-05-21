@@ -49,6 +49,7 @@ from torch.utils.data import Subset
 
 from tads.core.data_io import read_records_glob
 from tads.core.schedulers import get_cosine_schedule_with_warmup
+from tads.core.timing import PhaseTimer
 from tads.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
@@ -170,32 +171,38 @@ def main() -> None:
     setup_logger(str(log_dir), name=f"selectit_{tag_slug}_{ts}")
     logger.info("SelectIT baseline | tag=%s | output_dir=%s", args.tag, output_dir)
 
+    timer = PhaseTimer(log=logger, method="selectit")
+
     selectit_cfg = cfg.get("selectit", {}) or {}
     level = str(selectit_cfg.get("level", "token"))
     alpha = float(selectit_cfg.get("alpha", 0.2))
     proportion = float(cfg.get("selection_ratio", 0.1))
 
     # ---------- model + tokeniser ----------
-    tokenizer = load_tokenizer(cfg["model_path"])
-    model = load_model(
-        cfg["model_path"],
-        training_mode=str(cfg.get("training_mode", "full")),
-        lora_cfg=cfg.get("lora"),
-        use_ddp=False,
-        gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
-    )
+    with timer.phase("tokenizer_load", "setup"):
+        tokenizer = load_tokenizer(cfg["model_path"])
+    with timer.phase("model_load", "setup"):
+        model = load_model(
+            cfg["model_path"],
+            training_mode=str(cfg.get("training_mode", "full")),
+            lora_cfg=cfg.get("lora"),
+            use_ddp=False,
+            gradient_checkpointing=bool(cfg.get("gradient_checkpointing", True)),
+        )
     device = next(model.parameters()).device
 
     # ---------- dataset (tokenised) + raw records (for scoring text) ----------
-    dataset = build_alpaca_dataset(
-        tokenizer=tokenizer,
-        cache_dir=cfg["data_cache"],
-        max_seq_len=int(cfg["max_seq_len"]),
-        dataset_name=cfg.get("dataset_name"),
-        data_files=cfg.get("data_files"),
-        prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
-    )
-    raw_records = _load_raw_records(str(cfg["data_files"]))
+    with timer.phase("dataset_build", "data"):
+        dataset = build_alpaca_dataset(
+            tokenizer=tokenizer,
+            cache_dir=cfg["data_cache"],
+            max_seq_len=int(cfg["max_seq_len"]),
+            dataset_name=cfg.get("dataset_name"),
+            data_files=cfg.get("data_files"),
+            prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
+        )
+    with timer.phase("raw_records_load", "data"):
+        raw_records = _load_raw_records(str(cfg["data_files"]))
     if len(raw_records) != len(dataset):
         raise RuntimeError(
             f"SelectIT: raw records ({len(raw_records)}) and tokenised dataset "
@@ -227,22 +234,22 @@ def main() -> None:
             instructions.append(ins)
             responses.append(res)
 
-        t0 = time.time()
-        scores = selectit_scores(
-            model=model,
-            tokenizer=tokenizer,
-            device=device,
-            rating_templates=rating_prompts,
-            instructions=instructions,
-            responses=responses,
-            level=level,
-            alpha=alpha,
-            max_length=int(cfg.get("max_seq_len", 2048)),
-        )
-        logger.info("Scoring done in %.1fs", time.time() - t0)
-        _atomic_json_dump(scores, scores_path)
-        selected_indices = select_top_proportion(scores, proportion=proportion)
-        _atomic_json_dump(selected_indices, selected_path)
+        with timer.phase(f"selectit.score_{level}", "selection"):
+            scores = selectit_scores(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                rating_templates=rating_prompts,
+                instructions=instructions,
+                responses=responses,
+                level=level,
+                alpha=alpha,
+                max_length=int(cfg.get("max_seq_len", 2048)),
+            )
+        with timer.phase("selectit.topk", "selection"):
+            _atomic_json_dump(scores, scores_path)
+            selected_indices = select_top_proportion(scores, proportion=proportion)
+            _atomic_json_dump(selected_indices, selected_path)
         logger.info("Selected %d / %d", len(selected_indices), len(scores))
 
     # ---------- SFT on selected subset ----------
@@ -267,15 +274,16 @@ def main() -> None:
     metrics_log = []
     for epoch in range(1, train_epochs + 1):
         logger.info("=== SelectIT epoch %d/%d ===", epoch, train_epochs)
-        loader = make_dataloader(
-            subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
-        )
-        avg_loss = sft_one_epoch(
-            model=model, loader=loader,
-            optimizer=optimizer, scheduler=scheduler,
-            grad_accum=grad_accum, grad_clip=float(cfg["gradient_clip"]),
-            device=device, epoch=epoch, logger=logger,
-        )
+        with timer.phase(f"sft_epoch{epoch}", "sft"):
+            loader = make_dataloader(
+                subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,
+            )
+            avg_loss = sft_one_epoch(
+                model=model, loader=loader,
+                optimizer=optimizer, scheduler=scheduler,
+                grad_accum=grad_accum, grad_clip=float(cfg["gradient_clip"]),
+                device=device, epoch=epoch, logger=logger,
+            )
         metrics = {
             "epoch": epoch,
             "train_loss": avg_loss,
@@ -284,14 +292,17 @@ def main() -> None:
         metrics_log.append(metrics)
         logger.info("Epoch %d done | %s", epoch, metrics)
 
-        ckpt = output_dir / f"epoch_{epoch}"
-        ckpt.mkdir(parents=True, exist_ok=True)
-        m = model.module if hasattr(model, "module") else model
-        m.save_pretrained(str(ckpt))
-        tokenizer.save_pretrained(str(ckpt))
-        with open(output_dir / "metrics.json", "w") as f:
-            json.dump(metrics_log, f, indent=2)
+        with timer.phase(f"checkpoint_epoch{epoch}", "checkpoint"):
+            ckpt = output_dir / f"epoch_{epoch}"
+            ckpt.mkdir(parents=True, exist_ok=True)
+            m = model.module if hasattr(model, "module") else model
+            m.save_pretrained(str(ckpt))
+            tokenizer.save_pretrained(str(ckpt))
+            with open(output_dir / "metrics.json", "w") as f:
+                json.dump(metrics_log, f, indent=2)
 
+    timer.save_report(output_dir / "timing_breakdown.json")
+    timer.log_table()
     logger.info("SelectIT training complete. Tag: %s", args.tag)
 
 
