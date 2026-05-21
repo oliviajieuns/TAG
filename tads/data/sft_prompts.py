@@ -236,6 +236,38 @@ def build_cot_prompt_prefix(question: str) -> str:
     return "".join(parts)
 
 
+def gsm8k_generation_prefix(
+    raw_prompt: str, *, prompt_style: str = "alpaca_default",
+) -> str:
+    """Wrap GSM8K 8-shot CoT prompt in the SFT template (same rationale as
+    humaneval_generation_prefix / mbpp_generation_prefix).
+
+    `build_cot_prompt_prefix` produces the Wei et al. paper-faithful raw
+    CoT format. SFT'd models (Llama-2-7B + Alpaca-GPT4) are conditioned
+    to respond only inside their SFT template — raw `Q:/A:` prompts are
+    out-of-distribution. Wrapping the whole 8-shot prompt as a single
+    Alpaca instruction puts the completion target back inside the model's
+    trained `### Response:\\n` region.
+
+    Toggled at eval time via `TADS_GSM8K_USE_SFT_WRAP=1`; default OFF
+    keeps paper-faithful behaviour.
+    """
+    user = raw_prompt
+    if prompt_style == "alpaca_default":
+        return (
+            "Below is an instruction that describes a task. "
+            "Write a response that appropriately completes the request.\n\n"
+            f"### Instruction:\n{user}\n\n### Response:\n"
+        )
+    if prompt_style == "qwen_chatml":
+        return f"{IM_START}user\n{user}\n{IM_END}\n{IM_START}assistant\n"
+    if prompt_style == "mistral_instruct":
+        return f"[INST] {user} [/INST] "
+    if prompt_style in ("llama_user_assistant", "deepseek_user_assistant"):
+        return f"<|user|>\n{user}\n<|assistant|>\n"
+    raise ValueError(f"Unknown prompt_style={prompt_style!r} for GSM8K")
+
+
 # =============================================================================
 # TyDiQA (evaluation prompts)
 # =============================================================================

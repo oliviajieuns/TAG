@@ -119,10 +119,32 @@ class GSM8KEvaluator(BenchmarkEvaluator):
         # from the FRONT instead.
         tokenizer.truncation_side = "left"
 
+        # SFT-wrap toggle (humaneval / mbpp 와 동일 패턴). default OFF =
+        # paper-faithful raw 8-shot CoT. ON 시 SFT 모델 distribution-match
+        # 위해 ### Instruction / ### Response 로 wrap.
+        #   TADS_GSM8K_USE_SFT_WRAP=1 python -m tads.eval ...
+        use_sft_wrap = os.environ.get("TADS_GSM8K_USE_SFT_WRAP", "0") == "1"
+        if use_sft_wrap:
+            from tads.data.sft_prompts import gsm8k_generation_prefix as _wrap
+        else:
+            _wrap = None
+        _wrap_stops = (
+            ["\n### Instruction", "\n### Response"] if use_sft_wrap else []
+        )
+        logger.info(
+            "GSM8K gen-config | wrap=%s",
+            "alpaca" if use_sft_wrap else "raw-CoT",
+        )
+
         correct = 0
         results = []
         for i, ex in enumerate(test_data):
-            prompt = build_cot_prompt_prefix(ex["question"])
+            raw_prompt = build_cot_prompt_prefix(ex["question"])
+            prompt = (
+                _wrap(raw_prompt, prompt_style=prompt_style)
+                if _wrap is not None
+                else raw_prompt
+            )
             inputs = tokenizer(
                 prompt, return_tensors="pt", truncation=True, max_length=2048,
             ).to(device)
@@ -138,7 +160,10 @@ class GSM8KEvaluator(BenchmarkEvaluator):
                 do_sample=False,
                 temperature=0.0,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
+                stop_strings=[
+                    "\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:",
+                    *_wrap_stops,
+                ],
                 tokenizer=tokenizer,
             )
             # Token-id slicing (see tydiqa.py comment for full rationale):
