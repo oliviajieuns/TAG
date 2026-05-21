@@ -53,27 +53,11 @@ def _lima_record_to_alpaca(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _load_local_lima_records(spec: str) -> list:
-    matches = sorted(glob.glob(spec))
-    if not matches:
-        raise FileNotFoundError(f"LIMA: data_files glob {spec!r} matched no files.")
-    records: list = []
-    for p in matches:
-        low = p.lower()
-        if low.endswith(".jsonl"):
-            with open(p) as h:
-                for ln in h:
-                    ln = ln.strip()
-                    if ln:
-                        records.append(json.loads(ln))
-        elif low.endswith(".json"):
-            with open(p) as h:
-                data = json.load(h)
-            records.extend(data if isinstance(data, list) else [data])
-        else:
-            raise ValueError(
-                f"LIMA: unsupported file extension on {p} — only .json / .jsonl."
-            )
-    return records
+    """Load via the shared helper — supports JSON-list / JSONL / Parquet
+    (audit fix: previously json/jsonl only, parquet mirrors raised
+    ValueError even when the file was present on disk)."""
+    from tads.core.data_io import read_records_glob
+    return read_records_glob(spec)
 
 
 def build_lima_dataset(
