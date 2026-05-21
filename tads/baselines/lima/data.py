@@ -28,27 +28,78 @@ logger = logging.getLogger(__name__)
 
 
 def _lima_record_to_alpaca(rec: Dict[str, Any]) -> Dict[str, Any]:
-    """Coerce a LIMA row into {instruction, input, output}."""
-    if "conversations" in rec and isinstance(rec["conversations"], list):
-        c = rec["conversations"]
+    """Coerce a LIMA row into {instruction, input, output}.
+
+    Accepts the following input layouts:
+      A. LIMA canonical: {"conversations": [user_str, asst_str], "source": ...}
+      B. ShareGPT-style: {"conversations": [{"value": str}, ...]}
+      C. ChatML / OpenAI: {"conversations": [{"role": "user", "content": str}, ...]}
+         (or under key "messages" — same shape)
+      D. Flat Alpaca:    {"instruction": str, "input"?: str, "output"|"response": str}
+      E. prompt-pair:    {"prompt"|"text": str, "completion"|"response"|"output": str}
+
+    Raises KeyError with the offending record's full key list + a small
+    JSON preview so the user can see the schema in the error traceback
+    (no need to add separate print statements).
+    """
+    # (A)/(B)/(C) — `conversations` or `messages` key with a list value.
+    conv_key = (
+        "conversations" if "conversations" in rec and isinstance(rec["conversations"], list)
+        else "messages" if "messages" in rec and isinstance(rec["messages"], list)
+        else None
+    )
+    if conv_key is not None:
+        c = rec[conv_key]
         if len(c) < 2:
-            raise ValueError(f"LIMA conversations needs >=2 turns; got {len(c)}")
-        # Element may be raw string OR {"value": str}; accept both.
+            raise ValueError(
+                f"LIMA {conv_key} needs >=2 turns; got {len(c)}. record={rec!r:.200}"
+            )
+
         def _txt(v):
-            return v if isinstance(v, str) else v.get("value", v.get("content", ""))
+            if isinstance(v, str):
+                return v
+            if isinstance(v, dict):
+                # ShareGPT / ChatML / OpenAI / random-mirror variations.
+                for k in ("value", "content", "text", "message"):
+                    if k in v and isinstance(v[k], str):
+                        return v[k]
+                return ""
+            return str(v)
+
         return {
             "instruction": _txt(c[0]),
             "input": "",
             "output": _txt(c[1]),
         }
+    # (D) Flat Alpaca-style.
     if "instruction" in rec and ("output" in rec or "response" in rec):
         return {
             "instruction": rec["instruction"],
             "input": rec.get("input", "") or "",
             "output": rec.get("output") or rec.get("response"),
         }
+    # (E) prompt-completion pair.
+    _prompt_key = next((k for k in ("prompt", "text") if k in rec), None)
+    _comp_key = next((k for k in ("completion", "response", "output") if k in rec), None)
+    if _prompt_key and _comp_key:
+        return {
+            "instruction": rec[_prompt_key],
+            "input": "",
+            "output": rec[_comp_key],
+        }
+    # Nothing matched — surface schema + a short preview so the user sees
+    # exactly what shape we got in the error message (no separate debug
+    # print needed — the traceback itself is the diagnostic).
+    import json as _json
+    preview = _json.dumps(rec, ensure_ascii=False)[:300]
     raise KeyError(
-        f"Cannot map LIMA record to Alpaca schema; keys={list(rec.keys())}"
+        f"LIMA record schema not recognised.\n"
+        f"  keys = {list(rec.keys())}\n"
+        f"  first 300 chars = {preview}\n"
+        f"Supported: 'conversations' / 'messages' (list), 'instruction'+'output',\n"
+        f"or 'prompt'/'text' + 'completion'/'response'/'output'. If your mirror\n"
+        f"uses a different key naming, normalise it once (jq / sed) before\n"
+        f"setting LIMA_DATA_FILES."
     )
 
 
