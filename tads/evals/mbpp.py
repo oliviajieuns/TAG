@@ -159,19 +159,86 @@ _TRIM_PATTERNS = [
     re.compile(r"\n\s*\[BEGIN\]"),
     re.compile(r"\n\s*You are an expert Python programmer"),
     re.compile(r"\n\s*Your code should pass"),
+    # Hallucinated next Alpaca turn (when use_sft_wrap=true).
+    re.compile(r"\n\s*### Instruction"),
+    re.compile(r"\n\s*### Response"),
 ]
+
+# Leading code-fence opener — chat-style models often wrap their code in
+# ```python\n...```. The exec stage would then see literal backticks at
+# column 0 and SyntaxError → false-fail on otherwise correct code.
+_LEADING_FENCE_RE = re.compile(r"^\s*```(?:python|py)?\s*\n", re.IGNORECASE)
+# Trailing closing fence — the closing ``` after the code body.
+_TRAILING_FENCE_RE = re.compile(r"\n\s*```\s*$")
+
+# Common Alpaca / chat-style preamble openings the SFT model emits before
+# the function body. If the first non-empty line starts with any of these
+# words, treat that line as prose and skip until a code-looking line.
+_PROSE_OPENERS = (
+    "sure", "here", "of course", "certainly", "i'll", "i will",
+    "the function", "the answer", "below is", "this function",
+    "to solve", "to complete", "we can", "let me", "let's",
+    "i'd", "this code", "this is", "okay", "alright",
+    "absolutely",
+)
+
+# A line "looks like code" if it starts with one of these tokens.
+_CODE_LINE_STARTERS = (
+    "def ", "class ", "from ", "import ",
+    "@", "async ",
+    "#", '"""', "'''",
+    "if ", "while ", "for ", "try", "return ",  # rare top-level but valid
+)
+
+
+def _strip_prose_preamble(completion: str) -> str:
+    """Skip leading non-code lines (e.g. "Sure! Here's the function:") until
+    the first line that looks like Python code. Mirrors the HumanEval helper
+    of the same name — without it, an SFT model that explains before coding
+    sends an invalid program to the exec stage and false-fails."""
+    lines = completion.split("\n")
+    for i, ln in enumerate(lines):
+        stripped = ln.lstrip()
+        if not stripped:
+            continue
+        if stripped.startswith(_CODE_LINE_STARTERS):
+            return "\n".join(lines[i:])
+        first_word = stripped.split()[0].lower()
+        if any(first_word.startswith(opener) for opener in _PROSE_OPENERS):
+            continue
+        # Unknown opener — be conservative: assume code from here (better to
+        # keep too much than to silently drop the body).
+        return "\n".join(lines[i:])
+    return completion
 
 
 def _extract_completion(text: str) -> str:
     """Trim the raw generated text to just the model's code body for the
-    current test problem. Without this the exec stage sees a trailing
-    second demonstration that re-defines `__main__`-level names and may
-    pass or fail spuriously."""
+    current test problem.
+
+    Pipeline (audit-fix 2026-05-21: was previously trailing-trim only,
+    causing ~10pt false-fail on SFT models that prefix prose/fence):
+        1. Strip leading ```python / ```py fence.
+        2. Strip prose preamble lines (Sure!, Here's, ...).
+        3. Trailing-trim at [DONE] / next demo header / SFT next-turn.
+        4. Trailing-trim at closing ``` fence.
+    """
     out = text
+    # (1) leading fence
+    m = _LEADING_FENCE_RE.match(out)
+    if m:
+        out = out[m.end():]
+    # (2) leading prose preamble
+    out = _strip_prose_preamble(out)
+    # (3) trailing demo / SFT-turn boundaries
     for pat in _TRIM_PATTERNS:
         m = pat.search(out)
         if m:
             out = out[: m.start()]
+    # (4) trailing closing fence
+    m = _TRAILING_FENCE_RE.search(out)
+    if m:
+        out = out[: m.start()]
     return out.rstrip()
 
 
