@@ -162,7 +162,8 @@ def collect_all_results(root: Path):
     (2) <exp>-<bench>.json 파일명 만 우리 method list 와 매칭되면 표에
     포함된다. method dir 위치는 더 이상 신뢰 source 가 아님.
     """
-    by_method = {m[2]: {} for m in METHODS if m[2]}
+    # by_method[mdir][bench] = list of (acc_float, src_path)
+    by_method = {m[2]: {b: [] for b, _ in BENCHES} for m in METHODS if m[2]}
     n_total = 0
     n_parsed = 0
     n_fail = 0
@@ -177,7 +178,6 @@ def collect_all_results(root: Path):
             n_fail += 1
             msg = f"{type(e).__name__}: {e}"
             fail_log.append((jp, msg))
-            # 즉시 stderr 로 surface — 어떤 파일이 깨졌는지 사용자가 바로 확인.
             try:
                 rel = jp.relative_to(root)
             except Exception:
@@ -193,10 +193,7 @@ def collect_all_results(root: Path):
             continue
         for bench, _ in BENCHES:
             for v in _accs_from_payload(payload, bench):
-                cur = by_method[mdir].get(bench)
-                if cur is None or v > cur[0]:
-                    by_method[mdir][bench] = (v, jp)
-    # Footer stats — print AFTER per-file lines so the summary is at the bottom.
+                by_method[mdir][bench].append((v, jp))
     sys.stderr.write(
         f"[make_table] scanned={n_total}  parsed={n_parsed}  "
         f"parse_fail={n_fail}  skipped_unmatched_method={n_skipped}\n"
@@ -215,35 +212,57 @@ def fmt_cell(v):
     return MISSING if v is None else f"{v:.2f}"
 
 
+def fmt_list_cell(measurements):
+    """Format a list of measurements for one (method, bench) cell.
+
+    Input: list of (acc_float, src_path) tuples (any order, possibly with
+    duplicates from multiple eval runs of the same checkpoint).
+    Output: descending-sorted, deduplicated (rounded to 2 dp) values joined
+    by ", ". Empty list → [??.??].
+    """
+    if not measurements:
+        return MISSING
+    # Deduplicate at 2 dp resolution (eval runs of the same ckpt should
+    # produce bit-identical scores; tiny diffs come from non-determinism
+    # in sampling tasks and aren't meaningful as separate "values").
+    seen = []
+    seen_keys = set()
+    for v, _src in sorted(measurements, key=lambda t: -t[0]):
+        key = round(v, 2)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        seen.append(f"{v:.2f}")
+    return ", ".join(seen)
+
+
 def best_or_none(vals, bench):
-    """Format `vals[idx_of_bench]` for the footer log (or "—" if missing)."""
+    """Format the MAX of `vals[idx_of_bench]` (a list of (acc, src)) for the
+    footer log (or "—" if missing)."""
     idx_by_bench = {b: i for i, (b, _) in enumerate(BENCHES)}
-    v = vals[idx_by_bench[bench]]
-    return "—" if v is None else f"{v:.2f}"
+    measurements = vals[idx_by_bench[bench]]
+    if not measurements:
+        return "—"
+    return f"{max(v for v, _ in measurements):.2f}"
 
 
 # ---- gather (single walk over ENTIRE root, then bucket by identified method) ----
 all_results = collect_all_results(ROOT)
 
-rows = []  # list of (id, name, [val_or_None×8], avg_or_None, sources_dict)
+rows = []  # list of (id, name, [list_of_measurements_per_bench×8], avg_max, all_lists)
 for mid, mname, mdir in METHODS:
     if not mdir:
-        rows.append((mid, mname, [None] * len(BENCHES), None, {}))
+        rows.append((mid, mname, [[] for _ in BENCHES], None, []))
         continue
     by_bench = all_results.get(mdir, {})
-    vals = []
-    sources = {}
+    vals_lists = []      # list of list-of-(acc,src) per bench
     for bench, _ in BENCHES:
-        entry = by_bench.get(bench)
-        if entry is None:
-            vals.append(None)
-            sources[bench] = None
-        else:
-            vals.append(entry[0])
-            sources[bench] = entry[1]
-    present = [v for v in vals if v is not None]
-    avg = sum(present) / len(present) if present else None
-    rows.append((mid, mname, vals, avg, sources))
+        vals_lists.append(by_bench.get(bench, []) or [])
+    # W-AVG: average of the MAX value across present benches (사용자가 list
+    # 보고 후속 정정할 수 있도록 단지 reference 값).
+    maxes = [max(v for v, _ in lst) for lst in vals_lists if lst]
+    avg = sum(maxes) / len(maxes) if maxes else None
+    rows.append((mid, mname, vals_lists, avg, vals_lists))
 
 # Full FT W-AVG for Δ
 full_avg = None
@@ -264,43 +283,58 @@ def fmt_delta(method_avg):
 HEADERS = ["ID", "Method"] + [b for _, b in BENCHES] + ["W-AVG", "Δ vs Full FT"]
 
 if OUT_FMT == "csv" or OUT_FMT == "tsv":
+    # CSV/TSV — quote the multi-value cell so the comma list doesn't break
+    # the field separator. TSV is safer for multi-value cells (tabs never
+    # appear inside our values) so we recommend that for spreadsheet import.
     sep = "," if OUT_FMT == "csv" else "\t"
-    headers_flat = ["ID", "Method"] + [b.split("\n")[0] for _, b in BENCHES] + ["W-AVG", "Δ"]
-    print(sep.join(headers_flat))
-    for mid, mname, vals, avg, _src in rows:
-        cells = [mid, mname] + [fmt_cell(v) for v in vals]
+    def _esc(s):
+        if sep == "," and ("," in s or '"' in s):
+            s = s.replace('"', '""')
+            return f'"{s}"'
+        return s
+    headers_flat = ["ID", "Method"] + [b.split("\n")[0] for _, b in BENCHES] + ["W-AVG (max-of-each)", "Δ"]
+    print(sep.join(_esc(h) for h in headers_flat))
+    for mid, mname, vals_lists, avg, _src in rows:
+        cells = [mid, mname] + [fmt_list_cell(lst) for lst in vals_lists]
         cells.append(fmt_cell(avg))
         cells.append(fmt_delta(avg))
-        print(sep.join(cells))
+        print(sep.join(_esc(c) for c in cells))
 else:  # markdown
     line1 = ["ID", "Method"] + [b.split("\n")[0] for _, b in BENCHES] + ["W-AVG", "Δ"]
-    line2 = ["", ""] + [b.split("\n", 1)[1] if "\n" in b else "" for _, b in BENCHES] + ["weighted", "vs Full FT"]
+    line2 = (
+        ["", ""]
+        + [b.split("\n", 1)[1] if "\n" in b else "" for _, b in BENCHES]
+        + ["(max-of-each)", "vs Full FT"]
+    )
     print("| " + " | ".join(line1) + " |")
     print("| " + " | ".join("---" for _ in line1) + " |")
     print("| " + " | ".join(line2) + " |")
-    for mid, mname, vals, avg, _src in rows:
-        cells = [mid, mname] + [fmt_cell(v) for v in vals]
+    for mid, mname, vals_lists, avg, _src in rows:
+        cells = [mid, mname] + [fmt_list_cell(lst) for lst in vals_lists]
         cells.append(fmt_cell(avg))
         cells.append(fmt_delta(avg))
         print("| " + " | ".join(cells) + " |")
 
-# ---- footer: bench-presence + source-of-MAX per (method, bench) ----
+# ---- footer: per-method, per-bench full list (value ← source) ----
 sys.stderr.write("\n[make_table] source root: " + str(ROOT) + "\n")
-sys.stderr.write("[make_table] per-bench source = file that supplied the MAX value\n")
+sys.stderr.write("[make_table] cell entries are ALL measurements (desc, deduped @ 2dp)\n")
 mdir_by_id = {m[0]: m[2] for m in METHODS}
-for mid, mname, vals, _avg, sources in rows:
+idx_by_bench = {b: i for i, (b, _) in enumerate(BENCHES)}
+for mid, mname, vals_lists, _avg, _src in rows:
     if not mdir_by_id[mid]:
         continue
-    present = sum(v is not None for v in vals)
-    sys.stderr.write(f"  [{mid}] {mname}  ({present}/{len(BENCHES)} bench)\n")
+    present = sum(1 for lst in vals_lists if lst)
+    sys.stderr.write(f"  [{mid}] {mname}  ({present}/{len(BENCHES)} bench have data)\n")
     for bench, _ in BENCHES:
-        src = sources.get(bench)
-        if src is None:
+        lst = vals_lists[idx_by_bench[bench]]
+        if not lst:
             sys.stderr.write(f"      {bench:10s} —  (no value found)\n")
-        else:
+            continue
+        # Show every measurement with source path, sorted desc.
+        for v, src in sorted(lst, key=lambda t: -t[0]):
             try:
                 rel = src.relative_to(ROOT)
             except Exception:
                 rel = src
-            sys.stderr.write(f"      {bench:10s} {best_or_none(vals, bench):>6s}  ← {rel}\n")
+            sys.stderr.write(f"      {bench:10s} {v:>6.2f}  ← {rel}\n")
 PY
