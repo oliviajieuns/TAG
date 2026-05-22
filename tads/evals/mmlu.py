@@ -220,10 +220,17 @@ class MMLUEvaluator(BenchmarkEvaluator):
             correct, total = 0, 0
             for ex in test_examples:
                 prompt = _build_few_shot_prompt(dev_examples, ex, subject)
-                # Tokenise once without truncation to measure the real length;
-                # only the truncated version is fed to the model.
-                full_ids = tokenizer(prompt, return_tensors="pt").input_ids
-                if full_ids.shape[1] > 2048:
+                # Single tokenize call. Measure pre-truncation length on the
+                # full encoding, then manually left-truncate (truncation_side
+                # is set to "left" at the top of this method) — produces the
+                # same input_ids the dual-call version did, but without the
+                # second tokenize pass over the 14K-example loop. The slice
+                # `[:, -2048:]` matches `truncation=True, max_length=2048,
+                # truncation_side='left'` bit-for-bit (HF drops tokens from
+                # the front).
+                full_encoded = tokenizer(prompt, return_tensors="pt")
+                full_len = full_encoded.input_ids.shape[1]
+                if full_len > 2048:
                     _trunc_count += 1
                     if not _trunc_warned:
                         logger.warning(
@@ -231,12 +238,18 @@ class MMLUEvaluator(BenchmarkEvaluator):
                             "the 5-shot prefix is being clipped on the LEFT, "
                             "which silently degrades few-shot quality. "
                             "Subject=%s. (Further occurrences counted but not logged.)",
-                            full_ids.shape[1], subject,
+                            full_len, subject,
                         )
                         _trunc_warned = True
-                inputs = tokenizer(
-                    prompt, return_tensors="pt", truncation=True, max_length=2048,
-                ).to(device)
+                    inputs = {
+                        "input_ids": full_encoded.input_ids[:, -2048:].to(device),
+                        "attention_mask": full_encoded.attention_mask[:, -2048:].to(device),
+                    }
+                else:
+                    inputs = {
+                        "input_ids": full_encoded.input_ids.to(device),
+                        "attention_mask": full_encoded.attention_mask.to(device),
+                    }
                 with torch.no_grad():
                     out = model(**inputs)
                 logits = out.logits[0, -1, :]

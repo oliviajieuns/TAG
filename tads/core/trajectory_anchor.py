@@ -227,15 +227,26 @@ class TrajectoryAnchor:
             lengths = (attention_mask.sum(dim=1).clamp_min(1) - 1).to(input_ids.device)
             bidx = torch.arange(input_ids.size(0), device=input_ids.device)
 
+            # Compute all 32 per-layer (B, H) deltas on GPU first, then do a
+            # SINGLE bulk transfer to CPU at the end. The previous code did
+            # `.detach().float().cpu()` per layer (32 separate sync points)
+            # — the new stack-then-cpu pattern produces bitwise-identical
+            # values (same operations, same dtype, same order) but cuts the
+            # device→host sync count 32× per batch.
+            batch_layer_deltas = []
             for li in resolved_indices:
                 # hidden_states[li + 1] is the li-th decoder layer
                 h = hidden_states[li + 1]                       # (B, T, H)
                 first_h = h[:, 0, :]
                 last_h = h[bidx, lengths]
-                delta = (last_h - first_h).detach().float().cpu()
-                per_layer_deltas.setdefault(li, []).append(delta)
+                batch_layer_deltas.append(
+                    (last_h - first_h).detach().float(),
+                )                                               # GPU (B, H) fp32
+            stacked = torch.stack(batch_layer_deltas, dim=0).cpu()  # (L, B, H), 1 sync
+            for i, li in enumerate(resolved_indices):
+                per_layer_deltas.setdefault(li, []).append(stacked[i])
 
-            del hidden_states, outputs
+            del hidden_states, outputs, batch_layer_deltas, stacked
 
         # Per-layer PCA + sign calibration.
         # Each per_layer_deltas[li] holds a list of (B, H) fp32 CPU tensors

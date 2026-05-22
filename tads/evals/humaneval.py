@@ -481,9 +481,10 @@ class HumanEvalEvaluator(BenchmarkEvaluator):
             # 80 GB even though the steady state would fit in ~30 GB.
             # Drop `inputs` BEFORE empty_cache so the allocator can actually
             # reclaim the prefix tensor (would otherwise survive until the
-            # next problem's `inputs = ...` rebinding).
+            # next problem's `inputs = ...` rebinding). Throttle empty_cache
+            # to every 50 problems (matches xquad.py).
             del inputs
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and (i + 1) % 50 == 0:
                 torch.cuda.empty_cache()
 
             if (i + 1) % 20 == 0:

@@ -311,7 +311,7 @@ class BBHEvaluator(BenchmarkEvaluator):
                 test_examples = test_examples[: limit]
 
             correct = 0
-            for ex in test_examples:
+            for i, ex in enumerate(test_examples):
                 prompt, used_cot = _build_prompt(
                     examples, ex["input"], n_fewshot, cot_prefix,
                 )
@@ -354,8 +354,9 @@ class BBHEvaluator(BenchmarkEvaluator):
                 # task late in the run (notably tracking_shuffled_objects_*)
                 # can hang or OOM when it can't find a contiguous KV cache
                 # block. Mirrors the same hygiene humaneval.py:320 uses.
+                # Throttle to every 50 iters (matches xquad.py).
                 del inputs, out
-                if torch.cuda.is_available():
+                if torch.cuda.is_available() and (i + 1) % 50 == 0:
                     torch.cuda.empty_cache()
 
             n = len(test_examples)

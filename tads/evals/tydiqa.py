@@ -735,7 +735,8 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
             # storage alive even after `del out` — must drop it too for
             # empty_cache() to actually reclaim the KV block.
             del inputs, out, gen_ids
-            if torch.cuda.is_available():
+            # Throttle empty_cache to every 50 iters (matches xquad.py).
+            if torch.cuda.is_available() and (i + 1) % 50 == 0:
                 torch.cuda.empty_cache()
 
             if (i + 1) % 100 == 0:
