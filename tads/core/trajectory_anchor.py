@@ -190,7 +190,21 @@ class TrajectoryAnchor:
         per_layer_deltas: Dict[int, List[torch.Tensor]] = {}
         resolved_indices: Optional[List[int]] = None
 
-        for batch in loader:
+        # Per-batch progress logging: without these the function is silent
+        # for the full forward loop (~3-5 min on 7B + 32 decoder layers +
+        # probe=1024 + pca_batch_size=4 → ~256 batches), so any hang inside
+        # forward / hidden-state extraction / CPU transfer is indistinguish-
+        # able from "still running". Log every 20 batches + at the end.
+        import time as _time
+        _t0 = _time.time()
+        total_batches = len(loader)
+        logger.info(
+            "TrajectoryAnchor.update: forward loop start | epoch=%d | "
+            "probe=%d | bs=%d | batches=%d",
+            epoch, n_use, self.pca_batch_size, total_batches,
+        )
+
+        for step, batch in enumerate(loader, start=1):
             input_ids = batch["input_ids"].to(self.device, non_blocking=True)
             attention_mask = batch["attention_mask"].to(self.device, non_blocking=True)
 
@@ -248,6 +262,24 @@ class TrajectoryAnchor:
 
             del hidden_states, outputs, batch_layer_deltas, stacked
 
+            if step == 1 or step % 20 == 0 or step == total_batches:
+                _elapsed = _time.time() - _t0
+                _per_b = _elapsed / max(1, step)
+                _eta = _per_b * (total_batches - step)
+                logger.info(
+                    "TrajectoryAnchor.update: forward %d/%d | %.1fmin "
+                    "elapsed | %.2fs/batch | ETA %.1fmin",
+                    step, total_batches, _elapsed / 60, _per_b, _eta / 60,
+                )
+
+        logger.info(
+            "TrajectoryAnchor.update: forward loop done in %.1fmin — "
+            "starting per-layer PCA (%d layers)",
+            (_time.time() - _t0) / 60,
+            len(resolved_indices) if resolved_indices else 0,
+        )
+        _t_pca_start = _time.time()
+
         # Per-layer PCA + sign calibration.
         # Each per_layer_deltas[li] holds a list of (B, H) fp32 CPU tensors
         # totalling N_probe × H ≈ 540 MB at N_probe=1024, H=4096. Across 32
@@ -263,7 +295,9 @@ class TrajectoryAnchor:
         new_l1: Dict[int, float] = {}
         new_l2: Dict[int, float] = {}
         n_used = 0
-        for li in resolved_indices or []:
+        _n_layers = len(resolved_indices or [])
+        for _li_idx, li in enumerate(resolved_indices or [], start=1):
+            _t_layer = _time.time()
             delta_l = torch.cat(per_layer_deltas[li], dim=0)  # (N, H)
             # Release the per-batch chunks the moment we have the cat'd
             # matrix. Without this, every chunk for `li` stays referenced
@@ -279,6 +313,14 @@ class TrajectoryAnchor:
             new_v_by_layer[li] = v_l
             new_l1[li] = pca["lambda_1"]
             new_l2[li] = pca["lambda_2"]
+            if _li_idx == 1 or _li_idx % 8 == 0 or _li_idx == _n_layers:
+                logger.info(
+                    "TrajectoryAnchor.update: PCA %d/%d (layer=%d) | "
+                    "%.2fs/layer | total PCA %.1fmin",
+                    _li_idx, _n_layers, li,
+                    _time.time() - _t_layer,
+                    (_time.time() - _t_pca_start) / 60,
+                )
         # Drop the now-empty dict before downstream code allocates more.
         del per_layer_deltas
 
