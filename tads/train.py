@@ -64,6 +64,23 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+# Cap BLAS / OMP thread pools BEFORE `import torch` — libgomp + MKL read
+# these at library init (which fires inside `import torch`), so setting
+# them later has zero effect. Skip-symptom of the un-capped version on
+# big-core hosts (>64 cores) is, inside TrajectoryAnchor.update's PCA loop:
+#     libgomp: Thread creation failed: Resource temporarily unavailable
+# triggered by 32 layers × torch.linalg.eigh each spawning OMP_NUM_THREADS
+# default (= num_cores) workers in tight succession, blowing past the
+# host's `ulimit -u` / cgroup pids.max. scripts/setup_env.sh also exports
+# these for the source-then-launch flow; this block covers the case where
+# the user invokes `python -m tads.train ...` without sourcing first.
+for _k, _v in (
+    ("OMP_NUM_THREADS", "4"), ("MKL_NUM_THREADS", "4"),
+    ("OPENBLAS_NUM_THREADS", "4"), ("NUMEXPR_NUM_THREADS", "4"),
+    ("VECLIB_MAXIMUM_THREADS", "4"),
+):
+    os.environ.setdefault(_k, _v)
+
 # transformers 5.0 eager-imports `from torchvision.io import VideoReader`
 # via its video model registry, which fails on torchvision builds without
 # ffmpeg support — even though our LLM-only training never touches video.

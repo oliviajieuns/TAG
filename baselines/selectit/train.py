@@ -36,6 +36,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# Cap BLAS / OMP thread pools BEFORE `import torch` — libgomp + MKL read
+# these at library init, so setting them later has zero effect. Symptom:
+#   libgomp: Thread creation failed: Resource temporarily unavailable
+# scripts/setup_env.sh also exports these for the source-then-launch flow.
+import os as _os_for_threads
+for _k, _v in (
+    ("OMP_NUM_THREADS", "4"), ("MKL_NUM_THREADS", "4"),
+    ("OPENBLAS_NUM_THREADS", "4"), ("NUMEXPR_NUM_THREADS", "4"),
+    ("VECLIB_MAXIMUM_THREADS", "4"),
+):
+    _os_for_threads.environ.setdefault(_k, _v)
+
 # transformers 5.0 video-registry workaround — see tads.train.main.
 try:
     import torchvision.io as _tv_io

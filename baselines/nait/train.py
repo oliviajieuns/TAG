@@ -22,6 +22,18 @@ from pathlib import Path
 # Stub the missing attribute BEFORE any transformers import (incl. via
 # tads.modeling.loader) so the import resolves to a harmless placeholder.
 # Same pattern as tads.train + every other baselines/<m>/train.py.
+# Cap BLAS / OMP thread pools BEFORE `import torch` — libgomp + MKL read
+# these at library init, so setting them later has zero effect. Symptom:
+#   libgomp: Thread creation failed: Resource temporarily unavailable
+# scripts/setup_env.sh also exports these for the source-then-launch flow.
+import os as _os_for_threads
+for _k, _v in (
+    ("OMP_NUM_THREADS", "4"), ("MKL_NUM_THREADS", "4"),
+    ("OPENBLAS_NUM_THREADS", "4"), ("NUMEXPR_NUM_THREADS", "4"),
+    ("VECLIB_MAXIMUM_THREADS", "4"),
+):
+    _os_for_threads.environ.setdefault(_k, _v)
+
 try:
     import torchvision.io as _tv_io
     if not hasattr(_tv_io, "VideoReader"):
