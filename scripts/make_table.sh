@@ -1,33 +1,37 @@
 #!/usr/bin/env bash
-# make_table.sh — collect 9-bench eval results into the paper-style table.
+# make_table.sh — collect 8-bench eval results into the paper-style table,
+# split by model (llama2 / qwen25 / mistral / deepseek).
 #
 # Usage:
 #   bash scripts/make_table.sh <eval_results_root> [output_format]
 #
-#   <eval_results_root> : a directory that contains per-method sub-dirs
-#                         (full_100, random_10, lima, alpagasus, q2q_10,
-#                          selectit_10, nait_10, data_agent_10, tads_10).
-#                         Each sub-dir holds the eval-run layout this codebase
-#                         emits (`runs/<tag>/<exp>-eval_summary.json` or a
-#                         `_latest/` symlink). Falls back to $EVAL_RESULTS_ROOT
-#                         when omitted.
+#   <eval_results_root> : directory that contains per-model / per-method
+#                         sub-dirs. Typical layout:
+#                           <root>/main_7b/llama2/<method>/runs/...
+#                           <root>/main_7b/qwen25/<method>/runs/...
+#                         Either model-prefixed or flat layout works — model
+#                         is identified by ANY parent-dir or filename segment
+#                         matching one of: llama2 / qwen25 / mistral / deepseek.
+#                         Falls back to $EVAL_RESULTS_ROOT when omitted.
 #   [output_format]     : markdown (default) | csv | tsv
 #
-# How "latest" is resolved per method:
-#   1. <method>/_latest/<exp>-eval_summary.json   (if symlink exists)
-#   2. <method>/runs/<*>/<exp>-eval_summary.json  (newest mtime)
-#   3. <method>/<exp>-eval_summary.json            (flat layout)
+# Output: one table PER model that has at least one eval JSON. Models with
+# no data are skipped entirely. Missing cells (model has no result for that
+# (method, bench)) are rendered as "-".
 #
-# Per cell: looks up bench by `.summaries[].benchmark == "<bench>"` and reads
-# `.accuracy` (already paper-canonical: pass@1 for code, F1 for QA, etc.).
-# Missing cells emit "[??.??]".
+# How "latest" is resolved per (model, method):
+#   We walk every *.json under <root> and bucket by (identified model,
+#   identified method) via parent-dir / filename / payload.experiment.
+#   Every measurement is kept; the cell shows ALL measurements desc-sorted
+#   and dedup'd at 2 dp.
 #
-# W-AVG (Overall column): unweighted mean of the 8 available bench accuracies
-# × 100. If a bench is missing the average is over the present ones (count
-# reported in the table footer).
+# W-AVG (Overall column): unweighted mean of the 8 available bench MAX
+# accuracies × 100. If a bench is missing the average is over the present
+# ones.
 #
-# Δ vs Full FT: (method_W-AVG − full_100_W-AVG) / full_100_W-AVG · 100.
-# Sign included (e.g. +3.06% / −2.54%). Empty if Full FT row missing.
+# Δ vs Full FT: (method_W-AVG − full_100_W-AVG) / full_100_W-AVG · 100,
+# computed PER MODEL (each model's own Full FT row is the baseline). Empty
+# if Full FT row missing for that model.
 set -euo pipefail
 
 ROOT="${1:-${EVAL_RESULTS_ROOT:-}}"
@@ -40,19 +44,30 @@ if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
 fi
 
 python3 - "$ROOT" "$OUT_FMT" <<'PY'
-import glob
 import json
-import os
 import sys
 from pathlib import Path
 
 ROOT = Path(sys.argv[1]).resolve()
 OUT_FMT = sys.argv[2].lower()
 
-# (ID, display_name, method_dir_name).  method_dir_name == "" → no on-disk
-# results expected (e.g. the no-FT base row); cells stay [??.??].
+# Model-axis: (dir_key, human-readable display name).
+# `dir_key` must match the model-segment that appears in the file path /
+# experiment label (see _identify_model).
+MODELS = [
+    ("llama2",   "LLaMA-2-7B"),
+    ("qwen25",   "Qwen2.5-7B"),
+    ("mistral",  "Mistral-7B"),
+    ("deepseek", "DeepSeek-7B"),
+]
+MODEL_KEYS = {m[0] for m in MODELS}
+MODEL_ORDER = {m[0]: i for i, m in enumerate(MODELS)}
+
+# Method-axis. `name_tpl` may contain `{model}` to interpolate the model's
+# display name (used by the Pure-base row). `mdir == ""` → no on-disk
+# results expected; cells stay as the missing marker.
 METHODS = [
-    ("00",  "Pure LLaMA-2-7B (No FT)",         ""),
+    ("00",  "Pure {model} (No FT)",            ""),
     ("01",  "Alpaca-GPT4 (Full FT)",           "full_100"),
     ("R10", "Random (10%, paper baseline)",    "random_10"),
     ("02",  "LIMA",                            "lima"),
@@ -75,12 +90,11 @@ BENCHES = [
     ("xquad",     "XQuAD\n12-lang F1"),
 ]
 
-MISSING = "[??.??]"
+MISSING = "-"
 
 
 def _all_json_files(root: Path):
-    """Yield every *.json under root recursively (regardless of method-dir
-    layout). Skips .tmp / .lock side-files."""
+    """Yield every *.json under root recursively. Skips .tmp / .lock side-files."""
     if not root.exists():
         return
     for p in root.rglob("*.json"):
@@ -91,32 +105,54 @@ def _all_json_files(root: Path):
         yield p
 
 
+def _segments_from_candidates(candidates):
+    """Expand candidate strings into individual segments by splitting on
+    /, _, -. Returns the union of the originals + each segment. Used so a
+    string like 'main_7b/llama2/tads_10' matches the model 'llama2' AND
+    the method 'tads_10'."""
+    out = list(candidates)
+    for c in candidates:
+        for sep in ("/", "_", "-"):
+            if sep in c:
+                out.extend(c.split(sep))
+    return out
+
+
+def _identify_model(jp: Path, payload):
+    """Return one of MODEL_KEYS if any parent-dir / filename / payload
+    segment matches, else None."""
+    candidates = []
+    if isinstance(payload, dict):
+        exp = payload.get("experiment")
+        if exp:
+            candidates.append(str(exp))
+    candidates.append(jp.stem)
+    for p in jp.parents:
+        candidates.append(p.name)
+    for cand in _segments_from_candidates(candidates):
+        if cand in MODEL_KEYS:
+            return cand
+    return None
+
+
 def _identify_method(jp: Path, payload):
     """Return one of METHODS[*].mdir if the file looks like a result for
-    that method, else None. Identification sources (first match wins):
-      (1) payload['experiment']  e.g. "llama2_tads_10" → tads_10
-      (2) filename prefix         e.g. "llama2_tads_10-mmlu.json" → tads_10
-      (3) any parent dir name     e.g. ".../tads_10/runs/.../*.json" → tads_10
-
-    Matching against METHODS:
-      - exact equality, OR
-      - candidate ends with "_<mdir>" (model-prefix variant), OR
-      - candidate ends with mdir (suffix match — handles misc layouts).
+    that method, else None. Match sources (first match wins):
+      (1) payload['experiment'], e.g. "llama2_tads_10" → tads_10
+      (2) filename prefix, e.g. "llama2_tads_10-mmlu.json" → tads_10
+      (3) any parent dir name, e.g. ".../tads_10/runs/.../*.json" → tads_10
     """
     candidates = []
     if isinstance(payload, dict):
         exp = payload.get("experiment")
         if exp:
             candidates.append(str(exp))
-    # filename prefix (before the last '-bench' suffix or whole stem)
     stem = jp.stem
     if "-" in stem:
         candidates.append(stem.rsplit("-", 1)[0])
     candidates.append(stem)
-    # parent dirs (closest first)
     for p in jp.parents:
         candidates.append(p.name)
-
     for cand in candidates:
         for _id, _name, mdir in METHODS:
             if not mdir:
@@ -129,14 +165,9 @@ def _identify_method(jp: Path, payload):
 def _accs_from_payload(payload, bench: str):
     """Pull every accuracy reading for `bench` out of one decoded JSON
     payload. Handles three shapes:
-
-      (a) Combined summary file emitted by tads.eval — top-level
-          {"summaries": [{"benchmark": "...", "accuracy": ...}, ...]}.
-      (b) Per-bench file emitted by each evaluator directly —
-          {"benchmark": "...", "accuracy": ...}.
-      (c) Stray dicts that happen to include "benchmark" + "accuracy" at
-          some inner key (defensive — older runs may have nested layouts).
-
+      (a) Combined summary: {"summaries": [{"benchmark":..., "accuracy":...}, ...]}
+      (b) Per-bench file: {"benchmark":..., "accuracy":...}
+      (c) Stray nested dicts with both fields (defensive — older layouts).
     Returns a list of floats (× 100), possibly empty.
     """
     out = []
@@ -154,21 +185,22 @@ def _accs_from_payload(payload, bench: str):
 
 
 def collect_all_results(root: Path):
-    """Walk every *.json under root, return {mdir: {bench: (max_acc, src_path)}}.
+    """Walk root once, bucket every parseable JSON by (model, method, bench).
 
-    method 식별은 file path 가 아니라 payload['experiment'] / filename /
-    parent dir name 으로 — 사용자가 --out_dir 를 다른 위치로 잘못 지정해
-    결과 JSON 이 엉뚱한 폴더에 떨어진 경우에도 (1) experiment label 이나
-    (2) <exp>-<bench>.json 파일명 만 우리 method list 와 매칭되면 표에
-    포함된다. method dir 위치는 더 이상 신뢰 source 가 아님.
+    Returns:
+        by_model[mkey][mdir][bench] = list of (acc_float, src_path)
     """
-    # by_method[mdir][bench] = list of (acc_float, src_path)
-    by_method = {m[2]: {b: [] for b, _ in BENCHES} for m in METHODS if m[2]}
+    method_mdirs = [m[2] for m in METHODS if m[2]]
+    bench_keys = [b for b, _ in BENCHES]
+    by_model: dict = {}
+
     n_total = 0
     n_parsed = 0
     n_fail = 0
-    n_skipped = 0
-    fail_log = []  # (path, exc_type, exc_msg) for the footer noti
+    n_no_method = 0
+    n_no_model = 0
+    fail_log = []
+
     for jp in _all_json_files(root):
         n_total += 1
         try:
@@ -182,21 +214,29 @@ def collect_all_results(root: Path):
                 rel = jp.relative_to(root)
             except Exception:
                 rel = jp
-            sys.stderr.write(
-                f"[make_table] JSON parse fail: {rel}  ←  {msg}\n"
-            )
+            sys.stderr.write(f"[make_table] JSON parse fail: {rel}  ←  {msg}\n")
             continue
         n_parsed += 1
+
+        mkey = _identify_model(jp, payload)
         mdir = _identify_method(jp, payload)
         if mdir is None:
-            n_skipped += 1
+            n_no_method += 1
             continue
-        for bench, _ in BENCHES:
+        if mkey is None:
+            n_no_model += 1
+            continue
+
+        if mkey not in by_model:
+            by_model[mkey] = {m: {b: [] for b in bench_keys} for m in method_mdirs}
+        for bench in bench_keys:
             for v in _accs_from_payload(payload, bench):
-                by_method[mdir][bench].append((v, jp))
+                by_model[mkey][mdir][bench].append((v, jp))
+
     sys.stderr.write(
-        f"[make_table] scanned={n_total}  parsed={n_parsed}  "
-        f"parse_fail={n_fail}  skipped_unmatched_method={n_skipped}\n"
+        f"[make_table] scanned={n_total}  parsed={n_parsed}  parse_fail={n_fail}  "
+        f"no_method={n_no_method}  no_model={n_no_model}  "
+        f"models_found={','.join(sorted(by_model.keys())) or '(none)'}\n"
     )
     if fail_log:
         sys.stderr.write(
@@ -205,7 +245,7 @@ def collect_all_results(root: Path):
             "trailing junk bytes, BOM, or non-JSON content saved with .json "
             "extension by mistake.\n"
         )
-    return by_method
+    return by_model
 
 
 def fmt_cell(v):
@@ -218,15 +258,12 @@ def fmt_list_cell(measurements):
     Input: list of (acc_float, src_path) tuples (any order, possibly with
     duplicates from multiple eval runs of the same checkpoint).
     Output: descending-sorted, deduplicated (rounded to 2 dp) values joined
-    by ", ". Empty list → [??.??].
+    by ", ". Empty list → MISSING.
     """
     if not measurements:
         return MISSING
-    # Deduplicate at 2 dp resolution (eval runs of the same ckpt should
-    # produce bit-identical scores; tiny diffs come from non-determinism
-    # in sampling tasks and aren't meaningful as separate "values").
-    seen = []
     seen_keys = set()
+    seen = []
     for v, _src in sorted(measurements, key=lambda t: -t[0]):
         key = round(v, 2)
         if key in seen_keys:
@@ -236,105 +273,146 @@ def fmt_list_cell(measurements):
     return ", ".join(seen)
 
 
-def best_or_none(vals, bench):
-    """Format the MAX of `vals[idx_of_bench]` (a list of (acc, src)) for the
-    footer log (or "—" if missing)."""
-    idx_by_bench = {b: i for i, (b, _) in enumerate(BENCHES)}
-    measurements = vals[idx_by_bench[bench]]
-    if not measurements:
-        return "—"
-    return f"{max(v for v, _ in measurements):.2f}"
+def _model_display(mkey):
+    for k, disp in MODELS:
+        if k == mkey:
+            return disp
+    return mkey
 
 
-# ---- gather (single walk over ENTIRE root, then bucket by identified method) ----
+def build_rows_for_model(model_results):
+    """Return list of (mid, mname, vals_lists, avg)."""
+    rows = []
+    for mid, mname_tpl, mdir in METHODS:
+        mname = mname_tpl  # `{model}` is interpolated at emit time
+        if not mdir:
+            rows.append((mid, mname, [[] for _ in BENCHES], None))
+            continue
+        by_bench = model_results.get(mdir, {})
+        vals_lists = []
+        for bench, _ in BENCHES:
+            vals_lists.append(by_bench.get(bench, []) or [])
+        maxes = [max(v for v, _ in lst) for lst in vals_lists if lst]
+        avg = sum(maxes) / len(maxes) if maxes else None
+        rows.append((mid, mname, vals_lists, avg))
+    return rows
+
+
+def emit_model_table(mkey, model_results, out_fmt, *, is_first):
+    """Emit one table for `mkey`."""
+    disp = _model_display(mkey)
+    rows = build_rows_for_model(model_results)
+
+    # Per-model Full FT baseline for Δ.
+    full_avg = None
+    for mid, _mname, _vals, avg in rows:
+        if mid == "01":
+            full_avg = avg
+            break
+
+    def fmt_delta(method_avg):
+        if method_avg is None or full_avg is None:
+            return MISSING
+        d = (method_avg - full_avg) / full_avg * 100.0
+        return f"{d:+.2f}%"
+
+    if out_fmt == "csv" or out_fmt == "tsv":
+        sep = "," if out_fmt == "csv" else "\t"
+        def _esc(s):
+            if sep == "," and ("," in s or '"' in s):
+                s = s.replace('"', '""')
+                return f'"{s}"'
+            return s
+        if not is_first:
+            print()  # blank separator between tables
+        print(f"# Model: {disp} ({mkey})")
+        headers_flat = (
+            ["ID", "Method"]
+            + [b.split("\n")[0] for _, b in BENCHES]
+            + ["W-AVG (max-of-each)", "Δ"]
+        )
+        print(sep.join(_esc(h) for h in headers_flat))
+        for mid, mname, vals_lists, avg in rows:
+            mname_filled = mname.format(model=disp) if "{model}" in mname else mname
+            cells = [mid, mname_filled] + [fmt_list_cell(lst) for lst in vals_lists]
+            cells.append(fmt_cell(avg))
+            cells.append(fmt_delta(avg))
+            print(sep.join(_esc(c) for c in cells))
+    else:  # markdown
+        if not is_first:
+            print()  # blank line between tables
+        print(f"## Model: {disp} ({mkey})")
+        print()
+        line1 = (
+            ["ID", "Method"]
+            + [b.split("\n")[0] for _, b in BENCHES]
+            + ["W-AVG", "Δ"]
+        )
+        line2 = (
+            ["", ""]
+            + [b.split("\n", 1)[1] if "\n" in b else "" for _, b in BENCHES]
+            + ["(max-of-each)", "vs Full FT"]
+        )
+        print("| " + " | ".join(line1) + " |")
+        print("| " + " | ".join("---" for _ in line1) + " |")
+        print("| " + " | ".join(line2) + " |")
+        for mid, mname, vals_lists, avg in rows:
+            mname_filled = mname.format(model=disp) if "{model}" in mname else mname
+            cells = [mid, mname_filled] + [fmt_list_cell(lst) for lst in vals_lists]
+            cells.append(fmt_cell(avg))
+            cells.append(fmt_delta(avg))
+            print("| " + " | ".join(cells) + " |")
+
+
+# ---- collect ----
 all_results = collect_all_results(ROOT)
 
-rows = []  # list of (id, name, [list_of_measurements_per_bench×8], avg_max, all_lists)
-for mid, mname, mdir in METHODS:
-    if not mdir:
-        rows.append((mid, mname, [[] for _ in BENCHES], None, []))
-        continue
-    by_bench = all_results.get(mdir, {})
-    vals_lists = []      # list of list-of-(acc,src) per bench
-    for bench, _ in BENCHES:
-        vals_lists.append(by_bench.get(bench, []) or [])
-    # W-AVG: average of the MAX value across present benches (사용자가 list
-    # 보고 후속 정정할 수 있도록 단지 reference 값).
-    maxes = [max(v for v, _ in lst) for lst in vals_lists if lst]
-    avg = sum(maxes) / len(maxes) if maxes else None
-    rows.append((mid, mname, vals_lists, avg, vals_lists))
-
-# Full FT W-AVG for Δ
-full_avg = None
-for mid, _mname, _vals, avg, _src in rows:
-    if mid == "01":
-        full_avg = avg
-        break
-
-
-def fmt_delta(method_avg):
-    if method_avg is None or full_avg is None:
-        return ""
-    d = (method_avg - full_avg) / full_avg * 100.0
-    return f"{d:+.2f}%"
-
-
-# ---- emit ----
-HEADERS = ["ID", "Method"] + [b for _, b in BENCHES] + ["W-AVG", "Δ vs Full FT"]
-
-if OUT_FMT == "csv" or OUT_FMT == "tsv":
-    # CSV/TSV — quote the multi-value cell so the comma list doesn't break
-    # the field separator. TSV is safer for multi-value cells (tabs never
-    # appear inside our values) so we recommend that for spreadsheet import.
-    sep = "," if OUT_FMT == "csv" else "\t"
-    def _esc(s):
-        if sep == "," and ("," in s or '"' in s):
-            s = s.replace('"', '""')
-            return f'"{s}"'
-        return s
-    headers_flat = ["ID", "Method"] + [b.split("\n")[0] for _, b in BENCHES] + ["W-AVG (max-of-each)", "Δ"]
-    print(sep.join(_esc(h) for h in headers_flat))
-    for mid, mname, vals_lists, avg, _src in rows:
-        cells = [mid, mname] + [fmt_list_cell(lst) for lst in vals_lists]
-        cells.append(fmt_cell(avg))
-        cells.append(fmt_delta(avg))
-        print(sep.join(_esc(c) for c in cells))
-else:  # markdown
-    line1 = ["ID", "Method"] + [b.split("\n")[0] for _, b in BENCHES] + ["W-AVG", "Δ"]
-    line2 = (
-        ["", ""]
-        + [b.split("\n", 1)[1] if "\n" in b else "" for _, b in BENCHES]
-        + ["(max-of-each)", "vs Full FT"]
+if not all_results:
+    sys.stderr.write(
+        "[make_table] no model results matched any of: "
+        + ", ".join(m[0] for m in MODELS) + "\n"
+        "[make_table] file paths or experiment labels must contain a model-name "
+        "segment (e.g. .../llama2/tads_10/...).\n"
     )
-    print("| " + " | ".join(line1) + " |")
-    print("| " + " | ".join("---" for _ in line1) + " |")
-    print("| " + " | ".join(line2) + " |")
-    for mid, mname, vals_lists, avg, _src in rows:
-        cells = [mid, mname] + [fmt_list_cell(lst) for lst in vals_lists]
-        cells.append(fmt_cell(avg))
-        cells.append(fmt_delta(avg))
-        print("| " + " | ".join(cells) + " |")
+    sys.exit(1)
 
-# ---- footer: per-method, per-bench full list (value ← source) ----
+# Sort by canonical MODEL order; unknown keys go to the end.
+model_keys_sorted = sorted(
+    all_results.keys(),
+    key=lambda k: (MODEL_ORDER.get(k, 999), k),
+)
+
+for i, mkey in enumerate(model_keys_sorted):
+    emit_model_table(mkey, all_results[mkey], OUT_FMT, is_first=(i == 0))
+
+# ---- footer: per-model, per-method, per-bench full list (value ← source) ----
 sys.stderr.write("\n[make_table] source root: " + str(ROOT) + "\n")
 sys.stderr.write("[make_table] cell entries are ALL measurements (desc, deduped @ 2dp)\n")
+
 mdir_by_id = {m[0]: m[2] for m in METHODS}
 idx_by_bench = {b: i for i, (b, _) in enumerate(BENCHES)}
-for mid, mname, vals_lists, _avg, _src in rows:
-    if not mdir_by_id[mid]:
-        continue
-    present = sum(1 for lst in vals_lists if lst)
-    sys.stderr.write(f"  [{mid}] {mname}  ({present}/{len(BENCHES)} bench have data)\n")
-    for bench, _ in BENCHES:
-        lst = vals_lists[idx_by_bench[bench]]
-        if not lst:
-            sys.stderr.write(f"      {bench:10s} —  (no value found)\n")
+
+for mkey in model_keys_sorted:
+    disp = _model_display(mkey)
+    sys.stderr.write(f"\n[make_table] ===== Model: {disp} ({mkey}) =====\n")
+    rows = build_rows_for_model(all_results[mkey])
+    for mid, mname, vals_lists, _avg in rows:
+        if not mdir_by_id[mid]:
             continue
-        # Show every measurement with source path, sorted desc.
-        for v, src in sorted(lst, key=lambda t: -t[0]):
-            try:
-                rel = src.relative_to(ROOT)
-            except Exception:
-                rel = src
-            sys.stderr.write(f"      {bench:10s} {v:>6.2f}  ← {rel}\n")
+        mname_filled = mname.format(model=disp) if "{model}" in mname else mname
+        present = sum(1 for lst in vals_lists if lst)
+        sys.stderr.write(
+            f"  [{mid}] {mname_filled}  ({present}/{len(BENCHES)} bench have data)\n"
+        )
+        for bench, _ in BENCHES:
+            lst = vals_lists[idx_by_bench[bench]]
+            if not lst:
+                sys.stderr.write(f"      {bench:10s} —  (no value found)\n")
+                continue
+            for v, src in sorted(lst, key=lambda t: -t[0]):
+                try:
+                    rel = src.relative_to(ROOT)
+                except Exception:
+                    rel = src
+                sys.stderr.write(f"      {bench:10s} {v:>6.2f}  ← {rel}\n")
 PY
