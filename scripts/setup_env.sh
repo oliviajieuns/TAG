@@ -84,11 +84,11 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 # the 32 decoder layers calls torch.linalg.eigh + matmul on CPU back-to-back.
 # Default to 4 — empirically enough for the PCA + BLAS, and 32×4 = 128 thread
 # peak fits well under typical ulimit -u 4096.
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
-export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
-export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-4}"
-export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-4}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-16}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-16}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-16}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-16}"
+export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-16}"
 
 # --- TADS DDP / training knobs (opt-in, all default to safe values) ---
 # Documented here so they're discoverable; uncomment to override.

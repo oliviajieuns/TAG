@@ -40,9 +40,9 @@ from pathlib import Path
 # scripts/setup_env.sh also exports these for the source-then-launch flow.
 import os as _os_for_threads
 for _k, _v in (
-    ("OMP_NUM_THREADS", "4"), ("MKL_NUM_THREADS", "4"),
-    ("OPENBLAS_NUM_THREADS", "4"), ("NUMEXPR_NUM_THREADS", "4"),
-    ("VECLIB_MAXIMUM_THREADS", "4"),
+    ("OMP_NUM_THREADS", "16"), ("MKL_NUM_THREADS", "16"),
+    ("OPENBLAS_NUM_THREADS", "16"), ("NUMEXPR_NUM_THREADS", "16"),
+    ("VECLIB_MAXIMUM_THREADS", "16"),
 ):
     _os_for_threads.environ.setdefault(_k, _v)
 

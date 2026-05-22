@@ -75,9 +75,9 @@ from typing import Any, Dict, Optional
 # these for the source-then-launch flow; this block covers the case where
 # the user invokes `python -m tads.train ...` without sourcing first.
 for _k, _v in (
-    ("OMP_NUM_THREADS", "4"), ("MKL_NUM_THREADS", "4"),
-    ("OPENBLAS_NUM_THREADS", "4"), ("NUMEXPR_NUM_THREADS", "4"),
-    ("VECLIB_MAXIMUM_THREADS", "4"),
+    ("OMP_NUM_THREADS", "16"), ("MKL_NUM_THREADS", "16"),
+    ("OPENBLAS_NUM_THREADS", "16"), ("NUMEXPR_NUM_THREADS", "16"),
+    ("VECLIB_MAXIMUM_THREADS", "16"),
 ):
     os.environ.setdefault(_k, _v)
 
