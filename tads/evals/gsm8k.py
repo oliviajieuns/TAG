@@ -198,10 +198,11 @@ class GSM8KEvaluator(BenchmarkEvaluator):
 
             # Release per-example CUDA tensors before the next 8-shot prompt
             # (~1k input + up to 256 generated tokens). Mirrors bbh.py /
-            # humaneval.py hygiene. Cheap (~10ms × 1319 = ~13s) vs the OOM /
-            # fragmentation hang risk under concurrent multi-GPU eval.
+            # humaneval.py hygiene. Throttle to every 50 iters (matches
+            # xquad.py); ~80% reduction of per-iter sync overhead while still
+            # preventing the fragmentation hang under concurrent multi-GPU eval.
             del inputs, out
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and (i + 1) % 50 == 0:
                 torch.cuda.empty_cache()
 
             if (i + 1) % 100 == 0:

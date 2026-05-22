@@ -151,7 +151,9 @@ class SVAMPEvaluator(BenchmarkEvaluator):
             })
 
             del inputs, out
-            if torch.cuda.is_available():
+            # Throttle empty_cache to every 50 iters (matches xquad.py /
+            # gsm8k.py). Eliminates ~80% of per-iter sync overhead.
+            if torch.cuda.is_available() and (i + 1) % 50 == 0:
                 torch.cuda.empty_cache()
 
             if (i + 1) % 100 == 0:

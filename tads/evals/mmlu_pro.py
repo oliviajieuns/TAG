@@ -492,9 +492,10 @@ class MMLUProEvaluator(BenchmarkEvaluator):
             })
 
             # Release CUDA tensors before the next 3K-token prompt. Same
-            # pattern as bbh.py / gsm8k.py / tydiqa.py.
+            # pattern as bbh.py / gsm8k.py / tydiqa.py — throttled to every
+            # 50 iters (matches xquad.py).
             del inputs, out
-            if torch.cuda.is_available():
+            if torch.cuda.is_available() and (i + 1) % 50 == 0:
                 torch.cuda.empty_cache()
 
             if (i + 1) % 200 == 0:
