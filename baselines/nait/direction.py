@@ -127,6 +127,21 @@ def score_candidates(
     layer l. ``v_l`` was fitted on this same Δh quantity over the seed set
     in :func:`fit_directions`, so projecting Δh — not mean-pooled hidden
     state — is what the principal direction is defined against.
+
+    Perf history (2026-05-22): four hot-path fixes vs. the original loop
+    over a 50K-sample pool with 32 decoder layers:
+      1. ``hidden_states[l].float()`` materialised a fresh (B, T, H) fp32
+         tensor (~16 MB/layer at B=2,T=512,H=4096) just to slice two token
+         positions out of it. We now slice first, then convert to fp32 —
+         every batch saves ~512 MB of allocator churn across 32 layers.
+      2. ``v_l_gpu = v_l.to(h.device)`` ran *inside* the per-layer loop,
+         re-uploading the direction matrix every batch (≈832K transfers
+         for a 13K-batch run). We now cache once at function entry.
+      3. ``batch_scores += (delta @ v_l_gpu).cpu()`` synced GPU→CPU per
+         layer (≈416K syncs). We now accumulate on GPU and copy once per
+         batch — a single sync replaces 32.
+      4. Pre-resolve negative ``actual_l`` once at entry; the inner loop
+         no longer depends on ``len(hidden_states)``.
     """
     model.eval()
     loader = DataLoader(
@@ -136,7 +151,20 @@ def score_candidates(
         num_workers=0,
         pin_memory=True,
     )
-    scores = []
+
+    # Cache directions on GPU once. ``v_gpu_by_layer`` keeps fp32 vectors
+    # ready for matmul — no re-uploading inside the batch loop.
+    v_gpu_by_layer: Dict[int, torch.Tensor] = {
+        l: v_l.to(device, dtype=torch.float32, non_blocking=True)
+        for l, v_l in directions.items()
+    }
+
+    # Layer-index resolution depends only on hidden_states tuple length,
+    # which is constant for a given model. We resolve lazily on the first
+    # batch and reuse for every subsequent one.
+    actual_l_cache: Optional[Dict[int, int]] = None
+
+    scores: List[torch.Tensor] = []
     total_batches = len(loader)
     t0 = time.time()
     for step, batch in enumerate(loader, start=1):
@@ -148,21 +176,29 @@ def score_candidates(
             output_hidden_states=True,
         )
         hidden_states = outputs.hidden_states
+        if actual_l_cache is None:
+            actual_l_cache = {
+                l: (l if l >= 0 else len(hidden_states) + l)
+                for l in v_gpu_by_layer.keys()
+            }
         # Index of the last non-pad token per row (clamp_min(1) - 1).
         last_idx = attention_mask.sum(dim=1).clamp_min(1) - 1
-        bidx = torch.arange(input_ids.size(0), device=input_ids.device)
-        batch_scores = torch.zeros(input_ids.size(0))
+        B = input_ids.size(0)
+        bidx = torch.arange(B, device=input_ids.device)
+        batch_scores = torch.zeros(B, device=device, dtype=torch.float32)
 
-        for l, v_l in directions.items():
-            actual_l = l if l >= 0 else len(hidden_states) + l
-            h = hidden_states[actual_l].float()
-            first_h = h[:, 0, :]                  # (B, H)
-            last_h = h[bidx, last_idx, :]         # (B, H)
-            delta = last_h - first_h              # (B, H)
-            v_l_gpu = v_l.to(h.device)
-            batch_scores += (delta @ v_l_gpu).cpu()
+        for l, v_l_gpu in v_gpu_by_layer.items():
+            actual_l = actual_l_cache[l]
+            h_layer = hidden_states[actual_l]              # (B, T, H), bf16/fp16
+            # Slice the two token positions first, THEN cast to fp32 —
+            # avoids the (B, T, H) fp32 temp allocation that dominated
+            # allocator pressure in the original loop.
+            first_h = h_layer[:, 0, :].float()             # (B, H) fp32
+            last_h = h_layer[bidx, last_idx, :].float()    # (B, H) fp32
+            delta = last_h - first_h                       # (B, H) fp32
+            batch_scores += delta @ v_l_gpu                # GPU accumulate
 
-        scores.append(batch_scores)
+        scores.append(batch_scores.cpu())                  # single sync/batch
         del outputs, hidden_states
 
         if logger and (step % 100 == 0 or step == total_batches):

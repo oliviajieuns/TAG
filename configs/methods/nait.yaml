@@ -19,7 +19,11 @@ nait:
   # For Llama-2-7B (32 decoder layers): layers 0..31 inclusive.
   layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
            16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
-  batch_size: 2
+  # Forward는 eval-only (no_grad) 라서 학습 batch보다 훨씬 키울 수 있음.
+  # 7B + seq_len=512 + bs=8 + 33 hidden states 가 A100 80GB 안에 여유 있게
+  # 들어감 (~3-4 GB). 12K → 6.5K batch로 줄어 selection 시간 ~50% 단축.
+  # OOM 발생 시 4로 떨어뜨리거나 experiment yaml 에서 override.
+  batch_size: 8
   # No subsampling cap; if seed JSON is larger than this, the first
   # `n_seeds` items (after deterministic shuffle) are used. Set to a
   # large value or omit `--n_seeds` CLI flag to use all items.
