@@ -252,6 +252,7 @@ def main() -> None:
         delta_per_layer = extract_delta_from_seed(
             model, tokenizer, seed_items, device, layers,
             max_seq_len=int(cfg["max_seq_len"]),
+            batch_size=nait_batch_size,
             logger=logger,
         )
 
