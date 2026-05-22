@@ -1,4 +1,9 @@
 torch>=2.0
+# transformers >=5.0 의 video/object-detection 모델 registry 가 import-time
+# 에 torchvision 의 C++ ops (torch.ops.torchvision.nms 등) 를 조회 — 미설치
+# 시 LlamaForCausalLM 포함 모든 *ForCausalLM lazy load 가 cascade-fail 함.
+# torch 와 같은 cuXXX 인덱스에서 같이 설치할 것 (버전 mismatch 도 같은 증상).
+torchvision
 transformers>=4.40
 datasets>=2.14
 peft>=0.10  # only needed for LoRA mode; full-FT imports it lazily
