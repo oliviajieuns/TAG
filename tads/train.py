@@ -92,10 +92,42 @@ try:
     if not hasattr(_tv_io, "VideoReader"):
         _tv_io.VideoReader = type("VideoReader", (), {})
 except Exception:
-    # torchvision absent entirely is fine — our code never uses it.
     pass
 
 import torch
+
+# transformers 5.0+ 의 video / object-detection 모델 registry 가 import-time
+# 에 `torch.ops.torchvision.nms` 를 조회. torch ↔ torchvision 버전 mismatch
+# (또는 partial install) 인 경우 이 op 가 registry 에 없어서 모델 등록이
+# 실패 → transformers 의 lazy loader 가 그 뒤 모든 *ForCausalLM lookup 을
+# "could not import module 'XForCausalLM'" 으로 답하는 cascade 발생
+# (Llama / Qwen / Mistral / DeepSeek 4개 모두 동일 증상).
+# 본 stub 은 dummy nms 를 torch op registry 에 등록해서 cascade 차단.
+# LLM SFT / scoring 코드는 NMS 호출 안 함 → safe.
+try:
+    _ = torch.ops.torchvision.nms  # probe; missing 시 RuntimeError
+except (RuntimeError, AttributeError):
+    try:
+        torch.library.define(
+            "torchvision::nms",
+            "(Tensor dets, Tensor scores, float iou_threshold) -> Tensor",
+        )
+
+        def _stub_nms(dets, scores, iou_threshold):
+            # NMS returns kept-box indices; empty default = "no detections".
+            # 실제 NMS 가 필요한 caller 가 있으면 0개 결과로 graceful degrade
+            # (cryptic op-registry 에러 대신).
+            return torch.empty(0, dtype=torch.long, device=dets.device)
+
+        for _backend in ("CPU", "CUDA", "Meta"):
+            try:
+                torch.library.impl("torchvision::nms", _backend)(_stub_nms)
+            except Exception:
+                pass
+    except Exception:
+        # torch.library 미지원 (torch <2.0) 또는 op 가 partial 등록된 상태 —
+        # 그냥 그대로 진행해서 transformers 가 처리하게 둠
+        pass
 import torch.distributed as dist
 from torch.utils.data import Subset
 from tads.core.schedulers import get_cosine_schedule_with_warmup

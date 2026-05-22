@@ -43,6 +43,35 @@ except Exception:
 
 import numpy as np
 import torch
+
+# transformers 5.0+ 의 video / object-detection 모델 registry 가 import-time
+# 에 `torch.ops.torchvision.nms` 를 조회. torch ↔ torchvision 버전 mismatch
+# (또는 partial install) 인 경우 이 op 가 registry 에 없어서 모델 등록이
+# 실패 → transformers 의 lazy loader 가 그 뒤 모든 *ForCausalLM lookup 을
+# "could not import module 'XForCausalLM'" 으로 답하는 cascade 발생
+# (Llama / Qwen / Mistral / DeepSeek 4개 모두 동일 증상).
+# 본 stub 은 dummy nms 를 torch op registry 에 등록해서 cascade 차단.
+# LLM SFT / scoring 코드는 NMS 호출 안 함 → safe.
+try:
+    _ = torch.ops.torchvision.nms  # probe; missing 시 RuntimeError
+except (RuntimeError, AttributeError):
+    try:
+        torch.library.define(
+            "torchvision::nms",
+            "(Tensor dets, Tensor scores, float iou_threshold) -> Tensor",
+        )
+
+        def _stub_nms(dets, scores, iou_threshold):
+            # NMS returns kept-box indices; empty default = "no detections".
+            return torch.empty(0, dtype=torch.long, device=dets.device)
+
+        for _backend in ("CPU", "CUDA", "Meta"):
+            try:
+                torch.library.impl("torchvision::nms", _backend)(_stub_nms)
+            except Exception:
+                pass
+    except Exception:
+        pass
 from torch.utils.data import Subset
 from tads.core.schedulers import get_cosine_schedule_with_warmup
 from tads.core.timing import PhaseTimer
