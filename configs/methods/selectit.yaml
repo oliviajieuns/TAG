@@ -23,3 +23,7 @@ selectit:
   # (baselines/selectit/rating_prompts.txt) come from the official repo
   # verbatim. To use a custom set, pass `--rating-prompts-file <path>` to
   # the train entrypoint.
+  # Batched scoring forward. 7B eval-only forward with right padding fits
+  # bs=8 comfortably on A100 80GB. Lowers token-level forward count ~8×
+  # vs. the original 1-sample-at-a-time loop.
+  batch_size: 8

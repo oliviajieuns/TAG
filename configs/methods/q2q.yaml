@@ -19,3 +19,7 @@ q2q:
   ifd_high: 1.0
   # Precursor SFT는 미구현 — base model로 직접 score.
   use_precursor: false
+  # IFD forward batch. 50K samples × 2 forwards (cond + uncond) 는
+  # bs=1에서 ~5h, bs=8에서 ~1h. A100 80GB에 7B + bs=8 + seq=2048 여유.
+  # OOM 시 experiment yaml에서 4로 override.
+  batch_size: 8

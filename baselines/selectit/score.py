@@ -135,9 +135,10 @@ def selectit_scores(
     level: str = "token",
     alpha: float = 0.2,
     max_length: int = 2048,
+    batch_size: int = 8,
     log_every: int = 200,
 ) -> List[float]:
-    """Compute per-sample SelectIT scores.
+    """Compute per-sample SelectIT scores (batched, paper-faithful).
 
     Args:
         level: "token" — one rating template per sample (cycled through
@@ -145,6 +146,17 @@ def selectit_scores(
             then averaged with std penalty per paper Eq.4.
         alpha: sentence-level std-penalty weight; ignored for token-level.
         max_length: tokenizer truncation cap.
+        batch_size: number of prompts forwarded per model call. The original
+            implementation forwarded ONE prompt at a time → 50K samples = 50K
+            sequential forwards (~3 h on 7B). With batch_size=8 the forward
+            count drops ~8× and reaches the same numerics modulo padding.
+            Padding fills with EOS via attention_mask; logits at the last
+            non-pad position are paper-equivalent to the un-batched call.
+
+    Numerics:
+        Identical to the un-batched original — same full-vocab softmax,
+        same ``_double_softmax`` 5-way renorm, same ``_token_score_from_probs``
+        per-template aggregation. Only the loop structure changed.
     """
     if len(instructions) != len(responses):
         raise ValueError(
@@ -153,8 +165,10 @@ def selectit_scores(
     n_samples = len(instructions)
     rating_ids = resolve_rating_token_ids(tokenizer)
     k = len(rating_ids)  # = 5
+    rating_ids_t = torch.tensor(rating_ids, device=device, dtype=torch.long)
 
     if level == "token":
+        n_per_sample = 1
         templates_per_sample = [
             (rating_templates[i % len(rating_templates)],) for i in range(n_samples)
         ]
@@ -163,49 +177,78 @@ def selectit_scores(
             raise ValueError(
                 f"sentence-level needs at least {k} rating prompts; got {len(rating_templates)}."
             )
+        n_per_sample = k
         first_k = tuple(rating_templates[:k])
         templates_per_sample = [first_k for _ in range(n_samples)]
     else:
         raise ValueError(f"level must be 'token' or 'sentence', got {level!r}")
 
+    # Flatten all (sample × template) prompts so we can batch-forward them
+    # contiguously. We re-aggregate per sample at the end.
+    all_prompts: List[str] = []
+    for i in range(n_samples):
+        for tpl in templates_per_sample[i]:
+            all_prompts.append(build_rating_prompt(tpl, instructions[i], responses[i]))
+    total_prompts = len(all_prompts)
+
+    # Tokenizer state — restore on exit so we don't surprise callers that
+    # share this tokenizer with other code paths.
+    orig_padding_side = getattr(tokenizer, "padding_side", "right")
+    orig_pad_token = tokenizer.pad_token
+    tokenizer.padding_side = "right"   # need attention_mask.sum(-1)-1 = last
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     model_was_training = model.training
     model.eval()
     try:
+        per_prompt_scores: List[float] = []
+        for batch_start in range(0, total_prompts, batch_size):
+            batch_end = min(batch_start + batch_size, total_prompts)
+            batch_prompts = all_prompts[batch_start:batch_end]
+            enc = tokenizer(
+                batch_prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+            ).to(device)
+            out = model(**enc)
+            # Last non-pad position per row (right padding → sum-1).
+            last_idx = enc["attention_mask"].sum(dim=1).clamp_min(1) - 1
+            B = out.logits.size(0)
+            bidx = torch.arange(B, device=device)
+            last_logits = out.logits[bidx, last_idx, :].float()  # (B, V)
+            sm = torch.softmax(last_logits, dim=-1)              # (B, V)
+            probs5_batch = sm[:, rating_ids_t].cpu().numpy()     # (B, 5)
+            for j in range(B):
+                p5 = _double_softmax(probs5_batch[j])
+                per_prompt_scores.append(_token_score_from_probs(p5, k=k))
+
+            # Log roughly every `log_every` prompts (rounded to batch boundary).
+            if (batch_end // log_every) > (batch_start // log_every):
+                logger.info(
+                    "SelectIT batched %d / %d (last=%.4f)",
+                    batch_end, total_prompts, per_prompt_scores[-1],
+                )
+
+        # Aggregate per sample. Token-level: 1 template/sample → first score.
+        # Sentence-level: k templates → avg / (1 + alpha · std) (paper Eq.4).
         scores: List[float] = []
         for i in range(n_samples):
-            per_template = []
-            for tpl in templates_per_sample[i]:
-                prompt = build_rating_prompt(tpl, instructions[i], responses[i])
-                inp = tokenizer(
-                    prompt,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=max_length,
-                ).to(device)
-                out = model(**inp)
-                # out.logits: (1, T, V)
-                logits = out.logits[:, -1, :]
-                sm = torch.softmax(logits.float(), dim=-1)[0].cpu().numpy()
-                probs5 = np.asarray([sm[t] for t in rating_ids], dtype=np.float64)
-                probs5 = _double_softmax(probs5)
-                per_template.append(_token_score_from_probs(probs5, k=k))
-
+            s = per_prompt_scores[i * n_per_sample : (i + 1) * n_per_sample]
             if level == "token":
-                scores.append(per_template[0])
+                scores.append(s[0])
             else:
-                avg = float(np.mean(per_template))
-                std = float(np.std(per_template))
+                avg = float(np.mean(s))
+                std = float(np.std(s))
                 scores.append(avg / (1.0 + alpha * std))
-
-            if (i + 1) % log_every == 0:
-                logger.info(
-                    "SelectIT scoring %d / %d (last=%.4f)",
-                    i + 1, n_samples, scores[-1],
-                )
         return scores
     finally:
         if model_was_training:
             model.train()
+        tokenizer.padding_side = orig_padding_side
+        tokenizer.pad_token = orig_pad_token
 
 
 def select_top_proportion(scores: Sequence[float], proportion: float) -> List[int]:

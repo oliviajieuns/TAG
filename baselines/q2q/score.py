@@ -22,67 +22,116 @@ logger = logging.getLogger(__name__)
 
 
 @torch.no_grad()
-def _mean_nll_of_response(
+def _batched_mean_nll_of_response(
     model,
     tokenizer,
     device,
-    prefix_text: str,
-    response_text: str,
+    prefix_texts: Sequence[str],
+    response_texts: Sequence[str],
     max_length: int,
-) -> float:
-    """Return the mean NLL (natural log) over the response tokens, given
-    the prefix as context. Set prefix_text=""  to score response in isolation.
+    batch_size: int,
+    pad_token_id: int,
+) -> List[float]:
+    """Batched mean-NLL-over-response. One scalar per (prefix, response) pair.
+
+    Replicates ``_mean_nll_of_response`` numerics exactly under right-side
+    padding — same prefix/response tokenization, same start = max(0,
+    n_prefix - 1) mask, same average over the scored positions. Padding
+    rows contribute 0 to both numerator and denominator because
+    ``target_mask`` is 0 over the padded slots.
+
+    The per-sample boundary (where prefix ends and response begins) is
+    preserved by tokenising prefix and response separately, then
+    concatenating before padding to the batch's max length. This is the
+    pattern the un-batched version uses; batching just stacks them.
     """
-    # Encode prefix + response separately so we know exactly which token
-    # positions belong to the response (and thus get scored).
-    if prefix_text:
-        prefix_ids = tokenizer(
-            prefix_text, return_tensors="pt", add_special_tokens=True,
-            truncation=True, max_length=max_length - 1,
-        ).input_ids[0]
-    else:
-        # Unconditional NLL — score y under the BOS-only context if the
-        # tokenizer adds BOS (LLaMA), else under empty context (Qwen has
-        # add_bos_token=False by default, so this returns length-0 ids).
-        prefix_ids = tokenizer(
-            "", return_tensors="pt", add_special_tokens=True,
-            truncation=True, max_length=max_length,
-        ).input_ids[0]
-    response_ids = tokenizer(
-        response_text, return_tensors="pt", add_special_tokens=False,
-        truncation=True, max_length=max(1, max_length - max(1, len(prefix_ids))),
-    ).input_ids[0]
-    if response_ids.numel() == 0:
-        return float("nan")
+    n = len(prefix_texts)
+    if len(response_texts) != n:
+        raise ValueError(
+            f"prefix/response length mismatch: {len(prefix_texts)} vs {n}"
+        )
+    if n == 0:
+        return []
 
-    # Audit-2: when prefix_ids is empty (Qwen no-BOS tokenizer), we still
-    # need at least one token in `full_ids` to anchor the LM's first
-    # prediction. Treat the first response token as "free" (not scored) in
-    # that case so the conditional and unconditional NLLs cover the same
-    # set of (n_response - bos_count) response tokens — keeping the IFD
-    # ratio comparable across tokenizers.
-    full_ids = torch.cat([prefix_ids, response_ids], dim=0).unsqueeze(0).to(device)
-    out = model(full_ids)
-    logits = out.logits[0, :-1, :]
-    target = full_ids[0, 1:]
+    # Pre-tokenize prefix and response per sample, with the same truncation
+    # bookkeeping the un-batched function uses.
+    samples: List[tuple] = []
+    for ptext, rtext in zip(prefix_texts, response_texts):
+        if ptext:
+            pids = tokenizer(
+                ptext, add_special_tokens=True,
+                truncation=True, max_length=max_length - 1,
+            ).input_ids
+        else:
+            pids = tokenizer(
+                "", add_special_tokens=True,
+                truncation=True, max_length=max_length,
+            ).input_ids
+        rids = tokenizer(
+            rtext, add_special_tokens=False,
+            truncation=True,
+            max_length=max(1, max_length - max(1, len(pids))),
+        ).input_ids
+        samples.append((pids, rids))
 
-    # Mask: 1 over response positions, 0 over prefix.
-    n_prefix = prefix_ids.numel()
-    mask = torch.zeros_like(target, dtype=torch.float32)
-    # Position i in `target` predicts token at position i+1 in full_ids.
-    # When prefix has ≥1 token (typical LLaMA case with BOS), response
-    # positions in `target` start at index `n_prefix - 1` (the last
-    # prefix token's transition to the first response token).
-    # When prefix is empty (Qwen no-BOS), `target` is `response_ids[1:]`
-    # and we score all of it — response_ids[0] is unconditional and not
-    # part of either NLL average, so conditional vs unconditional NLL
-    # cover the same `n_response - 1` positions either way.
-    start = max(0, n_prefix - 1)
-    mask[start:] = 1.0
+    results: List[float] = [float("nan")] * n
 
-    nll = F.cross_entropy(logits.float(), target, reduction="none")
-    denom = mask.sum().clamp_min(1)
-    return float((nll * mask).sum().item() / denom.item())
+    for batch_start in range(0, n, batch_size):
+        batch_end = min(batch_start + batch_size, n)
+        batch = samples[batch_start:batch_end]
+        B = len(batch)
+
+        # Drop samples with empty response (NaN as in the un-batched fallback).
+        valid_idx = [j for j, (_, r) in enumerate(batch) if len(r) > 0]
+        if not valid_idx:
+            continue
+
+        # Build right-padded input_ids + attention_mask + target_mask.
+        valid_batch = [batch[j] for j in valid_idx]
+        Bv = len(valid_batch)
+        seqs = [pids + rids for pids, rids in valid_batch]
+        max_seq_len = max(len(s) for s in seqs)
+        input_ids = torch.full(
+            (Bv, max_seq_len), pad_token_id, dtype=torch.long, device=device,
+        )
+        attention_mask = torch.zeros(
+            Bv, max_seq_len, dtype=torch.long, device=device,
+        )
+        target_mask = torch.zeros(
+            Bv, max_seq_len - 1, dtype=torch.float32, device=device,
+        )
+        for i, (pids, rids) in enumerate(valid_batch):
+            seq = pids + rids
+            L = len(seq)
+            input_ids[i, :L] = torch.tensor(seq, dtype=torch.long, device=device)
+            attention_mask[i, :L] = 1
+            n_prefix = len(pids)
+            # Same masking convention as the un-batched function:
+            #   target index i predicts input position i+1
+            #   response positions in target start at max(0, n_prefix - 1)
+            #   and end at L - 2 inclusive (target has length L - 1)
+            start = max(0, n_prefix - 1)
+            end = L - 1  # slice end-exclusive → covers target[start:L-1]
+            if end > start:
+                target_mask[i, start:end] = 1.0
+
+        out = model(input_ids=input_ids, attention_mask=attention_mask)
+        logits = out.logits[:, :-1, :]           # (Bv, max-1, V)
+        target = input_ids[:, 1:]                # (Bv, max-1)
+        Bv_, T_, V = logits.shape
+        nll = F.cross_entropy(
+            logits.reshape(-1, V).float(),
+            target.reshape(-1),
+            reduction="none",
+        ).reshape(Bv_, T_)
+        nll = nll * target_mask
+        denom = target_mask.sum(dim=1).clamp_min(1)
+        per_sample = (nll.sum(dim=1) / denom).cpu().tolist()
+
+        for k, j in enumerate(valid_idx):
+            results[batch_start + j] = float(per_sample[k])
+
+    return results
 
 
 @torch.no_grad()
@@ -95,54 +144,79 @@ def compute_ifd_scores(
     responses: Sequence[str],
     prompt_format,
     max_length: int = 2048,
+    batch_size: int = 8,
     log_every: int = 200,
 ) -> List[float]:
-    """Return one IFD score per (instruction, response) pair.
+    """Return one IFD score per (instruction, response) pair (batched).
 
     Args:
         prompt_format: callable (instruction) -> prefix_text. Should produce the
             same prefix the SFT pipeline would feed to the model BEFORE the
             response (e.g. Alpaca's "### Instruction:\n{ins}\n\n### Response:\n").
+        batch_size: forwards per model call. The original loop called the
+            model TWICE per sample (cond + uncond), one sample at a time
+            (~2 × 50K = 100K sequential forwards). Batched: total forwards
+            drop to 2 × ⌈N/batch_size⌉ → on 7B that's 1-2 hours instead of
+            ~5-6 hours. Numerics match the un-batched version under right
+            padding (pad tokens are masked out of both prefix and response
+            mean-NLL).
     """
     if len(instructions) != len(responses):
         raise ValueError(
             f"instructions/responses length mismatch: {len(instructions)} vs {len(responses)}"
         )
+    n = len(instructions)
+    prefix_texts = [prompt_format(ins) for ins in instructions]
+
+    # Resolve pad token; restore tokenizer state on exit.
+    orig_padding_side = getattr(tokenizer, "padding_side", "right")
+    orig_pad_token = tokenizer.pad_token
+    tokenizer.padding_side = "right"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    pad_token_id = tokenizer.pad_token_id
+
     was_training = model.training
     model.eval()
     try:
+        logger.info(
+            "Q2Q IFD batched | n=%d | batch_size=%d | est forwards=%d (cond+uncond)",
+            n, batch_size, 2 * ((n + batch_size - 1) // batch_size),
+        )
+        nll_cond = _batched_mean_nll_of_response(
+            model, tokenizer, device,
+            prefix_texts=prefix_texts,
+            response_texts=responses,
+            max_length=max_length,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+        )
+        nll_uncond = _batched_mean_nll_of_response(
+            model, tokenizer, device,
+            prefix_texts=[""] * n,
+            response_texts=responses,
+            max_length=max_length,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+        )
+
         scores: List[float] = []
-        for i, (ins, res) in enumerate(zip(instructions, responses)):
-            try:
-                nll_cond = _mean_nll_of_response(
-                    model, tokenizer, device,
-                    prefix_text=prompt_format(ins),
-                    response_text=res,
-                    max_length=max_length,
-                )
-                nll_uncond = _mean_nll_of_response(
-                    model, tokenizer, device,
-                    prefix_text="",
-                    response_text=res,
-                    max_length=max_length,
-                )
-                # IFD = exp(nll_cond - nll_uncond). Clamp to [-15, +15]
-                # (≈ exp ratio of 3e-7 .. 3e+6) — tighter than the prior
-                # ±50 (exp ratio 5e21). 50 caused legitimate outliers to
-                # dominate the fallback top-K branch in `select_top_proportion_by_ifd`
-                # when the in-range [ifd_low, ifd_high] pool shrank.
-                diff = max(-15.0, min(15.0, nll_cond - nll_uncond))
-                ifd = math.exp(diff)
-            except Exception as ex:
-                logger.warning("IFD scoring failed on sample %d: %s — score=nan", i, ex)
-                ifd = float("nan")
-            scores.append(ifd)
+        for i, (c, u) in enumerate(zip(nll_cond, nll_uncond)):
+            if math.isnan(c) or math.isnan(u):
+                scores.append(float("nan"))
+                continue
+            # IFD = exp(nll_cond - nll_uncond). Clamp diff to [-15, 15] for
+            # the same outlier-control as the un-batched version.
+            diff = max(-15.0, min(15.0, c - u))
+            scores.append(math.exp(diff))
             if (i + 1) % log_every == 0:
-                logger.info("IFD %d / %d (last=%.4f)", i + 1, len(instructions), scores[-1])
+                logger.info("IFD %d / %d (last=%.4f)", i + 1, n, scores[-1])
         return scores
     finally:
         if was_training:
             model.train()
+        tokenizer.padding_side = orig_padding_side
+        tokenizer.pad_token = orig_pad_token
 
 
 def select_top_proportion_by_ifd(

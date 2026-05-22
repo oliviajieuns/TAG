@@ -257,6 +257,7 @@ def main() -> None:
                 level=level,
                 alpha=alpha,
                 max_length=int(cfg.get("max_seq_len", 2048)),
+                batch_size=int(selectit_cfg.get("batch_size", 8)),
             )
         with timer.phase("selectit.topk", "selection"):
             _atomic_json_dump(scores, scores_path)

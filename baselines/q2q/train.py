@@ -216,6 +216,7 @@ def main() -> None:
                 responses=responses,
                 prompt_format=_make_alpaca_prefix,
                 max_length=int(cfg.get("max_seq_len", 2048)),
+                batch_size=int(q2q_cfg.get("batch_size", 8)),
             )
         with timer.phase("q2q.topk_filter", "selection"):
             # Atomic write so a kill mid-dump doesn't leave a truncated JSON
