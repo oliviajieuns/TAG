@@ -1,4 +1,9 @@
-"""Unit tests for tads.core.scorer — paper Eq.2-3, Eq.7, Eq.8."""
+"""Unit tests for tads.core.scorer — paper §3.3 (Eq. 3-4, anchor min-max, Eq. 10).
+
+`calibrated_utility` is kept in the module as an ablation helper; the
+main paper-faithful path passes raw R into `tads_score` (paper §3.3
+final paragraph: "No learned transform, learned policy, z-score, or
+sigmoid is applied inside the ranking rule.")."""
 from __future__ import annotations
 
 import math
@@ -35,7 +40,12 @@ def test_pool_reward_equal_variance():
 
 
 def test_calibrated_utility_zero_at_pool_mean():
-    """R̃ is a z-score: value at the pool mean is 0, monotone increasing in R."""
+    """Ablation helper: R̃ = (R - R̄) / (σ_R + ε) — z-score of composite R.
+
+    NOT used by the main paper-faithful pipeline (which feeds raw R to
+    `tads_score`). Kept here as an opt-in ablation transform; this test
+    just verifies the function's z-score semantics.
+    """
     R = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
     R_tilde = calibrated_utility(R)
     # Pool mean is 3 → R_tilde[2] ≈ 0.
@@ -59,19 +69,24 @@ def test_normalize_alignment_minmax():
     assert torch.all(a2 == 0.5).item()
 
 
-def test_tads_score_lam_zero_recovers_calibrated_utility():
-    """At λ=0 the anchor factor is 1, so s_i == R̃_i exactly."""
-    R_tilde = torch.tensor([0.2, 0.5, 0.8])
+def test_tads_score_lam_zero_recovers_base_reward():
+    """At λ=0 the anchor factor is 1, so s_i == R_i exactly.
+
+    Paper §3.3: "Setting λ = 0 recovers the composite-reward base ranking
+    exactly." `tads_score` is a monotonic transform of its first argument,
+    so the identity holds for any input scale.
+    """
+    R = torch.tensor([0.2, 0.5, 0.8])
     a = torch.tensor([0.1, 0.5, 0.9])
-    s = tads_score(R_tilde, a, lam=0.0)
-    assert torch.allclose(s, R_tilde)
+    s = tads_score(R, a, lam=0.0)
+    assert torch.allclose(s, R)
 
 
 def test_tads_score_multiplicative_boost():
-    """At λ=1 a top-alignment sample gets the full 2× boost (any R̃ scale)."""
-    R_tilde = torch.tensor([1.2, 1.2])
+    """At λ=1 a top-alignment sample gets the full 2× boost (paper Eq. 10)."""
+    R = torch.tensor([1.2, 1.2])
     a = torch.tensor([0.0, 1.0])
-    s = tads_score(R_tilde, a, lam=1.0)
+    s = tads_score(R, a, lam=1.0)
     assert math.isclose(s[0].item(), 1.2, abs_tol=1e-6)
     assert math.isclose(s[1].item(), 2.4, abs_tol=1e-6)
 

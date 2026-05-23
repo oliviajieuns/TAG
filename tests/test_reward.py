@@ -1,4 +1,10 @@
-"""Sanity tests for compute_rewards (paper Eq. 1, 3, 5)."""
+"""Sanity tests for compute_rewards (paper §3.2 preliminaries → Eq. 3-4).
+
+compute_rewards computes per-sample L_i (mean CE loss over response
+tokens) and H_i (mean predictive entropy over response tokens) — the
+inputs to the composite reward R_i (paper Eq. 3) with variance-ratio
+weight w (paper Eq. 4).
+"""
 from __future__ import annotations
 
 import pytest
