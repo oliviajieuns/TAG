@@ -1,0 +1,14 @@
+# Llama-2-7B + Evol-Instruct full data — Table 5 upper-bound (100%).
+# Paper-faithful Evol-Instruct (Xu et al., WizardLM 2023) 70K dataset.
+defaults:
+  - configs/base.yaml
+  - configs/methods/full.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: evol_7b/llama2/full_100
+train_epochs: 3
+
+# Evol-Instruct override (default `data_files` in base.yaml is Alpaca-GPT4).
+data_files: ${oc.env:EVOL_INSTRUCT_DATA_FILES,/group-volume/IT-datasets/wizardlm_evol_instruct_70k/*.json}
+dataset_name: WizardLMTeam/WizardLM_evol_instruct_70k

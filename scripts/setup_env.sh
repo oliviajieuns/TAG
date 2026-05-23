@@ -65,6 +65,12 @@ export BBH_DATA_DIR="${BBH_DATA_DIR:-/group-volume/IT-datasets/bbh}"
 # Alternatives shipped by the same script: claude_t45.json, random_9k.json.
 export ALPAGASUS_FILTERED_FILE="${ALPAGASUS_FILTERED_FILE:-/group-volume/IT-datasets/alpagasus/chatgpt_9k.json}"
 
+# --- Evol-Instruct dataset (Xu et al., WizardLM 2023) — 70K instruction pairs ---
+# Used by Table 5 (instruction-dataset transfer). Fetch with
+#   bash scripts/download_evol_instruct.sh
+# Public HF mirror: WizardLMTeam/WizardLM_evol_instruct_70k.
+export EVOL_INSTRUCT_DATA_FILES="${EVOL_INSTRUCT_DATA_FILES:-/group-volume/IT-datasets/wizardlm_evol_instruct_70k/*.json}"
+
 # --- LIMA dataset (Zhou et al., 2023) — GAIR/lima, 1030 rows, GATED HF ---
 # Pre-requisites: `huggingface-cli login` + visit huggingface.co/datasets/GAIR/lima
 # and click "Agree and access". Then fetch with
@@ -263,6 +269,7 @@ _tads_warn XQUAD_DATA_DIR         "$XQUAD_DATA_DIR"         "XQuAD dir (xquad.<l
 _tads_warn BBH_DATA_DIR           "$BBH_DATA_DIR"           "BBH directory (contains <task>.json + optional cot-prompts/)"
 _tads_warn ALPAGASUS_FILTERED_FILE "$ALPAGASUS_FILTERED_FILE" "AlpaGasus pre-filtered JSON (chatgpt_9k.json) — run scripts/download_alpagasus.sh to fetch; only required for the AlpaGasus baseline"
 _tads_warn LIMA_DATA_FILES        "$LIMA_DATA_FILES"        "LIMA train.jsonl — run scripts/download_lima.sh (needs huggingface-cli login + dataset access agreement); only required for the LIMA baseline"
+_tads_warn EVOL_INSTRUCT_DATA_FILES "$EVOL_INSTRUCT_DATA_FILES" "Evol-Instruct train.jsonl — run scripts/download_evol_instruct.sh; only required for the Table 5 instruction-dataset transfer experiments"
 
 # -----------------------------------------------------------------------------
 # Final summary
@@ -292,6 +299,7 @@ else
     echo "  HF_TOKEN                    = (UNSET — run \`huggingface-cli login\` or set HF_TOKEN for gated datasets)"
 fi
 echo "  ALPACA_DATA_FILES           = $ALPACA_DATA_FILES"
+echo "  EVOL_INSTRUCT_DATA_FILES    = $EVOL_INSTRUCT_DATA_FILES  (Table 5 dataset-transfer experiments)"
 
 unset -f _tads_warn
 unset _tads_missing

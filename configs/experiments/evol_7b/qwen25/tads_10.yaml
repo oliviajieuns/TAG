@@ -1,0 +1,18 @@
+# Qwen2.5-7B + Evol-Instruct + TADS (λ=1, anchor on) at 10% — Table 5.
+defaults:
+  - configs/base.yaml
+  - configs/methods/tads.yaml
+  - configs/models/qwen2.5-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: evol_7b/qwen25/tads_10
+selection_ratio: 0.1
+train_epochs: 3
+
+anchor:
+  layer_idx: -1
+  max_samples_for_pca: 1024
+  pca_batch_size: 16
+
+data_files: ${oc.env:EVOL_INSTRUCT_DATA_FILES,/group-volume/IT-datasets/wizardlm_evol_instruct_70k/*.json}
+dataset_name: WizardLMTeam/WizardLM_evol_instruct_70k
