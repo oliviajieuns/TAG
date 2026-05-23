@@ -1,55 +1,39 @@
 #!/usr/bin/env bash
-# make_table.sh — collect 8-bench eval results into the paper-style table,
-# split by model (llama2 / qwen25 / mistral / deepseek).
+# make_table.sh — collect 8-bench eval results into the paper-style table.
+#
+# Output layout: one table per (table-set, model) pair, stacked vertically.
+# table-sets currently recognised: main_7b / main_05b / evol_7b.
 #
 # Usage:
-#   bash scripts/make_table.sh <eval_results_root> [output_format] [--set NAME]
+#   bash scripts/make_table.sh <eval_results_root> [output_format]
 #
-#   <eval_results_root> : directory that contains per-model / per-method
-#                         sub-dirs. Typical layout:
+#   <eval_results_root> : directory that contains per-set / per-model /
+#                         per-method sub-dirs. Typical layouts:
 #                           <root>/main_7b/llama2/<method>/runs/...
+#                           <root>/main_05b/qwen25/<method>/runs/...
 #                           <root>/evol_7b/llama2/<method>/runs/...
-#                         Either model-prefixed or flat layout works — model
-#                         is identified by ANY parent-dir or filename segment
-#                         matching one of: llama2 / qwen25 / mistral / deepseek.
+#                         Set + model are identified by ANY parent-dir or
+#                         filename segment matching the configured lists.
 #                         Falls back to $EVAL_RESULTS_ROOT when omitted.
 #   [output_format]     : markdown (default) | csv | tsv
-#   --set NAME          : restrict scan to JSONs under a path-segment
-#                         matching NAME (e.g. --set main_7b for Table 1,
-#                         --set evol_7b for Table 5). Without it, ALL sets
-#                         are merged into one (model, method) cell — fine
-#                         when only one set has data; produces incorrect
-#                         numbers when both main_7b/ and evol_7b/ live under
-#                         the same EVAL_RESULTS_ROOT. A heads-up is printed
-#                         to stderr when that collision is detected.
 #
-# Output: one table PER model that has at least one eval JSON. Models with
-# no data are skipped entirely. Missing cells (model has no result for that
-# (method, bench)) are rendered as "-".
+# Cell rendering: each (set, model, method, bench) cell shows ALL
+# measurements (desc-sorted, dedup'd at 2 dp). Missing cells → "-".
 #
-# How "latest" is resolved per (model, method):
-#   We walk every *.json under <root> and bucket by (identified model,
-#   identified method) via parent-dir / filename / payload.experiment.
-#   Every measurement is kept; the cell shows ALL measurements desc-sorted
-#   and dedup'd at 2 dp.
+# W-AVG: unweighted mean of the per-bench MAX accuracies × 100.
+# Δ: (method_W-AVG − full_100_W-AVG) / full_100_W-AVG · 100, computed PER
+#    (set, model) — each pair's own Full FT row is the baseline. Empty if
+#    Full FT row missing.
 #
-# W-AVG (Overall column): unweighted mean of the 8 available bench MAX
-# accuracies × 100. If a bench is missing the average is over the present
-# ones.
-#
-# Δ vs Full FT: (method_W-AVG − full_100_W-AVG) / full_100_W-AVG · 100,
-# computed PER MODEL (each model's own Full FT row is the baseline). Empty
-# if Full FT row missing for that model.
+# Files that can't be assigned a set are still emitted, grouped under the
+# `(no-set)` heading at the bottom.
 set -euo pipefail
 
 ROOT=""
 OUT_FMT=""
-SET_FILTER=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --set)    SET_FILTER="$2"; shift 2 ;;
-    --set=*)  SET_FILTER="${1#*=}"; shift ;;
     -h|--help)
       sed -n '2,30p' "$0"; exit 0 ;;
     *)
@@ -66,22 +50,31 @@ OUT_FMT="${OUT_FMT:-markdown}"
 
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
   echo "[make_table] eval_results_root not given or not a directory: ${ROOT:-<empty>}" >&2
-  echo "Usage: bash scripts/make_table.sh <eval_results_root> [markdown|csv|tsv] [--set main_7b|evol_7b|...]" >&2
+  echo "Usage: bash scripts/make_table.sh <eval_results_root> [markdown|csv|tsv]" >&2
   exit 1
 fi
 
-python3 - "$ROOT" "$OUT_FMT" "$SET_FILTER" <<'PY'
+python3 - "$ROOT" "$OUT_FMT" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 ROOT = Path(sys.argv[1]).resolve()
 OUT_FMT = sys.argv[2].lower()
-SET_FILTER = sys.argv[3] if len(sys.argv) > 3 else ""
 
-# Model-axis: (dir_key, human-readable display name).
-# `dir_key` must match the model-segment that appears in the file path /
-# experiment label (see _identify_model).
+# Table-set axis. Order here = emit order.
+KNOWN_SETS = [
+    ("main_7b",  "Main — 7B (Table 1)"),
+    ("main_05b", "Main — 0.5B (light)"),
+    ("evol_7b",  "Evol-Instruct — 7B (Table 5)"),
+]
+SET_KEYS = {s[0] for s in KNOWN_SETS}
+SET_ORDER = {s[0]: i for i, s in enumerate(KNOWN_SETS)}
+SET_DISPLAY = {k: d for k, d in KNOWN_SETS}
+
+# Model-axis: (dir_key, default display name). `dir_key` must match the
+# model-segment that appears in the file path / experiment label
+# (see _identify_model).
 MODELS = [
     ("llama2",   "LLaMA-2-7B"),
     ("qwen25",   "Qwen2.5-7B"),
@@ -90,6 +83,13 @@ MODELS = [
 ]
 MODEL_KEYS = {m[0] for m in MODELS}
 MODEL_ORDER = {m[0]: i for i, m in enumerate(MODELS)}
+
+# Per-(set, model) display override. Falls back to MODELS[*][1] when no
+# entry. Used so e.g. `main_05b/qwen25/` shows "Qwen2.5-0.5B" instead of
+# the default 7B label.
+MODEL_DISPLAY_BY_SET = {
+    ("main_05b", "qwen25"): "Qwen2.5-0.5B",
+}
 
 # Method-axis. `name_tpl` may contain `{model}` to interpolate the model's
 # display name (used by the Pure-base row). `mdir == ""` → no on-disk
@@ -119,14 +119,11 @@ BENCHES = [
 ]
 
 MISSING = "-"
-
-# Known table-set segments — used only for collision-detection in the no-filter
-# path. Add new sets here as they're introduced (e.g. main_7b, evol_7b, ...).
-KNOWN_SETS = ("main_7b", "evol_7b")
+NO_SET = None  # sentinel — files whose path doesn't contain any KNOWN_SETS segment
 
 
 def _path_segments(p: Path):
-    """All parent-dir names + filename stem, used for set-filter matching."""
+    """All parent-dir names + filename stem, used for set / model matching."""
     segs = [p.stem]
     for par in p.parents:
         segs.append(par.name)
@@ -134,18 +131,13 @@ def _path_segments(p: Path):
 
 
 def _all_json_files(root: Path):
-    """Yield every *.json under root recursively. Skips .tmp / .lock side-files.
-    When SET_FILTER is set, only files whose path includes that segment are
-    yielded.
-    """
+    """Yield every *.json under root recursively. Skips .tmp / .lock side-files."""
     if not root.exists():
         return
     for p in root.rglob("*.json"):
         if not p.is_file():
             continue
         if p.name.endswith(".tmp") or ".lock" in p.name:
-            continue
-        if SET_FILTER and SET_FILTER not in _path_segments(p):
             continue
         yield p
 
@@ -161,6 +153,15 @@ def _segments_from_candidates(candidates):
             if sep in c:
                 out.extend(c.split(sep))
     return out
+
+
+def _identify_set(jp: Path):
+    """Return one of SET_KEYS if any parent-dir segment matches, else None.
+    Filename stem is NOT checked — set segments are dir-level only."""
+    for par in jp.parents:
+        if par.name in SET_KEYS:
+            return par.name
+    return None
 
 
 def _identify_model(jp: Path, payload):
@@ -230,14 +231,16 @@ def _accs_from_payload(payload, bench: str):
 
 
 def collect_all_results(root: Path):
-    """Walk root once, bucket every parseable JSON by (model, method, bench).
+    """Walk root once, bucket every parseable JSON by (set, model, method, bench).
 
     Returns:
-        by_model[mkey][mdir][bench] = list of (acc_float, src_path)
+        by_set[set_key][mkey][mdir][bench] = list of (acc_float, src_path)
+        set_key is one of SET_KEYS or NO_SET (None) for files outside any
+        recognized table-set.
     """
     method_mdirs = [m[2] for m in METHODS if m[2]]
     bench_keys = [b for b, _ in BENCHES]
-    by_model: dict = {}
+    by_set: dict = {}
 
     n_total = 0
     n_parsed = 0
@@ -245,7 +248,6 @@ def collect_all_results(root: Path):
     n_no_method = 0
     n_no_model = 0
     fail_log = []
-    sets_seen: set = set()
 
     for jp in _all_json_files(root):
         n_total += 1
@@ -273,31 +275,21 @@ def collect_all_results(root: Path):
             n_no_model += 1
             continue
 
-        if mkey not in by_model:
-            by_model[mkey] = {m: {b: [] for b in bench_keys} for m in method_mdirs}
+        skey = _identify_set(jp)  # None if no main_7b/main_05b/evol_7b segment
+
+        set_bucket = by_set.setdefault(skey, {})
+        if mkey not in set_bucket:
+            set_bucket[mkey] = {m: {b: [] for b in bench_keys} for m in method_mdirs}
         for bench in bench_keys:
             for v in _accs_from_payload(payload, bench):
-                by_model[mkey][mdir][bench].append((v, jp))
+                set_bucket[mkey][mdir][bench].append((v, jp))
 
-        for s in _path_segments(jp):
-            if s in KNOWN_SETS:
-                sets_seen.add(s)
-
+    sets_str = ",".join(_set_label(k) for k in _sorted_set_keys(by_set.keys())) or "(none)"
     sys.stderr.write(
         f"[make_table] scanned={n_total}  parsed={n_parsed}  parse_fail={n_fail}  "
         f"no_method={n_no_method}  no_model={n_no_model}  "
-        f"models_found={','.join(sorted(by_model.keys())) or '(none)'}\n"
+        f"sets_found={sets_str}\n"
     )
-    if SET_FILTER:
-        sys.stderr.write(f"[make_table] active --set filter: {SET_FILTER}\n")
-    elif len(sets_seen) > 1:
-        sys.stderr.write(
-            f"[make_table] WARNING: multiple table-sets detected under root "
-            f"({', '.join(sorted(sets_seen))}). They've been MERGED into the "
-            f"same (model, method) cells — numbers will be wrong if you meant "
-            f"to report them separately. Re-run with `--set <name>` to filter "
-            f"to one set at a time.\n"
-        )
     if fail_log:
         sys.stderr.write(
             f"[make_table] {len(fail_log)} file(s) failed JSON parse — see "
@@ -305,7 +297,22 @@ def collect_all_results(root: Path):
             "trailing junk bytes, BOM, or non-JSON content saved with .json "
             "extension by mistake.\n"
         )
-    return by_model
+    return by_set
+
+
+def _set_label(skey):
+    if skey is None:
+        return "(no-set)"
+    return skey
+
+
+def _sorted_set_keys(keys):
+    """Canonical set-key order: KNOWN_SETS order, unknown strings alpha, None last."""
+    def _k(s):
+        if s is None:
+            return (2, "")
+        return (0 if s in SET_ORDER else 1, SET_ORDER.get(s, 0), s)
+    return sorted(keys, key=_k)
 
 
 def fmt_cell(v):
@@ -333,11 +340,20 @@ def fmt_list_cell(measurements):
     return ", ".join(seen)
 
 
-def _model_display(mkey):
+def _model_display(skey, mkey):
+    override = MODEL_DISPLAY_BY_SET.get((skey, mkey))
+    if override:
+        return override
     for k, disp in MODELS:
         if k == mkey:
             return disp
     return mkey
+
+
+def _set_display(skey):
+    if skey is None:
+        return "(no recognised set in path)"
+    return SET_DISPLAY.get(skey, skey)
 
 
 def build_rows_for_model(model_results):
@@ -358,12 +374,13 @@ def build_rows_for_model(model_results):
     return rows
 
 
-def emit_model_table(mkey, model_results, out_fmt, *, is_first):
-    """Emit one table for `mkey`."""
-    disp = _model_display(mkey)
+def emit_model_table(skey, mkey, model_results, out_fmt, *, is_first):
+    """Emit one table for one (set, model) pair."""
+    disp = _model_display(skey, mkey)
+    set_disp = _set_display(skey)
     rows = build_rows_for_model(model_results)
 
-    # Per-model Full FT baseline for Δ.
+    # Per-(set, model) Full FT baseline for Δ.
     full_avg = None
     for mid, _mname, _vals, avg in rows:
         if mid == "01":
@@ -385,7 +402,7 @@ def emit_model_table(mkey, model_results, out_fmt, *, is_first):
             return s
         if not is_first:
             print()  # blank separator between tables
-        print(f"# Model: {disp} ({mkey})")
+        print(f"# {set_disp}  /  Model: {disp} ({mkey})")
         headers_flat = (
             ["ID", "Method"]
             + [b.split("\n")[0] for _, b in BENCHES]
@@ -401,7 +418,7 @@ def emit_model_table(mkey, model_results, out_fmt, *, is_first):
     else:  # markdown
         if not is_first:
             print()  # blank line between tables
-        print(f"## Model: {disp} ({mkey})")
+        print(f"## {set_disp}  /  Model: {disp} ({mkey})")
         print()
         line1 = (
             ["ID", "Method"]
@@ -432,47 +449,59 @@ if not all_results:
         "[make_table] no model results matched any of: "
         + ", ".join(m[0] for m in MODELS) + "\n"
         "[make_table] file paths or experiment labels must contain a model-name "
-        "segment (e.g. .../llama2/tads_10/...).\n"
+        "segment (e.g. .../main_7b/llama2/tads_10/...).\n"
     )
     sys.exit(1)
 
-# Sort by canonical MODEL order; unknown keys go to the end.
-model_keys_sorted = sorted(
-    all_results.keys(),
-    key=lambda k: (MODEL_ORDER.get(k, 999), k),
-)
+# Emit per-(set, model) tables, stacked. Sets in KNOWN_SETS order, then
+# unknown strings alphabetical, then `(no-set)` last.
+first = True
+for skey in _sorted_set_keys(all_results.keys()):
+    set_results = all_results[skey]
+    mkeys_sorted = sorted(
+        set_results.keys(),
+        key=lambda k: (MODEL_ORDER.get(k, 999), k),
+    )
+    for mkey in mkeys_sorted:
+        emit_model_table(skey, mkey, set_results[mkey], OUT_FMT, is_first=first)
+        first = False
 
-for i, mkey in enumerate(model_keys_sorted):
-    emit_model_table(mkey, all_results[mkey], OUT_FMT, is_first=(i == 0))
-
-# ---- footer: per-model, per-method, per-bench full list (value ← source) ----
+# ---- footer: per-(set, model, method, bench) full list (value ← source) ----
 sys.stderr.write("\n[make_table] source root: " + str(ROOT) + "\n")
 sys.stderr.write("[make_table] cell entries are ALL measurements (desc, deduped @ 2dp)\n")
 
 mdir_by_id = {m[0]: m[2] for m in METHODS}
 idx_by_bench = {b: i for i, (b, _) in enumerate(BENCHES)}
 
-for mkey in model_keys_sorted:
-    disp = _model_display(mkey)
-    sys.stderr.write(f"\n[make_table] ===== Model: {disp} ({mkey}) =====\n")
-    rows = build_rows_for_model(all_results[mkey])
-    for mid, mname, vals_lists, _avg in rows:
-        if not mdir_by_id[mid]:
-            continue
-        mname_filled = mname.format(model=disp) if "{model}" in mname else mname
-        present = sum(1 for lst in vals_lists if lst)
-        sys.stderr.write(
-            f"  [{mid}] {mname_filled}  ({present}/{len(BENCHES)} bench have data)\n"
-        )
-        for bench, _ in BENCHES:
-            lst = vals_lists[idx_by_bench[bench]]
-            if not lst:
-                sys.stderr.write(f"      {bench:10s} —  (no value found)\n")
+for skey in _sorted_set_keys(all_results.keys()):
+    set_disp = _set_display(skey)
+    sys.stderr.write(f"\n[make_table] ##### {set_disp} ({_set_label(skey)}) #####\n")
+    set_results = all_results[skey]
+    mkeys_sorted = sorted(
+        set_results.keys(),
+        key=lambda k: (MODEL_ORDER.get(k, 999), k),
+    )
+    for mkey in mkeys_sorted:
+        disp = _model_display(skey, mkey)
+        sys.stderr.write(f"\n[make_table] ===== Model: {disp} ({mkey}) =====\n")
+        rows = build_rows_for_model(set_results[mkey])
+        for mid, mname, vals_lists, _avg in rows:
+            if not mdir_by_id[mid]:
                 continue
-            for v, src in sorted(lst, key=lambda t: -t[0]):
-                try:
-                    rel = src.relative_to(ROOT)
-                except Exception:
-                    rel = src
-                sys.stderr.write(f"      {bench:10s} {v:>6.2f}  ← {rel}\n")
+            mname_filled = mname.format(model=disp) if "{model}" in mname else mname
+            present = sum(1 for lst in vals_lists if lst)
+            sys.stderr.write(
+                f"  [{mid}] {mname_filled}  ({present}/{len(BENCHES)} bench have data)\n"
+            )
+            for bench, _ in BENCHES:
+                lst = vals_lists[idx_by_bench[bench]]
+                if not lst:
+                    sys.stderr.write(f"      {bench:10s} —  (no value found)\n")
+                    continue
+                for v, src in sorted(lst, key=lambda t: -t[0]):
+                    try:
+                        rel = src.relative_to(ROOT)
+                    except Exception:
+                        rel = src
+                    sys.stderr.write(f"      {bench:10s} {v:>6.2f}  ← {rel}\n")
 PY
