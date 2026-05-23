@@ -1,0 +1,21 @@
+# Qwen2.5-0.5B + Alpaca-GPT4 full 100% — upper-bound baseline (no selection)
+#
+# 실행:
+#   source scripts/setup_env.sh
+#   CUDA_VISIBLE_DEVICES=0 python -m tads.train \
+#       --config configs/experiments/main_05b/qwen25/full_100.yaml
+#
+# 평가:
+#   python -m tads.eval \
+#       --config configs/experiments/main_05b/qwen25/full_100.yaml \
+#       --ckpt ${OUTPUT_ROOT}/main_05b/qwen25/full_100/runs/_latest/epoch_last \
+#       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
+#       --out_dir ${EVAL_RESULTS_ROOT}/main_05b/qwen25/full_100/
+defaults:
+  - configs/base.yaml
+  - configs/methods/full.yaml
+  - configs/models/qwen2.5-0.5b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_05b/qwen25/full_100
+train_epochs: 3
