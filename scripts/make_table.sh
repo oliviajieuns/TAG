@@ -179,24 +179,40 @@ def _segments_from_candidates(candidates):
     return out
 
 
-def _identify_set(jp: Path):
-    """Return one of SET_KEYS if any parent-dir segment matches, else None.
-    Filename stem is NOT checked — set segments are dir-level only."""
+def _identify_set(jp: Path, payload=None):
+    """Return one of SET_KEYS, else None. Priority:
+      (1) any parent-dir segment of `jp` matching SET_KEYS — the on-disk
+          layout that `--out_dir` produces, e.g. .../main_7b/.../*.json
+      (2) any segment of the ckpt path (recorded inside the eval summary)
+          matching SET_KEYS — disambiguates flat eval-results layouts
+          (`<model>/<method>/...`) where Alpaca-GPT4 (main_*) vs
+          Evol-Instruct (evol_*) runs share the same path. eval.py writes
+          `ckpt` as the full training output path
+          (`${OUTPUT_ROOT}/<output_subdir>/runs/.../epoch_last`) so the
+          set marker is preserved there even when the eval-results path
+          drops it."""
     for par in jp.parents:
         if par.name in SET_KEYS:
             return par.name
+    ckpt = _ckpt_for(jp, payload) if payload is not None else None
+    if ckpt:
+        # Walk the ckpt path back-to-front so the deepest (most specific)
+        # marker wins — pathological case: nested OUTPUT_ROOT containing
+        # multiple set names.
+        for seg in reversed(Path(ckpt).parts):
+            if seg in SET_KEYS:
+                return seg
     return None
 
 
-def _base_model_for(jp: Path, payload):
-    """Return the `base_model` string of the eval run that produced `jp`,
-    or None. eval.py only writes base_model into the combined
-    `<exp_label>-eval_summary.json`; per-bench files (`<exp_label>-mmlu.json`
-    etc.) live in the same dir, so we look for the sibling summary."""
-    if isinstance(payload, dict):
-        bm = payload.get("base_model")
-        if bm:
-            return str(bm)
+def _summary_for(jp: Path, payload):
+    """Return the eval-summary JSON dict for the run that produced `jp`,
+    or None. If `jp` IS the summary (payload has `experiment` and
+    `summaries`), return payload. Otherwise look up the sibling
+    `<exp_label>-eval_summary.json`. eval.py writes only this file with
+    the run-level metadata (ckpt, base_model)."""
+    if isinstance(payload, dict) and "summaries" in payload and "experiment" in payload:
+        return payload
     stem = jp.stem
     if "-" in stem:
         prefix = stem.rsplit("-", 1)[0]
@@ -204,11 +220,36 @@ def _base_model_for(jp: Path, payload):
         if sibling.is_file():
             try:
                 with open(sibling) as f:
-                    bm = json.load(f).get("base_model")
-                if bm:
-                    return str(bm)
+                    return json.load(f)
             except Exception:
                 return None
+    return None
+
+
+def _base_model_for(jp: Path, payload):
+    """Return the `base_model` string of the eval run that produced `jp`,
+    or None."""
+    if isinstance(payload, dict):
+        bm = payload.get("base_model")
+        if bm:
+            return str(bm)
+    summary = _summary_for(jp, payload)
+    if summary and summary.get("base_model"):
+        return str(summary["base_model"])
+    return None
+
+
+def _ckpt_for(jp: Path, payload):
+    """Return the `ckpt` path string of the eval run that produced `jp`,
+    or None. Used by `_identify_set` to recover the set marker when the
+    eval-results layout is flat (no main_*/evol_*/light parent dir)."""
+    if isinstance(payload, dict):
+        c = payload.get("ckpt")
+        if c:
+            return str(c)
+    summary = _summary_for(jp, payload)
+    if summary and summary.get("ckpt"):
+        return str(summary["ckpt"])
     return None
 
 
@@ -356,7 +397,7 @@ def collect_all_results(root: Path):
             n_no_model += 1
             continue
 
-        skey = _identify_set(jp)  # None if no main_7b/main_05b/evol_7b segment
+        skey = _identify_set(jp, payload)  # falls back to ckpt-path peek when path lacks a set marker
         # 0.5B fall-through: flat layouts (<model>/<method>/...) carry no
         # `light`/`main_05b` dir hint, so a 0.5B eval would land under
         # (no-set) instead of the Light table. base_model disambiguates
