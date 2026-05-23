@@ -188,9 +188,61 @@ def _identify_set(jp: Path):
     return None
 
 
+def _base_model_for(jp: Path, payload):
+    """Return the `base_model` string of the eval run that produced `jp`,
+    or None. eval.py only writes base_model into the combined
+    `<exp_label>-eval_summary.json`; per-bench files (`<exp_label>-mmlu.json`
+    etc.) live in the same dir, so we look for the sibling summary."""
+    if isinstance(payload, dict):
+        bm = payload.get("base_model")
+        if bm:
+            return str(bm)
+    stem = jp.stem
+    if "-" in stem:
+        prefix = stem.rsplit("-", 1)[0]
+        sibling = jp.parent / f"{prefix}-eval_summary.json"
+        if sibling.is_file():
+            try:
+                with open(sibling) as f:
+                    bm = json.load(f).get("base_model")
+                if bm:
+                    return str(bm)
+            except Exception:
+                return None
+    return None
+
+
+def _model_from_base_model(bm: str):
+    """Map a base_model path string (e.g. '/.../qwen2.5-0.5b') to a
+    MODEL_KEYS key. Authoritative for 7B-vs-0.5B disambiguation when the
+    on-disk path uses the same model dir for both (flat layout where
+    `output_subdir` collides between main_7b/qwen25 and main_05b/qwen25
+    or between paper-faithful and light variants)."""
+    s = bm.lower()
+    # 0.5B FIRST — '/qwen2.5-0.5b' otherwise fluke-matches the '/qwen2.5'
+    # prefix used by the 7B family below.
+    if "0.5b" in s or "-05b" in s or "_05b" in s or s.endswith("05b"):
+        return "qwen2.5-0.5b"
+    if "qwen2.5" in s and ("7b" in s or "-7-b" in s):
+        return "qwen25"
+    if "llama" in s and "7b" in s:
+        return "llama2"
+    if "mistral" in s and "7b" in s:
+        return "mistral"
+    if "deepseek" in s and "7b" in s:
+        return "deepseek"
+    return None
+
+
 def _identify_model(jp: Path, payload):
-    """Return one of MODEL_KEYS if any parent-dir / filename / payload
-    segment matches, else None."""
+    """Return one of MODEL_KEYS. base_model from the eval summary payload
+    is authoritative when present; otherwise we fall back to matching
+    parent-dir / filename / payload-experiment segments."""
+    bm = _base_model_for(jp, payload)
+    if bm:
+        m = _model_from_base_model(bm)
+        if m:
+            return m
     candidates = []
     if isinstance(payload, dict):
         exp = payload.get("experiment")
@@ -305,6 +357,14 @@ def collect_all_results(root: Path):
             continue
 
         skey = _identify_set(jp)  # None if no main_7b/main_05b/evol_7b segment
+        # 0.5B fall-through: flat layouts (<model>/<method>/...) carry no
+        # `light`/`main_05b` dir hint, so a 0.5B eval would land under
+        # (no-set) instead of the Light table. base_model disambiguates
+        # 7B from 0.5B at the JSON level, so once mkey resolves to the
+        # 0.5B model we anchor it to the Light set unless the path
+        # already declared one.
+        if skey is None and mkey == "qwen2.5-0.5b":
+            skey = "light"
 
         set_bucket = by_set.setdefault(skey, {})
         if mkey not in set_bucket:
