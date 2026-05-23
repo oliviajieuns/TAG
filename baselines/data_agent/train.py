@@ -252,8 +252,8 @@ def main() -> None:
         log.info("Epoch %d done | %s", epoch, metrics)
 
         # 7. Save epoch_N/ checkpoint (baseline layout — eval reads epoch_N/).
-        with timer.phase(f"checkpoint_epoch{epoch}", "checkpoint"):
-            ckpt = output_dir / f"epoch_{epoch}"
+        with timer.phase("checkpoint_epoch_last", "checkpoint"):
+            ckpt = output_dir / "epoch_last"
             ckpt.mkdir(parents=True, exist_ok=True)
             m = model.module if hasattr(model, "module") else model
             m.save_pretrained(str(ckpt))

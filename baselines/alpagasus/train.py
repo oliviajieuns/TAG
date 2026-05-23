@@ -285,8 +285,8 @@ def main() -> None:
             "selected": len(selected_indices),
             "wall_sec": round(time.time() - t0, 2),
         })
-        with timer.phase(f"checkpoint_epoch{epoch}", "checkpoint"):
-            ckpt = output_dir / f"epoch_{epoch}"
+        with timer.phase("checkpoint_epoch_last", "checkpoint"):
+            ckpt = output_dir / "epoch_last"
             ckpt.mkdir(parents=True, exist_ok=True)
             m = model.module if hasattr(model, "module") else model
             m.save_pretrained(str(ckpt))

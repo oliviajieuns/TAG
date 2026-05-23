@@ -15,7 +15,7 @@ Usage:
 
 Eval (separate root):
     python -m tads.eval --config <same cfg> \\
-        --ckpt ${OUTPUT_ROOT}/main_7b/llama2/lima/lima_lima/epoch_3 \\
+        --ckpt ${OUTPUT_ROOT}/main_7b/llama2/lima/lima_lima/epoch_last \\
         --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \\
         --out_dir ${LIMA_EVAL_RESULTS_ROOT}/llama2/lima/
 """
@@ -179,8 +179,8 @@ def main() -> None:
             "epoch": epoch, "train_loss": avg_loss, "n": len(dataset),
             "wall_sec": round(time.time() - t0, 2),
         })
-        with timer.phase(f"checkpoint_epoch{epoch}", "checkpoint"):
-            ckpt = output_dir / f"epoch_{epoch}"
+        with timer.phase("checkpoint_epoch_last", "checkpoint"):
+            ckpt = output_dir / "epoch_last"
             ckpt.mkdir(parents=True, exist_ok=True)
             m = model.module if hasattr(model, "module") else model
             m.save_pretrained(str(ckpt))

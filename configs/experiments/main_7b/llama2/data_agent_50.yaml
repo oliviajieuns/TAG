@@ -9,7 +9,7 @@
 # 평가 (별도 root):
 #   python -m tads.eval \
 #       --config configs/experiments/main_7b/llama2/data_agent_50.yaml \
-#       --ckpt ${OUTPUT_ROOT}/main_7b/llama2/data_agent_50/data_agent_dataagent_ppo/epoch_3 \
+#       --ckpt ${OUTPUT_ROOT}/main_7b/llama2/data_agent_50/data_agent_dataagent_ppo/epoch_last \
 #       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
 #       --out_dir ${EVAL_RESULTS_ROOT}/main_7b/llama2/data_agent_50/
 
