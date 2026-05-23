@@ -1,21 +1,26 @@
-"""TADS scoring helpers (paper Eq.2, Eq.3, Eq.7, Eq.8).
+"""TADS scoring helpers (paper §3.3, Algorithm 1).
 
 Pure-function utilities for the deterministic TADS selection pipeline. No
-PPO actor, no learned components — every step is a closed-form operation
-over pool-level statistics.
+PPO actor, no learned components — paper §3.3 final paragraph: "No
+learned transform, learned policy, z-score, or sigmoid is applied inside
+the ranking rule."
 
-Pipeline composition (one epoch):
-    L_i, H_i           = per-sample loss / entropy            (compute_rewards in reward.py)
-    R_i, w             = pool_reward(L_arr, H_arr)            (Eq.2 / Eq.3)
-    R̃_i               = calibrated_utility(R_arr)             (Eq.8 inner: pool z-score)
-    align_i (raw)      = Σ_l <h̄_l(x_i), v_l> / L              (Eq.6, computed in selector)
-    ã_i                = normalize_alignment(align_raw)        (Eq.7)
-    s_i                = tads_score(R̃, ã, λ)                  (Eq.8 outer: multiplicative boost)
-    selection          = top-B indices of s_i                  (Algorithm 1 step)
+Pipeline composition (one refresh step t):
+    L_i, H_i              = per-sample loss / entropy         (compute_rewards in reward.py)
+    R_i, w                = pool_reward(L_arr, H_arr)         (paper Eqs. 3-4)
+    align_i (raw)         = (1/L) Σ_l <h̄_l(x_i), v_l>         (paper §3.3 anchor; in selector)
+    widetilde-align_i     = normalize_alignment(align_raw)     (paper §3.3 anchor — min-max to [0,1])
+    s_i                   = tads_score(R, widetilde-align, λ)  (paper Eq. 10)
+    selection             = top-B indices of s_i              (Algorithm 1)
 
 The functions accept 1-D tensors of shape (N,) where N is the candidate
 pool size. All ops are vectorised and run on CPU after the per-sample
 forwards complete; no GPU memory required.
+
+Note: ``calibrated_utility`` (pool z-score of R) is kept in this module
+for ablation experiments but is NOT part of the paper-faithful pipeline —
+the main path in ``selector.collect_episode`` passes raw R directly to
+``tads_score`` (paper Eq. 10).
 """
 from __future__ import annotations
 
@@ -32,16 +37,18 @@ def pool_reward(
     entropy_arr: torch.Tensor,
     eps: float = 1e-8,
 ) -> Tuple[torch.Tensor, float]:
-    """Compute composite reward (Eq.2) using the pool-level variance ratio (Eq.3).
+    """Composite reward (paper Eq. 3) using the pool-level variance-ratio
+    weight (paper Eq. 4).
 
     Args:
         loss_arr: per-sample mean CE loss over response tokens; shape (N,).
         entropy_arr: per-sample mean predictive entropy; shape (N,).
-        eps: numerical stabiliser in the variance-ratio denominator.
+        eps: numerical stabiliser in the variance-ratio denominator (paper Eq. 4 ε).
 
     Returns:
         (R, w) where R has shape (N,) and w is a python float.
-        w = Var(L) / (Var(L) + Var(H) + eps).  R = w·L + (1-w)·H.
+        w = Var_D(L) / (Var_D(L) + Var_D(H) + ε)   (paper Eq. 4)
+        R_i = w · L_i + (1 - w) · H_i               (paper Eq. 3)
 
     The variances are computed across the FULL pool (every sample of the
     epoch), not per mini-batch. A naive per-batch implementation degenerates
@@ -67,21 +74,23 @@ def calibrated_utility(
     R: torch.Tensor,
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """Paper Eq.8 inner: pool-level z-score.
+    """Pool-level z-score of the composite reward — **ablation-only**.
 
-        R̃_i = (R_i - R̄) / (σ_R + eps)
+    NOT part of the paper-faithful TADS pipeline. Paper §3.3 final
+    paragraph explicitly excludes this: "No learned transform, learned
+    policy, z-score, or sigmoid is applied inside the ranking rule."
+    The main pipeline in ``selector.collect_episode`` passes raw R
+    directly to ``tads_score`` (paper Eq. 10).
 
-    Centres out the additive task-mix-dependent baseline of Eq.5/
-    total-variance and scales by the pool std so cross-task drift in
-    R-magnitude doesn't dominate the ranking. R̃ is real-valued (typically
-    ≈ [-3, +3]); multiplicative composition with the anchor factor
-    `(1 + λ·ã_i)` in tads_score preserves both sign and R-magnitude
-    information (R below the pool mean → negative R̃ → smaller s_i after
-    the anchor multiply).
+    Kept here so ablation runs can opt-in to z-score variant by manually
+    composing ``tads_score(calibrated_utility(R), widetilde_align, lam)``
+    in lieu of the default raw-R path.
+
+        R̃_i = (R_i - R̄) / (σ_R + ε)
 
     Args:
-        R: (N,) composite reward.
-        eps: numerical stabiliser added to the pool std (paper: 1e-6).
+        R: (N,) composite reward (paper Eq. 3).
+        eps: numerical stabiliser added to the pool std.
 
     Returns:
         R̃ of shape (N,), real-valued (typically ≈ [-3, +3]).
@@ -112,20 +121,23 @@ def normalize_alignment(
     *,
     collapse_eps: float = 1e-8,
 ) -> Tuple[torch.Tensor, bool]:
-    """Paper Eq.7: pool-level min-max scaling to [0, 1].
+    """Min-max normalisation of raw alignment to [0, 1] (paper §3.3).
 
-        ã_i = (align_i - min_j align_j) / (max_j align_j - min_j align_j)
+        widetilde-align_i = (align_i - min_j align_j)
+                            / (max_j align_j - min_j align_j)
 
     Args:
-        align_raw: (N,) raw alignment scores (Σ_l <h̄_l(x_i), v_l> / L).
+        align_raw: (N,) raw alignment scores
+            align_i = (1/L) Σ_l <h̄_l(x_i; θ_{t-1}), v_l^{(t)}>  (paper §3.3 anchor).
         collapse_eps: if max-min < collapse_eps the pool is degenerate
             (anchor PCA hit a zero gap or layer dot products cancelled out).
-            We return ã = 0.5 for every sample AND set the `collapsed` flag
-            so the caller can log it — otherwise `boost = 1 + λ·0.5 = const`
-            would silently turn TADS into Data Agent.
+            We return widetilde-align = 0.5 for every sample AND set the
+            ``collapsed`` flag so the caller can log it — otherwise
+            ``1 + λ·0.5 = const`` would silently turn TADS into the
+            composite-reward base ranking.
 
     Returns:
-        (ã, collapsed) — tensor of shape (N,) in [0, 1] and a bool flag.
+        (widetilde-align, collapsed) — tensor of shape (N,) in [0, 1] and a bool flag.
     """
     if align_raw.numel() == 0:
         return align_raw, False
@@ -138,36 +150,42 @@ def normalize_alignment(
 
 
 def tads_score(
-    R_tilde: torch.Tensor,
+    R: torch.Tensor,
     alignment_norm: torch.Tensor,
     lam: float,
 ) -> torch.Tensor:
-    """Paper Eq.8 outer: multiplicative composition of calibrated utility
+    """Paper Eq. 10: multiplicative composition of the composite reward
     and the bounded anchor factor.
 
-        s_i = R̃_i · (1 + λ · ã_i)
+        s_i = R_i · (1 + λ · widetilde-align_i)
 
-    At λ = 0 this reduces to s_i = R̃_i exactly — the clean-ablation
-    property highlighted in the paper. The anchor factor lives in
-    [1, 1+λ] (since ã ∈ [0,1]) so the score is bounded by R̃ · (1+λ).
+    At λ = 0 this recovers the composite-reward base ranking exactly
+    (paper §3.3): s_i = R_i. The anchor factor lives in [1, 1+λ] (since
+    widetilde-align ∈ [0,1]) so the score is bounded by R · (1+λ).
 
     Args:
-        R_tilde: (N,) calibrated utility (pool z-score), real-valued
-            (typically ≈ [-3, +3]; matches `calibrated_utility` above).
-        alignment_norm: (N,) min-max-normalised alignment, each in [0, 1].
-        lam: anchor weighting λ ≥ 0. λ = 0 disables the anchor factor.
+        R: (N,) composite reward (paper Eq. 3). Raw — NOT z-scored.
+            Paper §3.3 final paragraph: "No learned transform, learned
+            policy, z-score, or sigmoid is applied inside the ranking
+            rule." For an ablation variant, callers may compose
+            ``tads_score(calibrated_utility(R), widetilde_align, lam)``
+            but the main pipeline passes raw R here.
+        alignment_norm: (N,) min-max-normalised alignment widetilde-align,
+            each in [0, 1] (paper §3.3 anchor).
+        lam: anchor weighting λ ≥ 0. λ = 0 recovers the composite-reward
+            base ranking exactly (paper §3.3).
 
     Returns:
-        s of shape (N,) — the final per-candidate ranking score.
+        s of shape (N,) — the final per-candidate ranking score (paper Eq. 10).
     """
-    if R_tilde.shape != alignment_norm.shape:
+    if R.shape != alignment_norm.shape:
         raise ValueError(
-            f"tads_score: shape mismatch R̃={tuple(R_tilde.shape)} "
-            f"vs ã={tuple(alignment_norm.shape)}"
+            f"tads_score: shape mismatch R={tuple(R.shape)} "
+            f"vs widetilde-align={tuple(alignment_norm.shape)}"
         )
     if lam < 0:
         raise ValueError(f"tads_score: lam must be >= 0, got {lam}")
-    return R_tilde * (1.0 + lam * alignment_norm)
+    return R * (1.0 + lam * alignment_norm)
 
 
 def select_top_b(scores: torch.Tensor, b: int) -> torch.Tensor:
@@ -185,7 +203,6 @@ def select_top_b(scores: torch.Tensor, b: int) -> torch.Tensor:
     if torch.isnan(scores).any() or torch.isinf(scores).any():
         raise RuntimeError(
             "select_top_b: scores contain NaN/Inf — likely a degenerate "
-            "reward (var=0 → calibrated utility blew up) or an alignment "
-            "collapse upstream."
+            "reward pool or an alignment collapse upstream."
         )
     return scores.topk(b).indices

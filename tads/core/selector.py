@@ -1,30 +1,45 @@
-"""Episode collection and selection scoring (paper §3, Algorithm 1).
+"""Episode collection and selection scoring (paper §3.3, Algorithm 1).
 
-Pure deterministic pipeline — no PPO actor. For each candidate sample we
-compute:
-    h̄_l(x_i)  = sequence-mean of layer-l hidden states           (paper Eq.6 input)
-    L_i        = mean CE loss over response tokens                (== rdiff legacy name)
-    H_i        = mean predictive entropy over response tokens     (== rconf legacy name)
-    R_i        = w·L_i + (1-w)·H_i  composite reward              (paper Eq.2)
-    R̃_i       = (R_i - R̄) / (σ_R + 1e-6)  calibrated utility    (paper Eq.8 inner, pool z-score)
-    ã_i       = min-max-norm( Σ_l <h̄_l(x_i), v_l> / L )           (paper Eq.7)
-    s_i        = R̃_i · (1 + λ · ã_i)                             (paper Eq.8 outer)
+Pure deterministic pipeline — no PPO actor, no learned transform, no
+z-score, no sigmoid (paper §3.3 final paragraph: "No learned transform,
+learned policy, z-score, or sigmoid is applied inside the ranking rule.").
+For each candidate sample we compute:
+
+    h̄_l(x_i)              = sequence-mean of layer-l hidden states  (paper Eq. 2)
+    L_i                   = mean CE loss over response tokens
+    H_i                   = mean predictive entropy over response tokens
+    R_i                   = w · L_i + (1-w) · H_i  composite reward (paper Eq. 3)
+    w                     = Var(L) / (Var(L) + Var(H) + ε)          (paper Eq. 4)
+    align_i               = (1/L) Σ_l ⟨h̄_l(x_i), v_l⟩              (paper §3.3 anchor)
+    widetilde-align_i     = min-max-norm(align) ∈ [0, 1]             (paper §3.3 anchor)
+    s_i                   = R_i · (1 + λ · widetilde-align_i)        (paper Eq. 10)
 
 Top-B samples by s_i form the training subset for this epoch.
-Setting λ=0 (or use_anchor=False) reduces s_i to R̃_i — the clean-ablation
-case where TADS becomes the calibrated-utility baseline.
+Setting λ=0 (or use_anchor=False) recovers the composite-reward base
+ranking exactly (paper §3.3): s_i = R_i.
 
 Note on "reward" naming: `R`, `r_loss`, `r_entropy`, `r_weight` are kept for
 paper / prior-work (DOTS, Active IT) convention compatibility. The TADS
 pipeline carries **no RL semantics** — every step is a closed-form
 deterministic operation over pool-level statistics.
 
-Pool-level scope (paper Eq.3, Eq.7, Eq.8):
-    Variance ratio w, min-max bounds, and the z-score moments for R̃ are all
-    computed across the FULL pool (every candidate sample), not per
-    mini-batch. Per-batch variance degenerates to 0 at batch_size=1; we
-    therefore accumulate per-sample (L_i, H_i) and raw alignment scores
-    across all batches and reduce once after the loop.
+Pool-level scope (paper Eqs. 3-4 + §3.3 anchor min-max):
+    Variance ratio w and min-max bounds for widetilde-align are computed
+    across the FULL pool (every candidate sample), not per mini-batch.
+    Per-batch variance degenerates to 0 at batch_size=1; we therefore
+    accumulate per-sample (L_i, H_i) and raw alignment scores across all
+    batches and reduce once after the loop.
+
+Note on forward-pass count (paper §3.3 vs. this implementation):
+    Paper §3.3 describes a SINGLE forward pass over D that simultaneously
+    provides probe deltas Δh_l(x; θ_{t-1}) for x ∈ D̃_t and candidate mean
+    activations h̄_l(x_i; θ_{t-1}) for all i, so the anchor requires no
+    separate forward. This implementation runs TWO forwards (probe-only in
+    ``TrajectoryAnchor.update`` + full pool here) for engineering
+    modularity. The two-forward design is mathematically equivalent —
+    same v_l, same alignment, same score, same top-B — but adds ~5-10 %
+    wall-clock from the probe forward (~1k samples vs. ~50k pool). A
+    future commit can merge them; the algorithm output is unchanged.
 """
 from __future__ import annotations
 
@@ -37,7 +52,6 @@ from torch.utils.data import DataLoader
 
 from .reward import compute_rewards
 from .scorer import (
-    calibrated_utility,
     normalize_alignment,
     pool_reward,
     select_top_b,
@@ -238,48 +252,50 @@ def collect_episode(
     all_r_loss_t = torch.cat(all_r_loss, dim=0)
     all_r_entropy_t = torch.cat(all_r_entropy, dim=0)
 
-    # ---- Pool-level composite reward (paper Eq.2-3) ----
+    # ---- Pool-level composite reward (paper Eqs. 3-4) ----
     R, r_weight_value = pool_reward(all_r_loss_t, all_r_entropy_t)
 
-    # ---- Calibrated utility R̃ (paper Eq.8 inner) ----
-    R_tilde = calibrated_utility(R)
-
-    # ---- Alignment and final score (paper Eq.7 / Eq.8 outer) ----
+    # ---- Alignment and final score (paper §3.3 anchor + Eq. 10) ----
+    # Paper §3.3 final paragraph explicitly excludes z-score / R̃ from the
+    # ranking rule. We therefore pass raw R directly to `tads_score`, which
+    # computes s_i = R_i · (1 + λ · widetilde-align_i)  (paper Eq. 10).
     if apply_anchor:
         alignment_raw = torch.cat(all_alignment_raw, dim=0).view(-1)
         alignment, _alignment_collapsed = normalize_alignment(alignment_raw)
         if _alignment_collapsed:
             logger.error(
                 "TADS alignment COLLAPSED (max-min < 1e-8) | "
-                "alignment_raw.std=%.2e. ã set to 0.5 for every sample → "
-                "boost becomes constant and TADS reduces to the calibrated-"
-                "utility baseline for this epoch. Check anchor PCA gap "
-                "or multi-layer cancellation.",
+                "alignment_raw.std=%.2e. widetilde-align set to 0.5 for "
+                "every sample → anchor factor becomes constant (1 + 0.5λ) "
+                "and TADS reduces to the composite-reward base ranking "
+                "for this epoch. Check anchor PCA gap or multi-layer "
+                "cancellation.",
                 float(alignment_raw.std().item()),
             )
-        score = tads_score(R_tilde, alignment, lam)
+        score = tads_score(R, alignment, lam)
         align_mean = float(alignment.mean().item())
         align_std = float(alignment.std().item())
         boost = 1.0 + lam * alignment
         logger.info(
-            "TADS score | epoch=%d | lam=%.3f | "
-            "R_mean=%.4f | R̃_mean=%.4f | align_mean=%.4f | align_std=%.4f | "
+            "TADS score | epoch=%d | lam=%.3f | R_mean=%.4f | "
+            "align_mean=%.4f | align_std=%.4f | "
             "boost_mean=%.4f | boost_max=%.4f",
             epoch, lam,
-            float(R.mean().item()), float(R_tilde.mean().item()),
+            float(R.mean().item()),
             align_mean, align_std,
             float(boost.mean().item()), float(boost.max().item()),
         )
     else:
-        score = R_tilde
+        # λ = 0 or use_anchor=False — paper §3.3: "Setting λ = 0 recovers
+        # the composite-reward base ranking exactly."
+        score = R
         alignment = None
         align_mean = None
         align_std = None
         _alignment_collapsed = False
         logger.info(
-            "Calibrated-utility-only score (no anchor) | epoch=%d | "
-            "R_mean=%.4f | R̃_mean=%.4f",
-            epoch, float(R.mean().item()), float(R_tilde.mean().item()),
+            "Composite-reward-only score (no anchor) | epoch=%d | R_mean=%.4f",
+            epoch, float(R.mean().item()),
         )
 
     # ---- Top-B selection ----
@@ -324,7 +340,6 @@ def collect_episode(
     return {
         "selected_indices": selected_indices,
         "rewards": R,
-        "calibrated_utility": R_tilde,
         "alignment": alignment,
         "r_loss_mean": r_loss_mean,
         "r_entropy_mean": r_entropy_mean,

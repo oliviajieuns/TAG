@@ -1,20 +1,32 @@
-"""Trajectory Anchor — multi-layer capability direction v_l.
+"""Trajectory Anchor — multi-layer capability direction v_l (paper §3.3).
 
-For each layer l and sample x, the contextualization vector is
-    Δh_l(x; θ_t) := h_l^last(x; θ_t) - h_l^first(x; θ_t).
-For each layer we PCA the set {Δh_l(x; θ_t)} over a probe subset and take
-the top-1 eigenvector as that layer's capability direction v_l (sign
-calibrated so ⟨v_l, E[Δh_l]⟩ > 0). This v_l extraction is shared between
-TADS and NAIT (both consume the same {Δh_l} PCA).
+For each layer l and sample x, the contextualisation vector is (paper Eq. 1):
+    Δh_l(x; θ_t) := h_l^{(K_x)}(x; θ_t) - h_l^{(1)}(x; θ_t).
 
-At scoring time:
-    TADS (paper Eq.6): align_i = (1/L) Σ_l ⟨h̄_l(x_i), v_l⟩,
-        where h̄_l = (1/K_x) Σ_k h_l^(k) is the sequence-mean of layer-l
-        hidden states (padding excluded). Inlined in tads.core.selector.
-    NAIT (Eq 5):       s_y = Σ_l ⟨Δh_l(y), v_l⟩  (same delta as anchor side).
+At refresh step t, over a uniformly-sampled probe subset D̃_t ⊂ D
+(|D̃_t| = n_p), we compute (paper Eqs. 7-8):
+    mean probe delta   Δh̄_l^{(t)} = (1/|D̃_t|) Σ_{x ∈ D̃_t} Δh_l(x; θ_{t-1})
+    centred covariance Σ̂_l^{(t)} = (1/|D̃_t|) Σ_x (Δh_l - Δh̄)(Δh_l - Δh̄)^T
+The uncalibrated anchor ṽ_l^{(t)} is the top unit eigenvector of Σ̂_l^{(t)}
+(paper Eq. 9).
+
+Sign calibration (paper §3.3, immediately after Eq. 9; also Theorem 1
+assumption (3) "Consistent temporal sign calibration"):
+    t = 1:  align ṽ_l^{(1)} with Δh̄_l^{(1)}   (spatial: ⟨ṽ, Δh̄⟩ > 0)
+    t > 1:  align ṽ_l^{(t)} with v_l^{(t-1)}    (temporal: ⟨ṽ_l^{(t)}, v_l^{(t-1)}⟩ > 0)
+The resulting sign-calibrated anchor is denoted v_l^{(t)}.
+
+At scoring time TADS projects h̄_l (paper Eq. 2 sequence-mean activation):
+    align_i^{(t)} = (1/L) Σ_l ⟨h̄_l(x_i; θ_{t-1}), v_l^{(t)}⟩  (paper §3.3 anchor)
+    widetilde-align_i^{(t)} = min-max-norm(align) ∈ [0, 1]    (paper §3.3 anchor)
+
+This v_l extraction is shared between TADS and NAIT (both consume the
+same {Δh_l} PCA), but the scoring projection differs by design: TADS
+uses h̄_l (sequence-mean, Eq. 2); NAIT (Chen et al., ICLR 2026, Eq. 5)
+uses Δh_l on the candidate side too.
 
 Layer selection (``layer_indices`` arg):
-    "all"             → every decoder layer (NAIT paper, recommended)
+    "all"             → every decoder layer (paper default, recommended)
     "middle_to_last"  → layers L//2 .. L-1 (memory-friendlier ablation)
     list[int]         → explicit indices
     None              → falls back to legacy single-layer mode using ``layer_idx``
@@ -307,9 +319,27 @@ class TrajectoryAnchor:
             pca = self._pca_top1(delta_l)
             del delta_l  # ~540 MB freed before next layer's cat allocates.
             v_l = pca["v"]
-            # Sign calibration: ⟨v_l, μ_l⟩ > 0.
-            if torch.dot(v_l, pca["mu"]) < 0:
-                v_l = -v_l
+            # Sign calibration (paper §3.3, immediately after Eq. 9; also
+            # Theorem 1 assumption (3) "Consistent temporal sign calibration"):
+            #   t = 1 (no previous v_l yet): spatial — align ṽ_l^{(1)} with
+            #       Δh̄_l^{(1)} so ⟨v_l^{(1)}, Δh̄_l^{(1)}⟩ > 0.
+            #   t > 1: temporal — align ṽ_l^{(t)} with v_l^{(t-1)} so
+            #       ⟨v_l^{(t)}, v_l^{(t-1)}⟩ > 0.
+            # `self.v_by_layer` still holds the PREVIOUS epoch's calibrated v_l
+            # (it gets overwritten by `new_v_by_layer` at the end of this loop).
+            # At t = 1 it's empty so we fall back to the spatial rule. We also
+            # fall back to spatial when the previous-epoch dict is missing this
+            # layer key (rare, but possible if `layer_indices_spec` changed
+            # between refresh calls).
+            prev_v_l = self.v_by_layer.get(li)
+            if prev_v_l is not None:
+                # Temporal: align with previous epoch's calibrated v_l^{(t-1)}.
+                if torch.dot(v_l, prev_v_l) < 0:
+                    v_l = -v_l
+            else:
+                # Spatial (t = 1 or first call): align with mean Δh̄_l.
+                if torch.dot(v_l, pca["mu"]) < 0:
+                    v_l = -v_l
             new_v_by_layer[li] = v_l
             new_l1[li] = pca["lambda_1"]
             new_l2[li] = pca["lambda_2"]
