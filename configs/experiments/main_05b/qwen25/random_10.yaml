@@ -1,0 +1,10 @@
+# Qwen2.5-0.5B + Alpaca-GPT4 random 10% — paper-faithful lower-bound baseline
+defaults:
+  - configs/base.yaml
+  - configs/methods/random.yaml
+  - configs/models/qwen2.5-0.5b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_05b/qwen25/random_10
+selection_ratio: 0.1
+train_epochs: 3

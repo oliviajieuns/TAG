@@ -1,0 +1,24 @@
+# Qwen2.5-0.5B + Alpaca-GPT4 + Data Agent (Yang et al., ICML 2026) at 10% selection
+#
+# 실행:
+#   source scripts/setup_env.sh
+#   CUDA_VISIBLE_DEVICES=0 python -m baselines.data_agent.train \
+#       --config configs/experiments/main_05b/qwen25/data_agent_10.yaml \
+#       --tag DataAgent-PPO
+#
+# 평가 (별도 root):
+#   python -m tads.eval \
+#       --config configs/experiments/main_05b/qwen25/data_agent_10.yaml \
+#       --ckpt ${OUTPUT_ROOT}/main_05b/qwen25/data_agent_10/data_agent_dataagent_ppo/epoch_3 \
+#       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
+#       --out_dir ${EVAL_RESULTS_ROOT}/main_05b/qwen25/data_agent_10/
+defaults:
+  - configs/base.yaml
+  - configs/methods/data_agent.yaml
+  - configs/models/qwen2.5-0.5b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_05b/qwen25/data_agent_10
+selection_ratio: 0.1
+train_epochs: 3
+episode_batch_size: 32

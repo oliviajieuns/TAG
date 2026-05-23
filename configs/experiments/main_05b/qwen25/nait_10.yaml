@@ -1,0 +1,27 @@
+# Qwen2.5-0.5B + Alpaca-GPT4 + NAIT baseline (Chen et al., ICLR 2026) at 10% selection
+#
+# Selection rule: s_y = Σ_l <Δh_l(y), v_l>  (NAIT Eq. 5)
+#   - 같은 PCA 로 v_l 추출 (paper §3.3 Eqs. 7-9 와 동일)
+#   - 다만 scoring 시 sequence-mean h̄ 가 아니라 Δh (=last-first) 사용
+#
+# 실행:
+#   source scripts/setup_env.sh
+#   CUDA_VISIBLE_DEVICES=0 python -m baselines.nait.train \
+#       --config configs/experiments/main_05b/qwen25/nait_10.yaml \
+#       --tag NAIT-Mix
+#
+# 평가:
+#   python -m tads.eval \
+#       --config configs/experiments/main_05b/qwen25/nait_10.yaml \
+#       --ckpt ${OUTPUT_ROOT}/main_05b/qwen25/nait_10/nait_nait_mix/epoch_3 \
+#       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
+#       --out_dir ${NAIT_EVAL_RESULTS_ROOT}/main_05b/qwen25/nait_10/
+defaults:
+  - configs/base.yaml
+  - configs/methods/nait.yaml
+  - configs/models/qwen2.5-0.5b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_05b/qwen25/nait_10
+selection_ratio: 0.1
+train_epochs: 3

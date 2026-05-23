@@ -1,0 +1,29 @@
+# Qwen2.5-0.5B + Alpaca-GPT4 + TADS (paper Eq. 10, λ=1) at 10% selection
+#
+# Score: s_i^(t) = R_i^(t) · (1 + λ · widetilde-align_i^(t))   (paper Eq. 10)
+#   R_i^(t)             = w·L_i + (1-w)·H_i                    (paper Eq. 3)
+#   widetilde-align_i   = min-max-norm((1/L) Σ_l <h̄_l, v_l>)   (paper §3.3)
+#   sign cal            = spatial (t=1) / temporal (t>1)        (paper §3.3 after Eq. 9)
+#
+# 실행:
+#   source scripts/setup_env.sh
+#   CUDA_VISIBLE_DEVICES=0 python -m tads.train \
+#       --config configs/experiments/main_05b/qwen25/tads_10.yaml
+defaults:
+  - configs/base.yaml
+  - configs/methods/tads.yaml
+  - configs/models/qwen2.5-0.5b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_05b/qwen25/tads_10
+selection_ratio: 0.1
+train_epochs: 3
+
+# Qwen2.5-0.5B 은 작아서 forward / PCA 모두 7B 대비 ~10× 빠름 — episode
+# batch 와 PCA batch 를 키워 wall-time 단축.
+episode_batch_size: 32
+
+anchor:
+  layer_indices: all     # paper-default, 24 decoder layers (Qwen2.5-0.5B)
+  max_samples_for_pca: 1024
+  pca_batch_size: 16
