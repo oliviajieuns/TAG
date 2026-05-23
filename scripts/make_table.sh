@@ -3,17 +3,25 @@
 # split by model (llama2 / qwen25 / mistral / deepseek).
 #
 # Usage:
-#   bash scripts/make_table.sh <eval_results_root> [output_format]
+#   bash scripts/make_table.sh <eval_results_root> [output_format] [--set NAME]
 #
 #   <eval_results_root> : directory that contains per-model / per-method
 #                         sub-dirs. Typical layout:
 #                           <root>/main_7b/llama2/<method>/runs/...
-#                           <root>/main_7b/qwen25/<method>/runs/...
+#                           <root>/evol_7b/llama2/<method>/runs/...
 #                         Either model-prefixed or flat layout works — model
 #                         is identified by ANY parent-dir or filename segment
 #                         matching one of: llama2 / qwen25 / mistral / deepseek.
 #                         Falls back to $EVAL_RESULTS_ROOT when omitted.
 #   [output_format]     : markdown (default) | csv | tsv
+#   --set NAME          : restrict scan to JSONs under a path-segment
+#                         matching NAME (e.g. --set main_7b for Table 1,
+#                         --set evol_7b for Table 5). Without it, ALL sets
+#                         are merged into one (model, method) cell — fine
+#                         when only one set has data; produces incorrect
+#                         numbers when both main_7b/ and evol_7b/ live under
+#                         the same EVAL_RESULTS_ROOT. A heads-up is printed
+#                         to stderr when that collision is detected.
 #
 # Output: one table PER model that has at least one eval JSON. Models with
 # no data are skipped entirely. Missing cells (model has no result for that
@@ -34,22 +42,42 @@
 # if Full FT row missing for that model.
 set -euo pipefail
 
-ROOT="${1:-${EVAL_RESULTS_ROOT:-}}"
-OUT_FMT="${2:-markdown}"
+ROOT=""
+OUT_FMT=""
+SET_FILTER=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --set)    SET_FILTER="$2"; shift 2 ;;
+    --set=*)  SET_FILTER="${1#*=}"; shift ;;
+    -h|--help)
+      sed -n '2,30p' "$0"; exit 0 ;;
+    *)
+      if [ -z "$ROOT" ]; then ROOT="$1"
+      elif [ -z "$OUT_FMT" ]; then OUT_FMT="$1"
+      else echo "[make_table] unexpected arg: $1" >&2; exit 1
+      fi
+      shift ;;
+  esac
+done
+
+ROOT="${ROOT:-${EVAL_RESULTS_ROOT:-}}"
+OUT_FMT="${OUT_FMT:-markdown}"
 
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
   echo "[make_table] eval_results_root not given or not a directory: ${ROOT:-<empty>}" >&2
-  echo "Usage: bash scripts/make_table.sh <eval_results_root> [markdown|csv|tsv]" >&2
+  echo "Usage: bash scripts/make_table.sh <eval_results_root> [markdown|csv|tsv] [--set main_7b|evol_7b|...]" >&2
   exit 1
 fi
 
-python3 - "$ROOT" "$OUT_FMT" <<'PY'
+python3 - "$ROOT" "$OUT_FMT" "$SET_FILTER" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 ROOT = Path(sys.argv[1]).resolve()
 OUT_FMT = sys.argv[2].lower()
+SET_FILTER = sys.argv[3] if len(sys.argv) > 3 else ""
 
 # Model-axis: (dir_key, human-readable display name).
 # `dir_key` must match the model-segment that appears in the file path /
@@ -92,15 +120,32 @@ BENCHES = [
 
 MISSING = "-"
 
+# Known table-set segments — used only for collision-detection in the no-filter
+# path. Add new sets here as they're introduced (e.g. main_7b, evol_7b, ...).
+KNOWN_SETS = ("main_7b", "evol_7b")
+
+
+def _path_segments(p: Path):
+    """All parent-dir names + filename stem, used for set-filter matching."""
+    segs = [p.stem]
+    for par in p.parents:
+        segs.append(par.name)
+    return segs
+
 
 def _all_json_files(root: Path):
-    """Yield every *.json under root recursively. Skips .tmp / .lock side-files."""
+    """Yield every *.json under root recursively. Skips .tmp / .lock side-files.
+    When SET_FILTER is set, only files whose path includes that segment are
+    yielded.
+    """
     if not root.exists():
         return
     for p in root.rglob("*.json"):
         if not p.is_file():
             continue
         if p.name.endswith(".tmp") or ".lock" in p.name:
+            continue
+        if SET_FILTER and SET_FILTER not in _path_segments(p):
             continue
         yield p
 
@@ -200,6 +245,7 @@ def collect_all_results(root: Path):
     n_no_method = 0
     n_no_model = 0
     fail_log = []
+    sets_seen: set = set()
 
     for jp in _all_json_files(root):
         n_total += 1
@@ -233,11 +279,25 @@ def collect_all_results(root: Path):
             for v in _accs_from_payload(payload, bench):
                 by_model[mkey][mdir][bench].append((v, jp))
 
+        for s in _path_segments(jp):
+            if s in KNOWN_SETS:
+                sets_seen.add(s)
+
     sys.stderr.write(
         f"[make_table] scanned={n_total}  parsed={n_parsed}  parse_fail={n_fail}  "
         f"no_method={n_no_method}  no_model={n_no_model}  "
         f"models_found={','.join(sorted(by_model.keys())) or '(none)'}\n"
     )
+    if SET_FILTER:
+        sys.stderr.write(f"[make_table] active --set filter: {SET_FILTER}\n")
+    elif len(sets_seen) > 1:
+        sys.stderr.write(
+            f"[make_table] WARNING: multiple table-sets detected under root "
+            f"({', '.join(sorted(sets_seen))}). They've been MERGED into the "
+            f"same (model, method) cells — numbers will be wrong if you meant "
+            f"to report them separately. Re-run with `--set <name>` to filter "
+            f"to one set at a time.\n"
+        )
     if fail_log:
         sys.stderr.write(
             f"[make_table] {len(fail_log)} file(s) failed JSON parse — see "
