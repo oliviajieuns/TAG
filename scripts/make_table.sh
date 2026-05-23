@@ -67,6 +67,7 @@ KNOWN_SETS = [
     ("main_7b",  "Main — 7B (Table 1)"),
     ("main_05b", "Main — 0.5B (light)"),
     ("evol_7b",  "Evol-Instruct — 7B (Table 5)"),
+    ("light",    "Light sanity — 0.5B"),
 ]
 SET_KEYS = {s[0] for s in KNOWN_SETS}
 SET_ORDER = {s[0]: i for i, s in enumerate(KNOWN_SETS)}
@@ -76,13 +77,25 @@ SET_DISPLAY = {k: d for k, d in KNOWN_SETS}
 # model-segment that appears in the file path / experiment label
 # (see _identify_model).
 MODELS = [
-    ("llama2",   "LLaMA-2-7B"),
-    ("qwen25",   "Qwen2.5-7B"),
-    ("mistral",  "Mistral-7B"),
-    ("deepseek", "DeepSeek-7B"),
+    ("llama2",        "LLaMA-2-7B"),
+    ("qwen25",        "Qwen2.5-7B"),
+    ("mistral",       "Mistral-7B"),
+    ("deepseek",      "DeepSeek-7B"),
+    ("qwen2.5-0.5b",  "Qwen2.5-0.5B"),
 ]
 MODEL_KEYS = {m[0] for m in MODELS}
 MODEL_ORDER = {m[0]: i for i, m in enumerate(MODELS)}
+
+# Model aliases: surface form on disk → canonical MODELS key. Only one
+# 0.5B model exists in this codebase (qwen2.5-0.5b), so a bare "05b" /
+# "0.5b" token unambiguously identifies it. Used to pick up the
+# `light/<method>_05b/` layout whose path never carries a literal
+# "qwen2.5-0.5b" segment.
+MODEL_ALIASES = {
+    "qwen05b":  "qwen2.5-0.5b",
+    "0.5b":     "qwen2.5-0.5b",
+    "05b":      "qwen2.5-0.5b",
+}
 
 # Per-(set, model) display override. Falls back to MODELS[*][1] when no
 # entry. Used so e.g. `main_05b/qwen25/` shows "Qwen2.5-0.5B" instead of
@@ -106,6 +119,17 @@ METHODS = [
     ("08",  "Composite-reward only (λ=0)",     "data_agent_10"),
     ("09",  "TADS (λ=1)",                      "tads_10"),
 ]
+
+# Method aliases: light/<method>_05b/ configs run the same selection
+# strategy as the paper-faithful main_*/<method>_{10,100}/ configs
+# (selection_ratio + train_epochs equivalent), so they collapse onto the
+# same row instead of producing a separate "tads_05b" row.
+METHOD_ALIASES = {
+    "tads_05b":       "tads_10",
+    "random_05b":     "random_10",
+    "data_agent_05b": "data_agent_10",
+    "full_05b":       "full_100",
+}
 
 BENCHES = [
     ("mmlu",      "MMLU\nexam"),
@@ -178,6 +202,8 @@ def _identify_model(jp: Path, payload):
     for cand in _segments_from_candidates(candidates):
         if cand in MODEL_KEYS:
             return cand
+        if cand in MODEL_ALIASES:
+            return MODEL_ALIASES[cand]
     return None
 
 
@@ -205,6 +231,9 @@ def _identify_method(jp: Path, payload):
                 continue
             if cand == mdir or cand.endswith("_" + mdir) or cand.endswith("/" + mdir):
                 return mdir
+        for alias, canonical in METHOD_ALIASES.items():
+            if cand == alias or cand.endswith("_" + alias) or cand.endswith("/" + alias):
+                return canonical
     return None
 
 
