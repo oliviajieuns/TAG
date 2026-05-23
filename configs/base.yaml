@@ -31,7 +31,7 @@ bbh_data_dir: ${oc.env:BBH_DATA_DIR,/group-volume/IT-datasets/bbh}
 data_files: ${oc.env:ALPACA_DATA_FILES,/group-volume/IT-datasets/alpaca_gpt4/data/*.json}
 dataset_name: ${oc.env:ALPACA_DATASET_NAME,liangxin/Alpaca_GPT4}
 prompt_style: alpaca_default
-max_seq_len: 512
+max_seq_len: 1024
 
 # --- Training ---
 seed: 42
