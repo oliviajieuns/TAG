@@ -63,11 +63,14 @@ ROOT = Path(sys.argv[1]).resolve()
 OUT_FMT = sys.argv[2].lower()
 
 # Table-set axis. Order here = emit order.
+# Dataset label per set. Header renders as `<Model> (<dataset>)`. main_05b
+# and light both use Alpaca-GPT4; we tag `light` with a variant qualifier
+# so the two 0.5B tables don't collide on header text.
 KNOWN_SETS = [
-    ("main_7b",  "Main — 7B (Table 1)"),
-    ("main_05b", "Main — 0.5B (light)"),
-    ("evol_7b",  "Evol-Instruct — 7B (Table 5)"),
-    ("light",    "Light sanity — 0.5B"),
+    ("main_7b",  "Alpaca-GPT4"),
+    ("main_05b", "Alpaca-GPT4"),
+    ("evol_7b",  "Evol-Instruct"),
+    ("light",    "Alpaca-GPT4 — Light"),
 ]
 SET_KEYS = {s[0] for s in KNOWN_SETS}
 SET_ORDER = {s[0]: i for i, s in enumerate(KNOWN_SETS)}
@@ -482,7 +485,7 @@ def _model_display(skey, mkey):
 
 def _set_display(skey):
     if skey is None:
-        return "(no recognised set in path)"
+        return "unknown dataset"
     return SET_DISPLAY.get(skey, skey)
 
 
@@ -532,7 +535,7 @@ def emit_model_table(skey, mkey, model_results, out_fmt, *, is_first):
             return s
         if not is_first:
             print()  # blank separator between tables
-        print(f"# {set_disp}  /  Model: {disp} ({mkey})")
+        print(f"# {disp} ({set_disp})")
         headers_flat = (
             ["ID", "Method"]
             + [b.split("\n")[0] for _, b in BENCHES]
@@ -548,7 +551,7 @@ def emit_model_table(skey, mkey, model_results, out_fmt, *, is_first):
     else:  # markdown
         if not is_first:
             print()  # blank line between tables
-        print(f"## {set_disp}  /  Model: {disp} ({mkey})")
+        print(f"## {disp} ({set_disp})")
         print()
         line1 = (
             ["ID", "Method"]
@@ -605,7 +608,6 @@ idx_by_bench = {b: i for i, (b, _) in enumerate(BENCHES)}
 
 for skey in _sorted_set_keys(all_results.keys()):
     set_disp = _set_display(skey)
-    sys.stderr.write(f"\n[make_table] ##### {set_disp} ({_set_label(skey)}) #####\n")
     set_results = all_results[skey]
     mkeys_sorted = sorted(
         set_results.keys(),
@@ -613,7 +615,7 @@ for skey in _sorted_set_keys(all_results.keys()):
     )
     for mkey in mkeys_sorted:
         disp = _model_display(skey, mkey)
-        sys.stderr.write(f"\n[make_table] ===== Model: {disp} ({mkey}) =====\n")
+        sys.stderr.write(f"\n[make_table] ===== {disp} ({set_disp}) =====\n")
         rows = build_rows_for_model(set_results[mkey])
         for mid, mname, vals_lists, _avg in rows:
             if not mdir_by_id[mid]:
