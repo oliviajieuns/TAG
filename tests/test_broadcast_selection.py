@@ -32,6 +32,11 @@ import sys
 import torch
 import torch.distributed as dist
 
+try:
+    import pytest
+except ImportError:  # Keep direct `torchrun ... test_broadcast_selection.py` usable.
+    pytest = None
+
 # Allow `python tests/test_broadcast_selection.py` from repo root without install.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -58,6 +63,26 @@ def _teardown() -> None:
     if is_dist_initialized():
         dist.barrier()
         dist.destroy_process_group()
+
+
+def _has_torchrun_env() -> bool:
+    return all(k in os.environ for k in ("RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"))
+
+
+if pytest is not None:
+
+    @pytest.fixture(scope="module")
+    def device():
+        if not _has_torchrun_env():
+            pytest.skip(
+                "distributed test requires torchrun, e.g. "
+                "`torchrun --standalone --nproc-per-node=2 tests/test_broadcast_selection.py`",
+            )
+        dev = _setup()
+        try:
+            yield dev
+        finally:
+            _teardown()
 
 
 def test_broadcast_selection_uses_rank0_scores(device: torch.device) -> None:
