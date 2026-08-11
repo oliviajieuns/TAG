@@ -239,13 +239,60 @@ def _setup_ddp() -> bool:
     """
     if "RANK" in os.environ and not dist.is_initialized():
         from datetime import timedelta
+        # Backend selectable via TADS_DDP_BACKEND env. NCCL is fast but
+        # has the idle-then-hang failure mode under rank-0-solo workloads
+        # like collect_episode. gloo is ~5x slower but TCP-based and far
+        # more robust; use it as an escape hatch when NCCL won't behave.
+        #     export TADS_DDP_BACKEND=gloo
+        backend = os.environ.get("TADS_DDP_BACKEND", "nccl").lower()
+        if backend not in ("nccl", "gloo"):
+            print(f"[ddp] unknown TADS_DDP_BACKEND={backend!r}, falling back to nccl",
+                  flush=True)
+            backend = "nccl"
+        print(f"[ddp] initialising process group | backend={backend}", flush=True)
         dist.init_process_group(
-            backend="nccl",
+            backend=backend,
             timeout=timedelta(minutes=120),
         )
         torch.cuda.set_device(local_rank())
         return True
     return dist.is_initialized()
+
+
+def _reinit_ddp_after_long_idle(model, use_ddp: bool):
+    """Destroy and recreate the NCCL process group + re-wrap model in DDP.
+
+    Empirically, after rank 0 spends 30+ minutes in collect_episode while
+    other ranks sit in file-polling (no NCCL traffic), the NCCL communicator
+    enters a state where the next collective hangs — even with our
+    120-minute init timeout. The diagnostic is "SFT step entry step=0
+    appears on every rank but no rank reaches step backward done", meaning
+    forward worked but the first all_reduce inside backward stalls.
+
+    Recovery: tear the process group down and bring it back up before SFT
+    starts. The DDP wrapper holds a reference to the old (dead) group, so
+    we also have to unwrap the model and re-wrap it after the reinit.
+    """
+    if not dist.is_initialized() or not use_ddp:
+        return model
+    from datetime import timedelta
+    inner = model.module if hasattr(model, "module") else model
+    backend = dist.get_backend()
+    print(f"[ddp-reinit] rank={dist.get_rank()} destroying old group", flush=True)
+    dist.destroy_process_group()
+    dist.init_process_group(backend=backend, timeout=timedelta(minutes=120))
+    print(f"[ddp-reinit] rank={dist.get_rank()} fresh group up", flush=True)
+    lr = int(os.environ.get("LOCAL_RANK", "0"))
+    # Match the original wrap. find_unused_parameters mirrors load_model.
+    find_unused = any(
+        not p.requires_grad for p in inner.parameters()
+    )  # heuristic: LoRA has frozen base
+    return torch.nn.parallel.DistributedDataParallel(
+        inner,
+        device_ids=[lr],
+        output_device=lr,
+        find_unused_parameters=find_unused,
+    )
 
 
 def main() -> None:
@@ -277,6 +324,18 @@ def main() -> None:
     # advisory; it fires on every batch when any sample is longer than
     # max_seq_len, even though we truncate intentionally.
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+
+    # NCCL idle protection. The internal watchdog default (600 s) trips
+    # 3x during a 30-minute rank-0 solo collect_episode and silently
+    # marks the communicator dead — the next SFT all_reduce then hangs
+    # forever. Raise the heartbeat ceiling so the communicator survives
+    # the long single-rank phase. Also disable async error handling so
+    # any real NCCL failure raises immediately instead of hanging.
+    os.environ.setdefault("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", "99999")
+    os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "0")
+    os.environ.setdefault("NCCL_ASYNC_ERROR_HANDLING", "0")
+    os.environ.setdefault("NCCL_BLOCKING_WAIT", "0")
+
     quiet_repeated_warnings()
 
     args = parse_args()
@@ -720,6 +779,20 @@ def main() -> None:
                 "0 batches and DDP all_reduce at end of empty loop is a known "
                 "hang source. Check selection_ratio and dataset size.",
             )
+
+        # NCCL reinit workaround: OPT-IN via TADS_NCCL_REINIT=1.
+        # Empirically `destroy_process_group` itself can hang when the
+        # NCCL communicator is in a deeply broken state — making this
+        # "recovery" path itself a deadlock. Default is OFF; rely on
+        # TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=99999 + async-error env vars
+        # to prevent the communicator from dying in the first place.
+        if (
+            method in ("tads", "data_agent")
+            and use_ddp
+            and os.environ.get("TADS_NCCL_REINIT", "0") == "1"
+        ):
+            model = _reinit_ddp_after_long_idle(model, use_ddp)
+
         subset = Subset(dataset, selected)
         loader = make_dataloader(
             subset, batch_size=batch_size, shuffle=True, seed=seed, epoch=epoch,

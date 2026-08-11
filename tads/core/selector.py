@@ -154,6 +154,16 @@ def collect_episode(
         selection_ratio, apply_anchor, lam, cuda_mem_str(), tag,
     )
 
+    # NCCL heartbeat collective has been REMOVED here. Earlier experiments
+    # had rank-0 fire `dist.all_reduce(zeros(1))` every 30s during this loop
+    # and have workers do the same inside their file-polling loop. The race:
+    # when rank 0 exits the collect loop and writes the ready sentinel,
+    # a worker whose 30-second timer is about to elapse can fire one more
+    # all_reduce after rank 0 has already left selection.py for SFT —
+    # rank 0's next collective is a DDP gradient all_reduce on real tensors,
+    # which doesn't match the worker's zeros(1) all_reduce → both hang.
+    # NCCL idle protection now relies entirely on the
+    # TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC env var (set in train.main).
     for step, batch in enumerate(loader, start=1):
         input_ids = batch["input_ids"].to(device, non_blocking=True)
         attention_mask = batch["attention_mask"].to(device, non_blocking=True)

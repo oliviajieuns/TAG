@@ -61,7 +61,7 @@ def _random_indices(n_total, ratio, seed, epoch):
     return perm[:k]
 
 
-def _broadcast_selection(selected, *, epoch=0, output_dir=None):
+def _broadcast_selection(selected, *, epoch=0, output_dir=None, device=None):
     """File-poll selection share — no inter-write/read NCCL barrier.
 
     Every rank takes the same code path:
@@ -141,8 +141,15 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None):
         )
         result = selected
     else:
-        # Workers poll on disk. No NCCL collective during the wait, so
-        # rank 0's long collect_episode can't trigger a collective watchdog.
+        # Workers poll on disk for the ready sentinel. NO NCCL collective is
+        # called in this loop — earlier heartbeat experiments introduced a
+        # race where the worker's all_reduce could fire AFTER rank 0 had
+        # already left _broadcast_selection (rank 0's matching call lives
+        # inside collect_episode, not after), and the unmatched collective
+        # would then hang forever.
+        # NCCL idle protection relies entirely on TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC
+        # being raised (set in train.main's environment); the collective
+        # itself never fires here.
         t_start = time.time()
         last_log = t_start
         while not ready_path.exists():
@@ -266,6 +273,7 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
                     selected = _broadcast_selection(
                         selected, epoch=epoch,
                         output_dir=_output_dir_raw,
+                        device=device,
                     )
                     extras["selection_cache_reused"] = True
                     return selected, extras
@@ -344,7 +352,7 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
         or "/tmp/tads_selection_share"
     )
     selected = _broadcast_selection(
-        selected, epoch=epoch, output_dir=_output_dir,
+        selected, epoch=epoch, output_dir=_output_dir, device=device,
     )
     return selected, extras
 

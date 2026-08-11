@@ -140,8 +140,15 @@ def load_model(
             )
         except TypeError:
             base.gradient_checkpointing_enable()
-        # Required for LoRA + gradient_checkpointing
-        base.enable_input_require_grads()
+        # enable_input_require_grads is REQUIRED for LoRA (most base params
+        # frozen → embedding output needs an explicit require_grad hook so
+        # gradient_checkpointing has something to backprop through), but
+        # for full-FT it adds an extra hook that DDP may not track,
+        # showing up as "first SFT backward never completes". Skip it
+        # outside LoRA. The pre-existing comment said "Required for LoRA"
+        # — we now honour that literally.
+        if training_mode == "lora":
+            base.enable_input_require_grads()
         # gradient_checkpointing is fundamentally incompatible with KV cache:
         # the recomputation pass would replay forward without the cached
         # keys/values. transformers auto-overrides to False on every forward
@@ -192,18 +199,46 @@ def load_model(
 
     if use_ddp:
         model = model.to(f"cuda:{local_rank}")
-        # LoRA training routes the forward through ``base_model.model``;
-        # if a configured ``target_modules`` entry doesn't appear in every
-        # forward path (or the user picks a subset like ``["q_proj"]`` only),
-        # some LoRA adapters produce no gradient and DDP errors with
-        # "Expected to mark X parameters as ready". Full FT always touches
-        # every param, so the cheaper find_unused_parameters=False is safe.
-        find_unused = (training_mode == "lora")
+        # DDP wrap parameters. Three things go wrong here without care:
+        # 1. find_unused_parameters=False is "cheaper" but if a single
+        #    parameter genuinely doesn't get a gradient on a given step
+        #    (gradient_checkpointing rematerialisation, a conditional
+        #    layer, a frozen embedding) DDP hangs forever waiting for it.
+        #    We've seen "SFT step entry step=0 visible, step backward
+        #    done never appears" with both nccl and gloo — symptoms
+        #    consistent with this exact deadlock. Default to True for
+        #    safety; opt back to False with TADS_DDP_FIND_UNUSED=0 once
+        #    the run is verified stable.
+        # 2. static_graph=True lets DDP optimise after the first
+        #    forward+backward locks the graph in; recommended once safe.
+        #    Off by default.
+        # 3. broadcast_buffers=True (DDP default) syncs BN/running stats
+        #    on every forward. Llama-2 has no BN, so we turn it off to
+        #    save the collective. (One less place for the first
+        #    post-idle all_reduce to land.)
+        _env_fu = os.environ.get("TADS_DDP_FIND_UNUSED")
+        if _env_fu is not None:
+            find_unused = _env_fu == "1"
+        else:
+            # Default True — safest for both LoRA and full-FT.
+            find_unused = True
+        static_graph = os.environ.get("TADS_DDP_STATIC_GRAPH", "0") == "1"
+        broadcast_buffers = (
+            os.environ.get("TADS_DDP_BROADCAST_BUFFERS", "0") == "1"
+        )
+        if is_main_process():
+            logger.info(
+                "DDP wrap | find_unused_parameters=%s | static_graph=%s | "
+                "broadcast_buffers=%s",
+                find_unused, static_graph, broadcast_buffers,
+            )
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[local_rank],
             output_device=local_rank,
             find_unused_parameters=find_unused,
+            broadcast_buffers=broadcast_buffers,
+            static_graph=static_graph,
         )
     return model
 
