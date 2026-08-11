@@ -89,6 +89,53 @@ def _load_loss_history(output_dir, epoch: int):
         return None
 
 
+def _load_selected_prev(output_dir, epoch: int):
+    """Previous refresh's selected indices (gradient-evidence set for the
+    v3 split-progress D view). None when absent (t=1, or history lost)."""
+    if epoch < 1 or output_dir is None:
+        return None
+    p = Path(output_dir) / f"selected_indices_epoch{epoch}.json"
+    if not p.exists():
+        return None
+    try:
+        with open(p) as f:
+            sel = json.load(f)
+        if isinstance(sel, list) and sel:
+            return [int(x) for x in sel]
+    except Exception as e:
+        logger.warning("Could not load previous selection at %s (%s)", p, e)
+    return None
+
+
+def _resolve_reliability_scale(params: Dict[str, Any]) -> Optional[float]:
+    """Resolve the calibrated sigmoid scale s (plan §2.1).
+
+    Priority: explicit ``reliability_scale`` > calibration from
+    ``reliability_ref_file`` (a .pt holding the clean-reference ΔL tensor,
+    or a dict with key 'delta') > None (in-pool fallback inside
+    reliability_from_losses, which warns loudly).
+    """
+    from ..core import reliability as rel
+
+    scale = params.get("reliability_scale")
+    # ${oc.env:TADS_RELIABILITY_SCALE,} resolves to the EMPTY STRING when
+    # the env var is unset (utils._resolve_env) — float('') would crash
+    # every MVF run at epoch-1 selection. Treat empty/whitespace as unset.
+    if scale is not None and str(scale).strip() != "":
+        return float(scale)
+    ref_file = params.get("reliability_ref_file")
+    if ref_file:
+        ref = torch.load(str(ref_file), map_location="cpu", weights_only=True)
+        if isinstance(ref, dict):
+            ref = ref["delta"]
+        return rel.calibrate_reliability_scale(
+            ref,
+            target_pct=float(params.get("calibration_target_pct", 0.10)),
+            target_q=float(params.get("calibration_target_q", 0.8)),
+        )
+    return None
+
+
 def _prepare_mvf(
     mvf_ctx: Dict[str, Any],
     *,
@@ -100,62 +147,120 @@ def _prepare_mvf(
 ):
     """Assemble the ``mvf`` dict consumed by ``collect_episode``.
 
-    - Reliability Q: loaded from the run's cache when present; otherwise
-      the counterfactual pool loss is computed here (one forward pass) and
-      Q is derived inside collect_episode from this epoch's pool loss —
-      then persisted by :func:`_finalize_mvf`.
-    - Learnability: previous refresh's loss vector, if this run saved one.
-      (A refresh that reused a cached selection skips collect_episode and
-      saves no history — the next epoch then falls back to rank(L) only.)
+    - Reliability Q: loaded from the run's cache when the cached gate
+      configuration matches; recomputed FROM CACHED LOSSES (no forward)
+      when only the gate config changed; computed fresh (counterfactual
+      forward pass) only at epoch 1 — at later epochs collect_episode
+      hard-errors instead of silently recomputing Q at the wrong
+      checkpoint.
+    - Learnability: previous refresh's loss vector + previous selection
+      (gradient-evidence set) for the v3 split-progress D.
     """
     from ..core import reliability as rel
 
     output_dir = cfg["output_dir"]
     params = mvf_ctx.get("params", {}) or {}
+    rmode = str(params.get("reliability_mode", "sigmoid"))
+    rezero = bool(params.get("reliability_rezero", True))
+    rscale = _resolve_reliability_scale(params)
     mvf: Dict[str, Any] = {
         "completeness": mvf_ctx["completeness"],
         "cluster_ids": mvf_ctx.get("cluster_ids"),
         "eta": float(params.get("eta", 0.5)),
         "gamma": float(params.get("gamma", 1.0)),
         "eps": float(params.get("eps", 0.01)),
+        "d_floor": float(params.get("d_floor", 0.5)),
+        "progress_mode": str(params.get("progress_mode", "split")),
+        "reliability_mode": rmode,
+        "reliability_scale": rscale,
+        "reliability_rezero": rezero,
+        "allow_late_reliability": bool(params.get("allow_late_reliability", False)),
+        "lam_scale": float(mvf_ctx.get("lam_scale", 1.0)),
         "reliability": None,
         "loss_cf": None,
         "loss_prev": None,
+        "selected_prev": None,
     }
 
     cache = rel.load_reliability_cache(output_dir)
     if cache is not None and cache["q"].numel() == n_pool:
-        mvf["reliability"] = cache["q"]
-    else:
-        if cache is not None:
+        cache_cfg = (
+            cache.get("mode", "rank"),  # pre-v3 caches were rank-transformed
+            cache.get("scale"),
+            cache.get("rezero", False),
+        )
+        want_cfg = (rmode, rscale, rezero)
+        if cache_cfg == want_cfg:
+            mvf["reliability"] = cache["q"]
+        elif cache.get("loss_orig") is not None and cache.get("loss_cf") is not None:
+            logger.info(
+                "Reliability cache gate config %s != requested %s — "
+                "recomputing Q from cached losses (no forward pass).",
+                cache_cfg, want_cfg,
+            )
+            mvf["reliability"] = rel.reliability_from_losses(
+                cache["loss_orig"], cache["loss_cf"],
+                mode=rmode, scale=rscale, rezero=rezero,
+            )
+            rel.save_reliability_cache(
+                output_dir,
+                q=mvf["reliability"],
+                completeness=mvf_ctx["completeness"],
+                loss_orig=cache["loss_orig"],
+                loss_cf=cache["loss_cf"],
+                epoch=int(cache.get("epoch", epoch)),
+                mode=rmode, scale=rscale, rezero=rezero,
+            )
+        else:
+            logger.warning(
+                "Reliability cache lacks raw losses — cannot re-gate under "
+                "the requested config %s; recomputing from scratch.",
+                (rmode, rscale, rezero),
+            )
+    if mvf["reliability"] is None:
+        if cache is not None and cache["q"].numel() != n_pool:
             logger.warning(
                 "Reliability cache size %d != pool size %d — recomputing.",
                 cache["q"].numel(), n_pool,
             )
-        cf_dataset = mvf_ctx.get("cf_dataset")
-        if cf_dataset is None:
+        cf_datasets = mvf_ctx.get("cf_datasets") or (
+            [mvf_ctx["cf_dataset"]] if mvf_ctx.get("cf_dataset") is not None else []
+        )
+        if not cf_datasets:
             raise ValueError(
                 "MVF score_mode requires a counterfactual pool: set "
                 "tads.mvf.counterfactual_data_files (generate it with "
                 "scripts/make_corrupted_pool.py --emit-counterfactual).",
             )
-        if len(cf_dataset) != n_pool:
-            raise ValueError(
-                f"Counterfactual pool size {len(cf_dataset)} != candidate "
-                f"pool size {n_pool} — pools must be index-aligned.",
+        for k, cf_dataset in enumerate(cf_datasets, start=1):
+            if len(cf_dataset) != n_pool:
+                raise ValueError(
+                    f"Counterfactual pool #{k} size {len(cf_dataset)} != "
+                    f"candidate pool size {n_pool} — pools must be "
+                    f"index-aligned.",
+                )
+        if epoch > 1 and not bool(params.get("allow_late_reliability", False)):
+            # Fail BEFORE burning the counterfactual forward pass(es) —
+            # collect_episode enforces the same contract, but by then a
+            # full pool forward would already have been spent (adversarial
+            # review 2026-08).
+            raise RuntimeError(
+                f"_prepare_mvf: no usable reliability cache at epoch {epoch} "
+                f"(> 1). Q must come from the base checkpoint — restore "
+                f"reliability_cache.pt from the run's output dir, or set "
+                f"tads.mvf.allow_late_reliability: true to explicitly accept "
+                f"a wrong-checkpoint Q.",
             )
-        if epoch > 1:
-            logger.warning(
-                "Reliability is being computed at epoch %d (not the base "
-                "checkpoint) — resuming without reliability_cache.pt? Q will "
-                "reflect the current checkpoint.", epoch,
+        losses = [
+            rel.compute_pool_loss(
+                model, cf_dataset,
+                batch_size=int(cfg.get("episode_batch_size", 1)),
+                device=str(device),
+                tag=f"counterfactual_{k}" if len(cf_datasets) > 1 else "counterfactual",
             )
-        mvf["loss_cf"] = rel.compute_pool_loss(
-            model, cf_dataset,
-            batch_size=int(cfg.get("episode_batch_size", 1)),
-            device=str(device),
-            tag="counterfactual",
-        )
+            for k, cf_dataset in enumerate(cf_datasets, start=1)
+        ]
+        mvf["loss_cf"] = losses[0] if len(losses) == 1 else torch.stack(losses, dim=0)
 
     mvf["loss_prev"] = _load_loss_history(output_dir, epoch - 1)
     if mvf["loss_prev"] is not None and mvf["loss_prev"].numel() != n_pool:
@@ -164,6 +269,14 @@ def _prepare_mvf(
             mvf["loss_prev"].numel(), n_pool,
         )
         mvf["loss_prev"] = None
+    sel_prev = _load_selected_prev(output_dir, epoch - 1)
+    if sel_prev is not None and max(sel_prev) >= n_pool:
+        logger.warning(
+            "Previous selection references index %d >= pool size %d — "
+            "ignoring (pool changed between epochs?).", max(sel_prev), n_pool,
+        )
+        sel_prev = None
+    mvf["selected_prev"] = sel_prev
     return mvf
 
 
@@ -182,6 +295,9 @@ def _finalize_mvf(mvf, episode, *, cfg, epoch: int) -> Dict[str, Any]:
             loss_orig=episode["r_loss"],
             loss_cf=mvf["loss_cf"],
             epoch=epoch,
+            mode=mvf["reliability_mode"],
+            scale=mvf["reliability_scale"],
+            rezero=mvf["reliability_rezero"],
         )
     extras: Dict[str, Any] = {
         "score_mode": "mvf",
@@ -189,6 +305,9 @@ def _finalize_mvf(mvf, episode, *, cfg, epoch: int) -> Dict[str, Any]:
         "d_mean": float(episode["difficulty"].mean().item()),
         "completeness_mean": float(mvf["completeness"].float().mean().item()),
         "progress_active": mvf["loss_prev"] is not None,
+        "progress_mode": mvf["progress_mode"],
+        "progress_evidence": mvf["selected_prev"] is not None,
+        "lam_scale": mvf["lam_scale"],
     }
     return extras
 
@@ -339,6 +458,38 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None, device=None):
     return result
 
 
+def _anchor_stability(anchor, prev_v) -> float:
+    """Eigengap-weighted mean |cos| between the previous and current anchor
+    directions — the per-refresh reliability of the Geometry view.
+
+    Used for quality-adaptive fusion (plan §2.4 v3): λ_t = λ0 · stability_t,
+    so the fusion trusts the alignment view only insofar as its anchor is
+    stable between refreshes. |cos| because a PCA direction's sign is
+    arbitrary. Falls back to 1.0 (no discount) when there is nothing to
+    compare.
+    """
+    gaps = getattr(anchor, "gap_by_layer", None)
+    if not isinstance(gaps, dict):
+        gaps = {}
+    cosines, weights = [], []
+    for li, v_new in getattr(anchor, "v_by_layer", {}).items():
+        v_old = prev_v.get(li)
+        if v_old is None:
+            continue
+        c = float(torch.abs(torch.nn.functional.cosine_similarity(
+            v_new.detach().float().view(1, -1),
+            v_old.detach().float().view(1, -1),
+        )).item())
+        cosines.append(min(max(c, 0.0), 1.0))
+        weights.append(max(float(gaps.get(li, 1.0)), 0.0))
+    if not cosines:
+        return 1.0
+    total_w = sum(weights)
+    if total_w <= 0:
+        return sum(cosines) / len(cosines)
+    return sum(c * w for c, w in zip(cosines, weights)) / total_w
+
+
 def select_indices(
     method, *, model, anchor, dataset, cfg, epoch, seed, device, mvf_ctx=None,
 ):
@@ -346,8 +497,9 @@ def select_indices(
 
     ``mvf_ctx`` — optional context for the multi-view-fusion score
     (built by ``tads.train`` when ``tads.score_mode == "mvf"``):
-    ``{"completeness": (N,) tensor, "cf_dataset": Dataset | None,
-    "cluster_ids": list[int] | None, "params": {eta, gamma, eps}}``.
+    ``{"completeness": (N,) tensor, "cf_dataset(s)": Dataset(s) | None,
+    "cluster_ids": list[int] | None, "params": {eta, gamma, eps, d_floor,
+    progress_mode, static, adaptive_lam, reliability_*}}``.
     None keeps the legacy scoring path untouched.
     """
     n_total = len(dataset)
@@ -425,13 +577,55 @@ def select_indices(
                     _cached_path, _e,
                 )
 
+    # ---------- MVF-static arm: freeze the epoch-1 selection ----------
+    # The static control (plan §5.1 arm 6) scores the pool ONCE at epoch 1
+    # and reuses that selection for every later refresh — it isolates the
+    # training-adaptive component (per-refresh D/A recomputation) from the
+    # score design itself. Without this arm, "adaptive beats static" is
+    # unfalsifiable.
+    _mvf_params = (mvf_ctx or {}).get("params") or {}
+    if bool(_mvf_params.get("static")) and epoch > 1:
+        if _output_dir_raw is None:
+            raise ValueError("mvf.static requires output_dir to locate the epoch-1 selection.")
+        _frozen_path = Path(_output_dir_raw) / "selected_indices_epoch1.json"
+        if not _frozen_path.exists():
+            raise RuntimeError(
+                f"mvf.static=true but {_frozen_path} does not exist — the "
+                f"epoch-1 selection must complete (and be saved) first.",
+            )
+        with open(_frozen_path) as _f:
+            _frozen = json.load(_f)
+        if not isinstance(_frozen, list) or not _frozen:
+            raise RuntimeError(f"mvf.static: {_frozen_path} is empty or malformed.")
+        logger.info(
+            "MVF-static: reusing frozen epoch-1 selection (%d indices) at "
+            "epoch %d.", len(_frozen), epoch,
+        )
+        selected = [int(x) for x in _frozen] if is_main_process() else []
+        selected = _broadcast_selection(
+            selected, epoch=epoch, output_dir=_output_dir_raw, device=device,
+        )
+        extras["mvf_static_reuse"] = True
+        return selected, extras
+
     if is_main_process():
         print("[trace] rank=0 ENTER main branch | method=" + method
               + " | anchor=" + ("set" if anchor is not None else "None"), flush=True)
         import traceback as _tb
         try:
+            _lam_scale = 1.0
             if method == "tads" and anchor is not None:
                 logger.info("Updating trajectory anchor ...")
+                # Quality-adaptive fusion (plan §2.4 v3): snapshot the
+                # anchor directions BEFORE the refresh so the post-update
+                # drift can discount λ for this epoch.
+                _adaptive_lam = bool(_mvf_params.get("adaptive_lam", False))
+                _prev_v = None
+                if _adaptive_lam and getattr(anchor, "is_fitted", False):
+                    _prev_v = {
+                        li: v.detach().clone()
+                        for li, v in getattr(anchor, "v_by_layer", {}).items()
+                    }
                 print("[trace] rank=0 BEFORE anchor.update", flush=True)
                 anchor_stats = anchor.update(
                     model=model, dataset=dataset, seed=seed, epoch=epoch,
@@ -440,12 +634,20 @@ def select_indices(
                 print("[trace] rank=0 AFTER anchor.update | stats_keys="
                       + str(_akeys), flush=True)
                 extras["anchor_stats"] = anchor_stats
+                if _prev_v:
+                    _lam_scale = _anchor_stability(anchor, _prev_v)
+                    logger.info(
+                        "Adaptive λ: anchor stability=%.4f → λ_t = λ0 · %.4f",
+                        _lam_scale, _lam_scale,
+                    )
+                    extras["anchor_stability"] = _lam_scale
 
             tads_cfg = cfg.get("tads", {}) or {}
             exp_tag = str(cfg.get("model_key", "?")) + "/alpaca/" + method
 
             mvf = None
             if mvf_ctx is not None:
+                mvf_ctx["lam_scale"] = _lam_scale
                 mvf = _prepare_mvf(
                     mvf_ctx, model=model, cfg=cfg, epoch=epoch,
                     device=device, n_pool=n_total,

@@ -208,20 +208,53 @@ def tads_score(
 # kept only as a logged diagnostic / ablation arm.
 
 
-def rank01(x: torch.Tensor) -> torch.Tensor:
+def rank01(x: torch.Tensor, *, ties: str = "midrank") -> torch.Tensor:
     """Normalised rank transform to [0, 1]: smallest value → 0, largest → 1.
 
-    Ties are broken by position (stable argsort), which keeps the transform
-    deterministic. For N == 1 the single element maps to 0.5.
+    ``ties="midrank"`` (default): every member of a tie group receives the
+    GROUP-AVERAGE rank, so equal inputs get equal outputs. This matters
+    because the progress statistic ``[L^{t-1} - L^t]_+`` has a large mass
+    at exactly 0 (every non-improving sample); the previous positional
+    tie-breaking assigned those tied samples DISTINCT ranks spanning
+    [0, m/(n-1)] purely by their index in the pool file — dataset ORDER
+    leaked into D, into S, and into top-B membership (adversarial review
+    2026-08, "rank01 tie-breaking converts dataset order into score
+    signal"). Midranks also make the transform invariant to pool
+    reordering, which the golden regression tests rely on.
+
+    ``ties="positional"``: the legacy v1 behaviour (stable argsort order),
+    kept only for reproducing v1 diagnostics.
+
+    For N == 1 the single element maps to 0.5; a constant vector maps to
+    0.5 everywhere under midranks.
     """
     n = x.numel()
     if n == 0:
         return x.float()
     if n == 1:
         return torch.full_like(x.float(), 0.5)
-    order = torch.argsort(x, stable=True)
+    xf = x.float()
+    order = torch.argsort(xf, stable=True)
+    positional = torch.arange(n, dtype=torch.float32, device=x.device)
+    if ties == "positional":
+        ranks = torch.empty(n, dtype=torch.float32, device=x.device)
+        ranks[order] = positional
+        return ranks / float(n - 1)
+    if ties != "midrank":
+        raise ValueError(f"rank01: ties must be 'midrank' or 'positional', got {ties!r}")
+    sorted_x = xf[order]
+    # Group equal values, then give each group the mean of its positions.
+    new_group = torch.ones(n, dtype=torch.bool, device=x.device)
+    new_group[1:] = sorted_x[1:] != sorted_x[:-1]
+    group_id = torch.cumsum(new_group.to(torch.long), dim=0) - 1
+    n_groups = int(group_id[-1].item()) + 1
+    sums = torch.zeros(n_groups, device=x.device).scatter_add_(0, group_id, positional)
+    counts = torch.zeros(n_groups, device=x.device).scatter_add_(
+        0, group_id, torch.ones(n, device=x.device),
+    )
+    midranks = sums / counts
     ranks = torch.empty(n, dtype=torch.float32, device=x.device)
-    ranks[order] = torch.arange(n, dtype=torch.float32, device=x.device)
+    ranks[order] = midranks[group_id]
     return ranks / float(n - 1)
 
 
@@ -229,35 +262,97 @@ def learnable_difficulty(
     loss_t: torch.Tensor,
     loss_prev: Optional[torch.Tensor] = None,
     eta: float = 0.5,
+    *,
+    selected_prev: Optional[torch.Tensor] = None,
+    progress_mode: str = "split",
+    neutral: float = 0.5,
 ) -> torch.Tensor:
-    """Learnable-difficulty view D_i^t (plan §1.2).
+    """Learnable-difficulty view D_i^t (plan §2.2, v3).
 
         t = 1 (no history):  D_i = rank01(L_i^t)
-        t ≥ 2:               P_i = rank01([L_i^{t-1} - L_i^t]_+)
-                             D_i = rank01(L_i^t) · (η + (1-η) · P_i)
+        t ≥ 2 ("split"):     P̂_i = rank01_{Selected(t-1)}([L^{t-1}-L^t]_+)   i ∈ Selected(t-1)
+                             P̂_i = neutral (0.5)                             otherwise
+                             D_i = rank01(L_i^t) · (η + (1-η) · P̂_i)
 
-    High current loss alone is ambiguous between "hard but clean" and
-    "noise". Progress P disambiguates: a sample whose loss is falling
-    across refreshes is hard-but-learnable and keeps its difficulty
-    weight; a persistently-stuck sample is discounted toward η·rank(L).
+    Why the split (v3): ranking progress over the WHOLE pool lets the
+    previous epoch's selection leak into D — samples that received direct
+    gradient updates structurally dominate the progress ranks, so P
+    measures "was I picked last refresh", not learnability, and selection
+    collapses into a rich-get-richer loop. Under "split", only samples
+    with gradient EVIDENCE (trained on at t-1) are judged by progress:
+    a sample that was trained on and still did not improve is demoted —
+    the real dynamic signal for noisy/wrong-answer data. Samples without
+    evidence get the neutral value; their churn-in is carried by the
+    rank01(L^t) base term (as selected samples' losses fall, unselected
+    samples rise in relative rank).
+
+    progress_mode:
+        "split"   v3 default (requires ``selected_prev``; falls back to the
+                  base ranking with a loud warning when it is missing —
+                  neutral-everywhere modulation is a constant factor and
+                  would silently pretend progress information existed).
+        "global"  v1 behaviour (whole-pool rank) — ablation arm only.
+        "off"     D = rank01(L^t), no progress modulation.
 
     Args:
         loss_t: (N,) per-sample response CE loss at the current refresh.
         loss_prev: (N,) loss at the previous refresh, or None at t=1.
         eta: floor in [0, 1] on the progress modulation (η=1 disables it).
+        selected_prev: indices (LongTensor / list) or bool mask of the
+            samples selected — hence trained on — at refresh t-1.
+        neutral: P̂ value for samples without gradient evidence.
     """
     if not (0.0 <= eta <= 1.0):
         raise ValueError(f"learnable_difficulty: eta must be in [0,1], got {eta}")
+    if progress_mode not in ("split", "global", "off"):
+        raise ValueError(
+            f"learnable_difficulty: progress_mode must be split/global/off, "
+            f"got {progress_mode!r}"
+        )
     base = rank01(loss_t)
-    if loss_prev is None:
+    if loss_prev is None or progress_mode == "off":
         return base
     if loss_prev.shape != loss_t.shape:
         raise ValueError(
             f"learnable_difficulty: shape mismatch loss_t={tuple(loss_t.shape)} "
             f"vs loss_prev={tuple(loss_prev.shape)}"
         )
-    progress = rank01(torch.clamp(loss_prev - loss_t, min=0.0))
-    return base * (eta + (1.0 - eta) * progress)
+    raw_progress = torch.clamp(loss_prev - loss_t, min=0.0)
+    if progress_mode == "global":
+        progress = rank01(raw_progress)
+        return base * (eta + (1.0 - eta) * progress)
+    # --- split ---
+    if selected_prev is None:
+        logger.warning(
+            "learnable_difficulty(progress_mode='split'): selected_prev is "
+            "missing — progress cannot be attributed to gradient evidence. "
+            "Falling back to D = rank01(L^t) for this refresh.",
+        )
+        return base
+    n = loss_t.numel()
+    if not torch.is_tensor(selected_prev):
+        selected_prev = torch.as_tensor(selected_prev)
+    if selected_prev.dtype == torch.bool:
+        if selected_prev.numel() != n:
+            raise ValueError(
+                f"learnable_difficulty: selected_prev mask length "
+                f"{selected_prev.numel()} != pool size {n}"
+            )
+        mask = selected_prev
+    else:
+        idx = selected_prev.view(-1).long()
+        if idx.numel() > 0 and (int(idx.min()) < 0 or int(idx.max()) >= n):
+            raise ValueError(
+                f"learnable_difficulty: selected_prev indices out of range "
+                f"[0, {n}) — got min={int(idx.min())}, max={int(idx.max())}"
+            )
+        mask = torch.zeros(n, dtype=torch.bool, device=loss_t.device)
+        mask[idx] = True
+    p_hat = torch.full((n,), float(neutral), dtype=torch.float32, device=loss_t.device)
+    n_sel = int(mask.sum().item())
+    if n_sel > 0:
+        p_hat[mask] = rank01(raw_progress[mask])
+    return base * (eta + (1.0 - eta) * p_hat)
 
 
 def mvf_score(
@@ -269,24 +364,42 @@ def mvf_score(
     lam: float = 1.0,
     gamma: float = 1.0,
     eps: float = 0.01,
+    d_floor: float = 0.5,
 ) -> torch.Tensor:
-    """Quality-gated multi-view fusion score (plan §1.4):
+    """Quality-gated multi-view fusion score (plan §2.4, v3):
 
-        S_i = (Q_i · c_i + ε)^γ · (D_i + ε) · (1 + λ · Ã_i)
+        D'_i = d_floor + (1 - d_floor) · D_i                 (range compression)
+        S_i  = (Q_i · c_i + ε)^γ · (D'_i + ε) · (1 + λ · Ã_i)
+
+    Why d_floor (v3): with the raw D ∈ [0, 1], the learnability factor's
+    dynamic range is (1+ε)/ε ≈ 101× at ε = 0.01 while the calibrated gate
+    separates clean from corrupted by only a small ratio — so a corrupted
+    high-loss sample (Q suppressed, D ≈ 1) could outscore a clean easy
+    sample (Q high, D ≈ 0) by orders of magnitude, silently REVERSING the
+    non-compensation property (adversarial review 2026-08: "the view that
+    cannot be overridden is overridden by two orders of magnitude").
+    Compressing D to [d_floor, 1] caps the learnability factor's ratio at
+    (1+ε)/(d_floor+ε) ≈ 2× at the default d_floor = 0.5: D modulates the
+    ranking among reliable samples instead of dominating the gate. The
+    explicit non-compensation condition (γ > γ*) is stated in the paper's
+    parametric theorem; d_floor = 0 recovers the v2 behaviour as an
+    ablation arm.
 
     Args:
-        reliability: (N,) Q_i in [0, 1] (rank-normalised counterfactual
+        reliability: (N,) Q_i in [0, 1] (calibrated counterfactual
             fidelity; see ``tads.core.reliability``).
         completeness: (N,) c_i in (0, 1] (1 = complete response;
             ``c_trunc`` for truncated ones).
         difficulty: (N,) D_i in [0, 1] from :func:`learnable_difficulty`.
-        alignment_norm: (N,) min-max-normalised anchor alignment in [0, 1],
+        alignment_norm: (N,) pool-CDF-normalised anchor alignment in [0, 1],
             or None when the anchor is disabled (factor becomes 1).
         lam: anchor weight λ ≥ 0 (same role as in :func:`tads_score`).
         gamma: gate sharpness γ ≥ 0. γ=0 disables the reliability gate
             (ablation arm); larger γ makes the gate harder.
         eps: gate floor — keeps S non-zero so ranking below the gate stays
             defined and γ-exponentiation is stable at Q·c = 0.
+        d_floor: lower bound of the compressed learnability factor in
+            [0, 1). 0 disables compression (v2 ablation).
     """
     for name, t in (
         ("reliability", reliability),
@@ -304,8 +417,11 @@ def mvf_score(
         raise ValueError(f"mvf_score: gamma must be >= 0, got {gamma}")
     if eps <= 0:
         raise ValueError(f"mvf_score: eps must be > 0, got {eps}")
+    if not (0.0 <= d_floor < 1.0):
+        raise ValueError(f"mvf_score: d_floor must be in [0, 1), got {d_floor}")
     gate = torch.pow(reliability * completeness + eps, gamma)
-    score = gate * (difficulty + eps)
+    difficulty_eff = d_floor + (1.0 - d_floor) * difficulty
+    score = gate * (difficulty_eff + eps)
     if alignment_norm is not None:
         if alignment_norm.shape != reliability.shape:
             raise ValueError(

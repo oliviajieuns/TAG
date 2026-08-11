@@ -1,5 +1,22 @@
 # Auto-Eval Agent Guide (for Hermes)
 
+> **⚠️ [2026-08-11] 상태: CIKM 매트릭스 전용 ARCHIVE.**
+> 이 런북은 CIKM 2026용 16셀×9벤치 매트릭스 운영 문서다. CIKM은 reject
+> 확정·재제출 없음이며, 현재 작업은 Information Fusion SI 계획
+> ([`docs/plan_low_quality_multiview.md`](docs/plan_low_quality_multiview.md))을 따른다.
+> SI 실험의 eval 운영은 새 런북이 필요하며, 이 문서를 참조할 때 다음 두
+> 규칙은 **폐기됐으므로 절대 따르지 말 것**:
+>
+> 1. **§0-2 "파란불" 규칙** (`data_agent_10 > tads_10 + 1%p` → TADS
+>    하이퍼파라미터 재검토) — method별 비대칭 재튜닝은 비교 공정성을
+>    파괴한다. 새 실험은 전 arm 동일 hyperparameter, 결과 보고 재튜닝 금지.
+> 2. **§0-2 "upper-bound baseline"** (full_100) — multi-seed 검증 없는 단일
+>    run은 `full-data reference`로만 부른다.
+>
+> 또한 `scripts/make_table.sh`의 max-of-each 집계는 새 결과에 사용 금지 —
+> 단일 checkpoint 단위 집계(`make_table_v2`, plan §1.1)로 대체된다.
+> 레이아웃/체크포인트 규약 등 기계적 참조용으로만 이 문서를 유지한다.
+
 이 문서는 **체크포인트가 생기면 자동으로 eval을 돌리는 원격 AI 에이전트**가 따라야 할 지침이다.
 사람용 설명서가 아니라 LLM이 그대로 실행할 수 있도록 경로/명령을 명시적으로 적어둔다.
 

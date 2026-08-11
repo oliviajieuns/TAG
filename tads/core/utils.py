@@ -424,7 +424,10 @@ def load_config(config_path: str) -> Dict[str, Any]:
             f"  tried        = {[str(c) for c in tried]}"
         )
     cfg_path = resolved
-    with open(cfg_path) as f:
+    # encoding pinned: config comments contain unicode math (§, σ, ΔL) and
+    # the process default on Windows is cp949 — locale-dependent decode
+    # crashes are not acceptable for config loading.
+    with open(cfg_path, encoding="utf-8") as f:
         cfg: Dict[str, Any] = yaml.safe_load(f) or {}
 
     defaults = cfg.pop("defaults", None)

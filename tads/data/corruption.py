@@ -1,9 +1,9 @@
 """Synthetic low-quality instruction-data generation (MVF experiments §4).
 
 Deterministic, seeded transforms over raw Alpaca-schema records
-(``{"instruction", "input", "output"}``) that inject the six corruption
-types studied in the low-quality-pool experiments, plus the counterfactual
-pool used by the reliability view:
+(``{"instruction", "input", "output"}``) that inject the corruption types
+studied in the low-quality-pool experiments (T1–T7 plus the cross-source
+variant T1b), plus the counterfactual pool used by the reliability view:
 
     T1 ``mismatch``      instruction–response mismatch (response derangement
                          swap within response-length buckets)
@@ -17,6 +17,16 @@ pool used by the reliability view:
     T6 source imbalance  handled at the CLI level (`make_corrupted_pool.py`
                          merges several source files with per-source rates
                          and records a ``source`` tag per record)
+    T1b ``mismatch_xsource``  cross-source mismatch: the replacement
+                         response comes from a DIFFERENT source dataset
+                         (length-bucket matched), so detecting it is not
+                         tautological for the counterfactual detector,
+                         whose derangement operation generates T1
+    T7 ``fluent_wrong``  fluent-but-wrong response: plausible, on-topic,
+                         confidently incorrect/vacuous text pre-generated
+                         off-line by ``scripts/gen_fluent_wrong.py`` and
+                         applied here by pool index (defeats trivial
+                         perplexity filters)
 
 Every transform records ground truth in a **manifest** so that selection
 quality (Dirty@K, AUPRC, per-type recall) can be measured exactly.
@@ -40,7 +50,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 Record = Dict[str, Any]
 
-IN_PLACE_TYPES = ("mismatch", "noisy", "truncated", "wrong_answer")
+IN_PLACE_TYPES = (
+    "mismatch", "noisy", "truncated", "wrong_answer",
+    "mismatch_xsource", "fluent_wrong",
+)
 
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -142,6 +155,65 @@ def corrupt_mismatch(
     for i, j in mapping.items():
         records[i]["output"] = originals.get(j, records[j].get("output", ""))
         entries[i] = {"type": "mismatch", "partner": j}
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# T1b — cross-source instruction–response mismatch
+# ---------------------------------------------------------------------------
+
+def corrupt_cross_source(
+    records: List[Record],
+    target_idxs: List[int],
+    donor_records: Sequence[Record],
+    rng: random.Random,
+    n_buckets: int = 10,
+) -> Dict[int, Dict[str, Any]]:
+    """Replace each target's response with one drawn from ``donor_records``
+    (a DIFFERENT source dataset, e.g. Dolly), matched by response-length
+    quantile bucket: target bucket b draws from donor bucket b, so corrupted
+    samples cannot be detected from response length alone.
+
+    Unlike T1 ``mismatch`` (a within-pool derangement — the very operation
+    the counterfactual detector performs), the donor text appears nowhere
+    else in the pool, so T1b detection is not tautological for
+    counterfactual-based scorers.
+
+    Each donor is used at most once while any unused donor remains (nearest
+    non-empty bucket as fallback); reuse only happens once targets
+    outnumber donors. Manifest entries record the index into
+    ``donor_records`` under ``"donor"``.
+    """
+    if not donor_records:
+        raise ValueError("corrupt_cross_source: empty donor_records")
+    target_buckets = length_bucket_ids(records, target_idxs, n_buckets)
+    donor_buckets = length_bucket_ids(
+        donor_records, list(range(len(donor_records))), n_buckets,
+    )
+    # bucket_id -> shuffled stack of not-yet-used donor indices.
+    unused: Dict[int, List[int]] = {}
+    for b, group in donor_buckets.items():
+        stack = group[:]
+        rng.shuffle(stack)
+        unused[b] = stack
+
+    def _pop_nearest(b: int) -> Optional[int]:
+        live = [k for k, stack in unused.items() if stack]
+        if not live:
+            return None
+        return unused[min(live, key=lambda k: (abs(k - b), k))].pop()
+
+    entries: Dict[int, Dict[str, Any]] = {}
+    for b in sorted(target_buckets):
+        for i in target_buckets[b]:
+            j = _pop_nearest(b)
+            if j is None:
+                # Every donor already used once: sample with replacement
+                # from the matching (or nearest) donor bucket.
+                nearest = min(donor_buckets, key=lambda k: (abs(k - b), k))
+                j = rng.choice(donor_buckets[nearest])
+            records[i]["output"] = donor_records[j].get("output", "")
+            entries[i] = {"type": "mismatch_xsource", "donor": j}
     return entries
 
 
@@ -296,6 +368,39 @@ def corrupt_wrong_answer(
 
 
 # ---------------------------------------------------------------------------
+# T7 — fluent-but-wrong response (pre-generated off-line)
+# ---------------------------------------------------------------------------
+
+def corrupt_fluent_wrong(
+    records: List[Record],
+    target_idxs: List[int],
+    replacements: Dict[Any, str],
+) -> Dict[int, Dict[str, Any]]:
+    """Apply pre-generated fluent-but-wrong replacement responses (T7).
+
+    ``replacements`` maps pool index -> replacement text; int and string
+    keys are both accepted (JSON object keys arrive as strings). The texts
+    are produced off-line by ``scripts/gen_fluent_wrong.py`` so this module
+    stays model-free and deterministic. A target index without a
+    replacement is a hard error — a silent skip would corrupt the manifest
+    ground truth.
+    """
+    lookup = {int(k): str(v) for k, v in (replacements or {}).items()}
+    missing = [i for i in target_idxs if i not in lookup]
+    if missing:
+        raise KeyError(
+            f"corrupt_fluent_wrong: no replacement for indices "
+            f"{missing[:10]}{'...' if len(missing) > 10 else ''} "
+            f"({len(missing)} of {len(target_idxs)} targets)"
+        )
+    entries: Dict[int, Dict[str, Any]] = {}
+    for i in target_idxs:
+        records[i]["output"] = lookup[i]
+        entries[i] = {"type": "fluent_wrong"}
+    return entries
+
+
+# ---------------------------------------------------------------------------
 # T4 — duplicate instructions (appended records)
 # ---------------------------------------------------------------------------
 
@@ -396,13 +501,34 @@ def corrupt_pool(
     duplicate_copies: Tuple[int, int] = (2, 4),
     n_buckets: int = 10,
     sources: Optional[Sequence[str]] = None,
+    xsource_frac: float = 0.0,
+    donor_records: Optional[Sequence[Record]] = None,
+    fluent_wrong_frac: float = 0.0,
+    fluent_wrong_replacements: Optional[Dict[Any, str]] = None,
 ) -> Tuple[List[Record], Dict[str, Any]]:
     """Apply the requested corruption mix and return (new_records, manifest).
 
-    Fractions are relative to the ORIGINAL pool size and the four in-place
+    Fractions are relative to the ORIGINAL pool size and the in-place
     types are applied to DISJOINT index sets (a sample carries at most one
     corruption type, so per-type metrics stay unambiguous). ``wrong_answer``
     targets are drawn from the numeric-verifiable subset only.
+
+    T1b (``xsource_frac`` > 0) requires ``donor_records`` — a different
+    source dataset whose responses replace the targets' (length-bucket
+    matched, see :func:`corrupt_cross_source`).
+
+    T7 (``fluent_wrong_frac`` > 0) draws its targets deterministically; with
+    ``fluent_wrong_replacements`` provided the pre-generated texts are
+    applied (missing index -> hard error), without them nothing is modified
+    and the drawn indices are reported under ``manifest["fluent_wrong_targets"]``
+    (the emit step of the two-step workflow in
+    ``scripts/make_corrupted_pool.py``). Rerunning with identical arguments
+    plus the replacements draws the SAME indices, since applying T7 consumes
+    no randomness.
+
+    Back-compat: with the T1b/T7 kwargs at their defaults the output —
+    records AND manifest — is byte-identical to the pre-T1b/T7 code (the
+    new spec keys are only emitted when the fractions are nonzero).
 
     The manifest schema:
         {
@@ -411,6 +537,7 @@ def corrupt_pool(
           "entries": {str(idx): {"type": ..., ...}},   # corrupted only
           "duplicate_clusters": [[orig, dup, ...], ...],
           "sources": [str, ...] | None,                # per-record tag
+          "fluent_wrong_targets": [idx, ...],          # emit mode only
         }
     """
     records = [copy.deepcopy(r) for r in records]
@@ -425,13 +552,17 @@ def corrupt_pool(
         "truncated": truncated,
         "wrong_answer": wrong_answer,
     }
-    for k, v in fracs.items():
+    for k, v in {**fracs, "xsource_frac": xsource_frac,
+                 "fluent_wrong_frac": fluent_wrong_frac}.items():
         if v < 0 or v > 1:
             raise ValueError(f"corrupt_pool: fraction {k}={v} outside [0,1]")
-    if sum(fracs.values()) > 1.0 + 1e-9:
+    total_in_place = sum(fracs.values()) + xsource_frac + fluent_wrong_frac
+    if total_in_place > 1.0 + 1e-9:
         raise ValueError(
-            f"corrupt_pool: in-place fractions sum to {sum(fracs.values()):.3f} > 1"
+            f"corrupt_pool: in-place fractions sum to {total_in_place:.3f} > 1"
         )
+    if xsource_frac > 0 and not donor_records:
+        raise ValueError("corrupt_pool: xsource_frac > 0 requires donor_records")
 
     # Wrong-answer candidates first (constrained subset), then the rest from
     # the remaining pool. All four sets are disjoint.
@@ -465,6 +596,16 @@ def corrupt_pool(
     t3 = _draw(fracs["truncated"])
     if t3:
         entries.update(corrupt_truncated(records, t3, rng))
+    # T1b/T7 draws happen last so that _draw(0.0) consumes no randomness and
+    # the pre-T1b/T7 rng stream is preserved exactly when they are unused.
+    t1b = _draw(xsource_frac)
+    if t1b:
+        entries.update(
+            corrupt_cross_source(records, t1b, donor_records, rng, n_buckets)
+        )
+    t7 = _draw(fluent_wrong_frac)
+    if t7 and fluent_wrong_replacements is not None:
+        entries.update(corrupt_fluent_wrong(records, t7, fluent_wrong_replacements))
 
     dup_entries, clusters = append_duplicates(
         records, rng, frac=duplicate_frac,
@@ -483,20 +624,29 @@ def corrupt_pool(
         for new_idx in sorted(dup_entries):
             source_list.append(source_list[dup_entries[new_idx]["source_index"]])
 
+    spec: Dict[str, Any] = {
+        **fracs,
+        "duplicate_frac": duplicate_frac,
+        "duplicate_copies": list(duplicate_copies),
+        "n_buckets": n_buckets,
+    }
+    # Only emitted when used, so pre-T1b/T7 manifests stay byte-identical.
+    if xsource_frac > 0:
+        spec["xsource_frac"] = xsource_frac
+    if fluent_wrong_frac > 0:
+        spec["fluent_wrong_frac"] = fluent_wrong_frac
+
     manifest: Dict[str, Any] = {
         "seed": seed,
         "n_original": n,
         "n_total": len(records),
-        "spec": {
-            **fracs,
-            "duplicate_frac": duplicate_frac,
-            "duplicate_copies": list(duplicate_copies),
-            "n_buckets": n_buckets,
-        },
+        "spec": spec,
         "entries": {str(i): e for i, e in sorted(entries.items())},
         "duplicate_clusters": clusters,
         "sources": source_list,
     }
+    if fluent_wrong_frac > 0 and fluent_wrong_replacements is None:
+        manifest["fluent_wrong_targets"] = t7
     return records, manifest
 
 

@@ -1,0 +1,8 @@
+# Lowq arm: Full-polluted reference — train on 100% of the corrupted pool,
+# no selection. NOT an "upper bound" (audit §2.4): a no-selection reference.
+# Training hyperparameters come ONLY from _shared_light_05b.yaml.
+defaults:
+  - configs/experiments/lowq/_shared_light_05b.yaml
+  - configs/methods/full.yaml
+
+output_subdir: lowq/full_polluted_05b

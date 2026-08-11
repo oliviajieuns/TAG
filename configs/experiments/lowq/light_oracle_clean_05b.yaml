@@ -1,0 +1,13 @@
+# Lowq arm: Oracle-clean ceiling — random top-K among manifest-verified
+# CLEAN samples only. Point ALPACA_DATA_FILES at the pool_clean.json from
+#   python scripts/make_oracle_pool.py --pool ... --manifest ... --out-dir ...
+# selection_ratio is rescaled so K matches the other arms' budget:
+# K = 0.10 x N_original = 0.125 x N_clean at 20% corruption. Adjust when the
+# corruption rate differs.
+# Training hyperparameters come ONLY from _shared_light_05b.yaml.
+defaults:
+  - configs/experiments/lowq/_shared_light_05b.yaml
+  - configs/methods/random.yaml
+
+output_subdir: lowq/oracle_clean_05b
+selection_ratio: 0.125

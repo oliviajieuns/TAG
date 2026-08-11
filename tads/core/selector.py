@@ -68,6 +68,7 @@ from .scorer import (
     mvf_score,
     normalize_alignment,
     pool_reward,
+    rank01,
     select_top_b,
     tads_score,
 )
@@ -297,7 +298,15 @@ def collect_episode(
     # ---- Pool-level composite reward (paper Eqs. 3-4) ----
     R, r_weight_value = pool_reward(all_r_loss_t, all_r_entropy_t)
 
-    # ---- Alignment normalisation (paper §3.3 anchor; shared by both modes) ----
+    # ---- Alignment normalisation (paper §3.3 anchor) ----
+    # Legacy path keeps min-max (bit-identical to shipped results). The MVF
+    # path uses the pool-CDF (rank01) instead: min-max pins the [0,1]
+    # endpoints to the two most extreme samples, so one alignment outlier
+    # compresses every other sample's factor — an arbitrary normalisation
+    # choice that top-B ranking is NOT invariant to (adversarial review
+    # 2026-08). rank01 makes A a pool-CDF like D, with a probabilistic
+    # reading and no outlier pinning.
+    alignment_raw = None
     if apply_anchor:
         alignment_raw = torch.cat(all_alignment_raw, dim=0).view(-1)
         alignment, _alignment_collapsed = normalize_alignment(alignment_raw)
@@ -346,18 +355,37 @@ def collect_episode(
                 epoch, float(R.mean().item()),
             )
     else:
-        # MVF path (plan §1.4): S = (Q·c + ε)^γ · (D + ε) · (1 + λ·align).
+        # MVF path (plan §2, v3):
+        #   S = (Q·c + ε)^γ · (D' + ε) · (1 + λ_eff · Ã),  Ã = rank01(align_raw)
         from .reliability import reliability_from_losses  # local: avoid cycle
 
         q = mvf.get("reliability")
         if q is None:
+            # Q is DEFINED at the base checkpoint (plan §2.1). Deriving it
+            # here at a later epoch — e.g. after a resume that lost
+            # reliability_cache.pt — would silently change the view's
+            # meaning to "counterfactual fidelity under the current
+            # checkpoint". Fail loudly instead of degrading quietly.
+            if epoch > 1 and not bool(mvf.get("allow_late_reliability", False)):
+                raise RuntimeError(
+                    f"collect_episode(mvf=...): no cached reliability at "
+                    f"epoch {epoch} (> 1). Q must come from the base "
+                    f"checkpoint — restore reliability_cache.pt from the "
+                    f"run's output dir, or pass allow_late_reliability=True "
+                    f"to explicitly accept a wrong-checkpoint Q.",
+                )
             loss_cf = mvf.get("loss_cf")
             if loss_cf is None:
                 raise ValueError(
                     "collect_episode(mvf=...): either 'reliability' or "
                     "'loss_cf' must be provided.",
                 )
-            q = reliability_from_losses(all_r_loss_t, loss_cf.view(-1).float())
+            q = reliability_from_losses(
+                all_r_loss_t, loss_cf,
+                mode=str(mvf.get("reliability_mode", "sigmoid")),
+                scale=mvf.get("reliability_scale"),
+                rezero=bool(mvf.get("reliability_rezero", True)),
+            )
         q = q.view(-1).float()
         completeness = mvf["completeness"].view(-1).float()
         loss_prev = mvf.get("loss_prev")
@@ -366,27 +394,50 @@ def collect_episode(
         eta = float(mvf.get("eta", 0.5))
         gamma = float(mvf.get("gamma", 1.0))
         eps = float(mvf.get("eps", 0.01))
+        d_floor = float(mvf.get("d_floor", 0.5))
+        lam_scale = float(mvf.get("lam_scale", 1.0))
+        lam_eff = lam * lam_scale
         for name, t in (("reliability", q), ("completeness", completeness)):
             if t.numel() != total_samples:
                 raise ValueError(
                     f"collect_episode(mvf=...): {name} length {t.numel()} != "
                     f"pool size {total_samples} — stale cache or wrong pool?",
                 )
-        difficulty = learnable_difficulty(all_r_loss_t, loss_prev, eta)
+        difficulty = learnable_difficulty(
+            all_r_loss_t, loss_prev, eta,
+            selected_prev=mvf.get("selected_prev"),
+            progress_mode=str(mvf.get("progress_mode", "split")),
+        )
+        # Pool-CDF normalisation — but NOT on a collapsed anchor: rank01 of
+        # sub-1e-8 numerical noise would fabricate a full [0,1] spread from
+        # nothing (the legacy path's normalize_alignment guards this with
+        # the 0.5-constant fallback; here we drop the factor entirely).
+        if alignment_raw is not None and not _alignment_collapsed:
+            alignment_mvf = rank01(alignment_raw)
+        else:
+            alignment_mvf = None
+            if alignment_raw is not None and _alignment_collapsed:
+                logger.error(
+                    "MVF alignment COLLAPSED (max-min < 1e-8) — dropping the "
+                    "Geometry factor for this epoch (S = gate · difficulty).",
+                )
         score = mvf_score(
-            q, completeness, difficulty, alignment,
-            lam=lam, gamma=gamma, eps=eps,
+            q, completeness, difficulty, alignment_mvf,
+            lam=lam_eff, gamma=gamma, eps=eps, d_floor=d_floor,
         )
         logger.info(
-            "MVF score | epoch=%d | lam=%.3f | gamma=%.2f | eta=%.2f | "
-            "Q_mean=%.4f | c_mean=%.4f | D_mean=%.4f | align_mean=%s | "
-            "progress=%s",
-            epoch, lam, gamma, eta,
+            "MVF score | epoch=%d | lam=%.3f (scale=%.3f) | gamma=%.2f | "
+            "eta=%.2f | d_floor=%.2f | Q_mean=%.4f | c_mean=%.4f | "
+            "D_mean=%.4f | align_cdf_mean=%s | progress=%s (%s)",
+            epoch, lam_eff, lam_scale, gamma, eta, d_floor,
             float(q.mean().item()),
             float(completeness.mean().item()),
             float(difficulty.mean().item()),
-            f"{align_mean:.4f}" if align_mean is not None else "n/a",
+            # Diagnostics must report the statistic the score actually uses
+            # (the CDF), not the legacy min-max value.
+            f"{float(alignment_mvf.mean().item()):.4f}" if alignment_mvf is not None else "n/a",
             "on" if loss_prev is not None else "off (t=1)",
+            str(mvf.get("progress_mode", "split")),
         )
 
     # ---- Top-B selection ----

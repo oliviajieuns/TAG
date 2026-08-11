@@ -185,7 +185,55 @@ def tokenize_alpaca(
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "labels": labels,
+        # Raw-text completeness flag, consumed by
+        # tads.core.reliability.completeness_from_dataset. Must be computed
+        # HERE, before tokenisation discards the raw text: the token-level
+        # EOS check downstream cannot detect textual truncation because we
+        # unconditionally append EOS to every response above.
+        "text_complete": int(text_is_complete(response_text)),
     }
+
+
+# Characters that legitimately close a wrapped ending ("He said 'done.'",
+# markdown emphasis, brackets). Stripped before the terminal check.
+_CLOSING_WRAPPERS = "\"')]}*_` \t"
+# A response counts as textually complete when, after unwrapping, it ends
+# with sentence-terminal punctuation (Latin or CJK) or a digit (short
+# numeric answers like "The answer is 42" carry no terminal period in
+# many instruction datasets).
+_TERMINAL_CHARS = ".!?。！？…"
+
+
+def text_is_complete(text: str) -> bool:
+    """Heuristic: does this response TEXT read as complete?
+
+    Designed to catch mid-sentence truncation (the T3 corruption cuts at
+    30-70% of the word count and strips trailing ``.!?"')]}``, so the cut
+    ends on an arbitrary word). Checks, in order:
+
+    1. empty/whitespace-only → incomplete;
+    2. an odd number of \\`\\`\\` fences → an unclosed code block → incomplete;
+    3. ends with a closed code fence → complete;
+    4. after stripping closing wrappers, ends with terminal punctuation
+       or a digit → complete; anything else (a bare word, a comma, an
+       opening bracket…) → incomplete.
+
+    Known limitation (documented in the paper): single-word or list-style
+    responses without terminal punctuation are flagged incomplete; they
+    receive the soft ``c_trunc`` factor, not a hard veto.
+    """
+    t = text.rstrip()
+    if not t:
+        return False
+    if t.count("```") % 2 == 1:
+        return False
+    if t.endswith("```"):
+        return True
+    stripped = t.rstrip(_CLOSING_WRAPPERS)
+    if not stripped:
+        return False
+    last = stripped[-1]
+    return last in _TERMINAL_CHARS or last.isdigit()
 
 
 # =============================================================================

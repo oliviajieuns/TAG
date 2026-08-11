@@ -11,18 +11,20 @@ trajectory-anchor alignment:
 
     s_i = R_i · (1 + λ · ã_i),   R_i = w·L_i + (1−w)·H_i
 
-**MVF (`score_mode: mvf`)** — quality-gated multi-view fusion for
-low-quality pools (`docs/plan_low_quality_multiview.md`). Uncertainty is
-not treated as quality; instead three views from genuinely distinct
-information sources are fused:
+**MVF v3 (`score_mode: mvf`)** — reliability-gated multi-view fusion for
+low-quality pools (`docs/plan_low_quality_multiview.md` §2). Uncertainty is
+not treated as quality; three views from genuinely distinct information
+sources are fused as a weighted log-opinion pool with a non-compensatory
+gate:
 
-    S_i^t = (Q_i · c_i + ε)^γ · (D_i^t + ε) · (1 + λ · ã_i^t)
+    D'_i  = d_floor + (1 − d_floor) · D_i^t
+    S_i^t = (Q_i · c_i + ε)^γ · (D'_i + ε) · (1 + λ_t · ã_i^t)
 
 | View | Signal | Source |
 |---|---|---|
-| Reliability `Q_i` | counterfactual instruction fidelity `rank01[L(y_i\|x_i⁻) − L(y_i\|x_i)]`, cached at the base checkpoint; completeness gate `c_i` (EOS check) | separate counterfactual forward pass |
-| Learnability `D_i^t` | `rank01(L^t) · (η + (1−η)·rank01([L^{t−1}−L^t]₊))` | cross-refresh loss dynamics |
-| Alignment `ã_i^t` | trajectory-anchor hidden-state alignment (unchanged) | layer-wise hidden-state geometry |
+| Consistency `Q_i` | counterfactual instruction fidelity, zero-anchored calibrated gate `clip(2·(σ(ΔL_i/s) − 0.5), 0, 1)` with `ΔL_i = L(y_i\|x_i⁻) − L(y_i\|x_i)`; `s` calibrated once per backbone on a clean reference pool; cached at the base checkpoint (hard error if missing later); completeness gate `c_i` (raw-text heuristic AND label-EOS) | separate counterfactual forward pass (K > 1 pools → dispersion-discounted Q) |
+| Dynamics `D_i^t` | `rank01(L^t) · (η + (1−η)·P̂)`, progress `P̂` ranked within the previous refresh's SELECTED set only (unselected = neutral 0.5 — no gradient evidence, no verdict); `d_floor` compresses the factor to [0.5, 1] so it modulates rather than overrides the gate | cross-refresh loss dynamics |
+| Geometry `ã_i^t` | anchor hidden-state alignment, pool-CDF (rank01) normalised in MVF mode; `λ_t = λ0 ·` anchor-stability when `adaptive_lam` is on | layer-wise hidden-state geometry |
 
 Duplicated instructions are handled outside the score: near-duplicate
 clusters (MinHash) admit at most one selection each.

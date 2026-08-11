@@ -120,6 +120,9 @@ def test_mvf_loss_history_changes_difficulty(tiny_model):
         "completeness": torch.ones(n),
         "cluster_ids": None,
         "eta": 0.0, "gamma": 1.0, "eps": 0.01,
+        # v3: progress needs gradient evidence — mark every sample as
+        # trained-on so the within-group rank spans the whole pool here.
+        "selected_prev": list(range(n)),
     }
     ep_no_hist = _run(tiny_model, ds, mvf={**base, "loss_prev": None})
     # Fabricate a history where every sample REGRESSED except sample 0,
@@ -130,6 +133,52 @@ def test_mvf_loss_history_changes_difficulty(tiny_model):
     ep_hist = _run(tiny_model, ds, mvf={**base, "loss_prev": loss_prev})
     assert ep_hist["difficulty"][0] > 0.0
     assert not torch.allclose(ep_hist["difficulty"], ep_no_hist["difficulty"])
+
+
+def test_mvf_split_progress_without_evidence_is_neutral(tiny_model):
+    """v3 regression: with history but NO selected_prev, split mode must
+    fall back to the base ranking (no silent global-rank progress)."""
+    ds = _TinyDataset()
+    n = len(ds)
+    base = {
+        "reliability": torch.linspace(0.1, 1.0, n),
+        "completeness": torch.ones(n),
+        "cluster_ids": None,
+        "eta": 0.0, "gamma": 1.0, "eps": 0.01,
+    }
+    ep_no_hist = _run(tiny_model, ds, mvf={**base, "loss_prev": None})
+    loss_prev = ep_no_hist["r_loss"] + torch.rand(n)
+    ep_hist = _run(tiny_model, ds, mvf={**base, "loss_prev": loss_prev})
+    assert torch.allclose(ep_hist["difficulty"], ep_no_hist["difficulty"])
+
+
+def test_mvf_missing_reliability_after_epoch1_raises(tiny_model):
+    """Q is defined at the base checkpoint; recomputing it mid-run after a
+    lost cache silently changes the view's meaning — must hard-error."""
+    ds = _TinyDataset(seed=0)
+    cf_ds = _TinyDataset(seed=1)
+    loss_cf = compute_pool_loss(tiny_model, cf_ds, batch_size=4, device="cpu")
+    with pytest.raises(RuntimeError, match="base checkpoint"):
+        collect_episode(
+            model=tiny_model,
+            dataset=ds,
+            selection_ratio=0.5,
+            trajectory_anchor=None,
+            lam=0.0,
+            use_anchor=False,
+            batch_size=4,
+            device="cpu",
+            seed=0,
+            epoch=2,
+            mvf={
+                "reliability": None,
+                "loss_cf": loss_cf,
+                "completeness": torch.ones(len(ds)),
+                "loss_prev": None,
+                "cluster_ids": None,
+                "eta": 0.5, "gamma": 1.0, "eps": 0.01,
+            },
+        )
 
 
 def test_mvf_dedup_constraint_applies(tiny_model):

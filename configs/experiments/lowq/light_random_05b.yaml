@@ -1,0 +1,7 @@
+# Lowq arm: Random-10% floor baseline. Training hyperparameters come ONLY
+# from _shared_light_05b.yaml (plan §5.2 — no per-arm overrides, ever).
+defaults:
+  - configs/experiments/lowq/_shared_light_05b.yaml
+  - configs/methods/random.yaml
+
+output_subdir: lowq/random_05b

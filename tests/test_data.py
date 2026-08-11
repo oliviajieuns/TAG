@@ -51,7 +51,8 @@ EXAMPLE = {
 def test_tokenize_alpaca_masking(style):
     tok = _StubTokenizer()
     out = tokenize_alpaca(EXAMPLE, tok, max_seq_len=256, prompt_style=style)
-    assert set(out) == {"input_ids", "attention_mask", "labels"}
+    assert set(out) == {"input_ids", "attention_mask", "labels", "text_complete"}
+    assert out["text_complete"] in (0, 1)
     assert len(out["input_ids"]) == 256
     assert len(out["labels"]) == 256
 

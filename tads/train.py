@@ -567,26 +567,37 @@ def main() -> None:
 
         mvf_cfg = tads_cfg_top.get("mvf", {}) or {}
         cf_files = mvf_cfg.get("counterfactual_data_files") or None
-        cf_dataset = None
+        # K > 1 counterfactual pools (evidential-lite Q, plan §2.1 v3):
+        # accept a single path, a YAML list, or a comma-separated string —
+        # the last so the documented env plumbing can express K > 1:
+        #   export TADS_CF_FILES=pool/counterfactual_1.json,pool/counterfactual_2.json
+        if cf_files and not isinstance(cf_files, (list, tuple)):
+            cf_files = [p.strip() for p in str(cf_files).split(",") if p.strip()]
+        cf_datasets = []
         if cf_files:
             with timer.phase("counterfactual_build", "data"):
-                cf_dataset = build_alpaca_dataset(
-                    tokenizer=tokenizer,
-                    cache_dir=os.path.join(effective_cache, "counterfactual"),
-                    max_seq_len=int(cfg["max_seq_len"]),
-                    dataset_name=None,
-                    data_files=str(cf_files),
-                    prompt_style=style_key,
-                )
-            if keep_indices is not None:
-                cf_dataset = cf_dataset.select(keep_indices)
-            if len(cf_dataset) != n_total:
-                raise ValueError(
-                    f"Counterfactual pool size {len(cf_dataset)} != candidate "
-                    f"pool size {n_total}. The counterfactual file must be "
-                    f"index-aligned with data_files (regenerate both with "
-                    f"scripts/make_corrupted_pool.py).",
-                )
+                for k, one in enumerate(cf_files, start=1):
+                    cf_dataset = build_alpaca_dataset(
+                        tokenizer=tokenizer,
+                        cache_dir=os.path.join(
+                            effective_cache,
+                            "counterfactual" if k == 1 else f"counterfactual_{k}",
+                        ),
+                        max_seq_len=int(cfg["max_seq_len"]),
+                        dataset_name=None,
+                        data_files=str(one),
+                        prompt_style=style_key,
+                    )
+                    if keep_indices is not None:
+                        cf_dataset = cf_dataset.select(keep_indices)
+                    if len(cf_dataset) != n_total:
+                        raise ValueError(
+                            f"Counterfactual pool #{k} size {len(cf_dataset)} != "
+                            f"candidate pool size {n_total}. Counterfactual files "
+                            f"must be index-aligned with data_files (regenerate "
+                            f"both with scripts/make_corrupted_pool.py).",
+                        )
+                    cf_datasets.append(cf_dataset)
         cluster_ids = None
         cluster_file = mvf_cfg.get("dedup_clusters_file") or None
         if cluster_file:
@@ -605,21 +616,50 @@ def main() -> None:
         )
         mvf_ctx = {
             "completeness": completeness,
-            "cf_dataset": cf_dataset,
+            "cf_datasets": cf_datasets or None,
             "cluster_ids": cluster_ids,
             "params": {
                 "eta": float(mvf_cfg.get("eta", 0.5)),
                 "gamma": float(mvf_cfg.get("gamma", 1.0)),
                 "eps": float(mvf_cfg.get("eps", 0.01)),
+                # ---- v3 score parameters (plan §2) ----
+                "d_floor": float(mvf_cfg.get("d_floor", 0.5)),
+                "progress_mode": str(mvf_cfg.get("progress_mode", "split")),
+                "reliability_mode": str(mvf_cfg.get("reliability_mode", "sigmoid")),
+                # Env-interpolated empty strings mean "unset" — normalise here
+                # so downstream float() never sees '' (0.0 stays a valid value,
+                # hence the explicit check rather than `or None`).
+                "reliability_scale": (
+                    None
+                    if mvf_cfg.get("reliability_scale") is None
+                    or str(mvf_cfg.get("reliability_scale")).strip() == ""
+                    else float(mvf_cfg.get("reliability_scale"))
+                ),
+                "reliability_ref_file": (mvf_cfg.get("reliability_ref_file") or None),
+                "reliability_rezero": bool(mvf_cfg.get("reliability_rezero", True)),
+                "calibration_target_pct": float(mvf_cfg.get("calibration_target_pct", 0.10)),
+                "calibration_target_q": float(mvf_cfg.get("calibration_target_q", 0.8)),
+                "allow_late_reliability": bool(mvf_cfg.get("allow_late_reliability", False)),
+                "static": bool(mvf_cfg.get("static", False)),
+                "adaptive_lam": bool(mvf_cfg.get("adaptive_lam", False)),
             },
         }
         logger.info(
-            "MVF context ready | counterfactual=%s | dedup_clusters=%s | "
-            "eta=%.2f gamma=%.2f eps=%.3f c_trunc=%.2f",
-            "yes" if cf_dataset is not None else "no (cache required)",
+            "MVF context ready | counterfactuals=%d | dedup_clusters=%s | "
+            "eta=%.2f gamma=%.2f eps=%.3f d_floor=%.2f c_trunc=%.2f | "
+            "reliability=%s(rezero=%s, scale=%s) | progress=%s | static=%s | "
+            "adaptive_lam=%s",
+            len(cf_datasets),
             "yes" if cluster_ids is not None else "no",
             mvf_ctx["params"]["eta"], mvf_ctx["params"]["gamma"],
-            mvf_ctx["params"]["eps"], float(mvf_cfg.get("c_trunc", 0.2)),
+            mvf_ctx["params"]["eps"], mvf_ctx["params"]["d_floor"],
+            float(mvf_cfg.get("c_trunc", 0.2)),
+            mvf_ctx["params"]["reliability_mode"],
+            mvf_ctx["params"]["reliability_rezero"],
+            mvf_ctx["params"]["reliability_scale"],
+            mvf_ctx["params"]["progress_mode"],
+            mvf_ctx["params"]["static"],
+            mvf_ctx["params"]["adaptive_lam"],
         )
 
     # ---------- optimizer / scheduler ----------

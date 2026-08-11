@@ -12,10 +12,21 @@ Signals compared (each used AS a selection score, higher = selected):
     loss           mean response CE L_i
     R              legacy composite reward wL + (1-w)H (old TADS carrier)
     legacy_score   R · (1 + λ·align)                   (old TADS, Eq. 10)
-    Q              counterfactual reliability          (MVF view 1)
+    Q              counterfactual reliability, v3 calibrated sigmoid gate
+    Q_rank         v1 rank01 reliability               (ablation arm)
     gate           (Q·c + ε)^γ                          (MVF reliability gate)
     D              learnable difficulty at t=1 = rank01(L)
-    mvf_score      full MVF fusion S^1                 (new TADS)
+    mvf_score      full MVF v3 fusion S^1              (new TADS)
+    mvf_v2         v2 ablation: raw σ gate (no rezero) + d_floor=0 —
+                   the parameterisation whose non-compensation provably
+                   reverses (kept as the motivating-counterexample row)
+    additive       compensatory fusion (Q·c + D + Ã)/3 — the gated-vs-
+                   additive contrast row (plan §2.4)
+    ppl            -L(y): base-model fluency filter    (needs --uncond-loss;
+                   the "a trivial perplexity filter already solves this"
+                   attack, measured instead of assumed)
+    ifd            L(y|x)/L(y): IFD (Li et al. 2024)   (needs --uncond-loss;
+                   closest published relative of Q)
 
 Metrics per signal:
     dirty@K        corrupted fraction of the top-K selection (K = the
@@ -58,6 +69,7 @@ from tads.core.scorer import (  # noqa: E402
     learnable_difficulty,
     mvf_score,
     pool_reward,
+    rank01,
     tads_score,
 )
 from tads.core.selector import collect_episode  # noqa: E402
@@ -126,6 +138,9 @@ def main() -> None:
     p.add_argument("--ks", default="", help="extra selection ratios, e.g. 0.1,0.5")
     p.add_argument("--dedup-clusters", default=None,
                    help="dedup_clusters.json (defaults to tads.mvf.dedup_clusters_file)")
+    p.add_argument("--uncond-loss", default=None,
+                   help=".pt from scripts/compute_uncond_loss.py — enables the "
+                        "ppl and ifd baseline signal rows")
     p.add_argument("--no-anchor", action="store_true",
                    help="skip the trajectory anchor (drops legacy_score/mvf alignment factor)")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -181,18 +196,26 @@ def main() -> None:
             "config has no tads.mvf.counterfactual_data_files — the Q/gate/"
             "mvf_score signals need the counterfactual pool."
         )
-    cf_dataset = build_alpaca_dataset(
-        tokenizer=tokenizer,
-        cache_dir=str(Path(cache_dir) / "counterfactual"),
-        max_seq_len=int(cfg["max_seq_len"]),
-        dataset_name=None,
-        data_files=str(cf_files),
-        prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
-    )
-    if len(cf_dataset) != n:
-        raise ValueError(
-            f"counterfactual pool size {len(cf_dataset)} != pool size {n}"
+    if not isinstance(cf_files, (list, tuple)):
+        cf_files = [cf_files]
+    cf_datasets = []
+    for k_cf, one in enumerate(cf_files, start=1):
+        cf_dataset = build_alpaca_dataset(
+            tokenizer=tokenizer,
+            cache_dir=str(
+                Path(cache_dir)
+                / ("counterfactual" if k_cf == 1 else f"counterfactual_{k_cf}")
+            ),
+            max_seq_len=int(cfg["max_seq_len"]),
+            dataset_name=None,
+            data_files=str(one),
+            prompt_style=str(cfg.get("prompt_style") or "alpaca_default"),
         )
+        if len(cf_dataset) != n:
+            raise ValueError(
+                f"counterfactual pool #{k_cf} size {len(cf_dataset)} != pool size {n}"
+            )
+        cf_datasets.append(cf_dataset)
 
     cluster_path = args.dedup_clusters or (mvf_cfg.get("dedup_clusters_file") or None)
     cluster_ids = None
@@ -236,23 +259,57 @@ def main() -> None:
     entropy = episode["r_entropy"]
     alignment = episode["alignment"]  # min-max normed or None
 
-    loss_cf = compute_pool_loss(
-        model, cf_dataset,
-        batch_size=int(cfg.get("episode_batch_size", 1)),
-        device=str(args.device),
-        tag="counterfactual",
-    )
+    cf_losses = [
+        compute_pool_loss(
+            model, one_ds,
+            batch_size=int(cfg.get("episode_batch_size", 1)),
+            device=str(args.device),
+            tag=f"counterfactual_{k_cf}" if len(cf_datasets) > 1 else "counterfactual",
+        )
+        for k_cf, one_ds in enumerate(cf_datasets, start=1)
+    ]
+    loss_cf = cf_losses[0] if len(cf_losses) == 1 else torch.stack(cf_losses, dim=0)
 
     # ---- signals ----
     completeness = completeness_from_dataset(
         dataset, eos_token_id=tokenizer.eos_token_id, c_trunc=c_trunc,
     )
-    q = reliability_from_losses(loss, loss_cf)
+    # v3 gate configuration from the config (same resolution as training).
+    r_mode = str(mvf_cfg.get("reliability_mode", "sigmoid"))
+    r_rezero = bool(mvf_cfg.get("reliability_rezero", True))
+    r_scale = mvf_cfg.get("reliability_scale") or None
+    if r_scale is not None:
+        r_scale = float(r_scale)
+    d_floor = float(mvf_cfg.get("d_floor", 0.5))
+    q = reliability_from_losses(
+        loss, loss_cf, mode=r_mode, scale=r_scale, rezero=r_rezero,
+    )
+    q_rank = reliability_from_losses(loss, loss_cf, mode="rank")
+    q_v2 = reliability_from_losses(
+        loss, loss_cf, mode="sigmoid", scale=r_scale, rezero=False,
+    )
     gate = torch.pow(q * completeness + eps, gamma)
     d1 = learnable_difficulty(loss, None)
     R, r_weight = pool_reward(loss, entropy)
     legacy = tads_score(R, alignment, lam) if alignment is not None else R
-    s1 = mvf_score(q, completeness, d1, alignment, lam=lam, gamma=gamma, eps=eps)
+    # rank01 of the min-max alignment == rank01 of the raw alignment
+    # (monotone transform), i.e. the MVF pool-CDF normalisation.
+    alignment_cdf = rank01(alignment) if alignment is not None else None
+    s1 = mvf_score(
+        q, completeness, d1, alignment_cdf,
+        lam=lam, gamma=gamma, eps=eps, d_floor=d_floor,
+    )
+    # v2 ablation: raw sigmoid gate + uncompressed D — the parameterisation
+    # whose non-compensation provably reverses (theorem counterexample row).
+    s_v2 = mvf_score(
+        q_v2, completeness, d1, alignment_cdf,
+        lam=lam, gamma=gamma, eps=eps, d_floor=0.0,
+    )
+    # Compensatory contrast: equal-weight additive fusion of the same views.
+    additive_views = [q * completeness, d1]
+    if alignment_cdf is not None:
+        additive_views.append(alignment_cdf)
+    s_add = torch.stack(additive_views, dim=0).mean(dim=0)
 
     signals = {
         "entropy": entropy,
@@ -260,10 +317,37 @@ def main() -> None:
         "R": R,
         "legacy_score": legacy,
         "Q": q,
+        "Q_rank": q_rank,
         "gate": gate,
         "D": d1,
         "mvf_score": s1,
+        "mvf_v2": s_v2,
+        "additive": s_add,
     }
+
+    if args.uncond_loss:
+        uncond = torch.load(args.uncond_loss, map_location="cpu", weights_only=True)
+        if isinstance(uncond, dict):
+            uncond = uncond["uncond_loss"]
+        uncond = uncond.view(-1).float()
+        if uncond.numel() != n:
+            raise ValueError(
+                f"--uncond-loss length {uncond.numel()} != pool size {n}"
+            )
+        # PPL filter keeps the most fluent responses → select LOW L(y).
+        signals["ppl"] = -uncond
+        # IFD (Li et al., NAACL 2024) selects HIGH conditioned/unconditioned
+        # loss ratio ("instruction-following difficulty"), EXCLUDING
+        # samples with IFD > 1 — the paper treats those as misaligned
+        # (instruction makes prediction WORSE) and drops them before
+        # top-K. Omitting the exclusion would make the baseline
+        # preferentially select exactly our mismatch corruptions and
+        # misrepresent it (adversarial review 2026-08). Excluded samples
+        # get score 0 (< any admissible ratio), keeping AP well-defined.
+        ifd_ratio = loss / uncond.clamp_min(1e-6)
+        signals["ifd"] = torch.where(
+            ifd_ratio <= 1.0, ifd_ratio, torch.zeros_like(ifd_ratio),
+        )
 
     ratios = [float(cfg.get("selection_ratio", 0.1))]
     for extra in args.ks.split(","):

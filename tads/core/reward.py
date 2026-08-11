@@ -67,8 +67,13 @@ def compute_rewards(
         rm = resp_mask[i]                                     # (T-1,)
         nr = n_resp[i]
 
-        # CE over response tokens only.
-        ce_i = F.cross_entropy(sl, ll, reduction="none")      # (T-1,) fp32
+        # CE over response tokens only. Cast to fp32 BEFORE the CE — the
+        # comment previously claimed fp32 but no cast happened, so
+        # loss_orig carried bf16 rounding (~0.4% rel.) while the
+        # counterfactual pass (reliability.compute_pool_loss) is fp32.
+        # ΔL = loss_cf − loss_orig is zero-ANCHORED at the rezero kink,
+        # exactly where that dtype asymmetry moves samples across Q = 0.
+        ce_i = F.cross_entropy(sl.float(), ll, reduction="none")  # (T-1,) fp32
         r_loss[i] = (ce_i * rm).sum() / nr
 
         # Entropy via log_softmax: H = -Σ p log p = -Σ exp(lp) * lp.

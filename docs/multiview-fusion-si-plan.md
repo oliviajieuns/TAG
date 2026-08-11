@@ -7,6 +7,10 @@
 > active plan and is implemented in `tads/` (score_mode: mvf). This file
 > is kept for the record; the eigengap-weighted layer fusion idea remains
 > viable future work.
+>
+> [2026-08-11 v2] §7 Elsevier checklist and the day-10–12 go/no-go gate
+> have been ported into the active plan (§10 / §9 there) — maintain them
+> THERE, not here. This file is now fully read-only history.
 
 **Status:** design doc, nothing in this plan implemented yet.
 **Target:** Elsevier *Information Fusion* special issue — "Multi-view Fusion and Learning on Low-quality Data: Foundation Models in Theories, Algorithms and Applications." Submission deadline 2026-08-30.
