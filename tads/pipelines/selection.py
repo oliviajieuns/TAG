@@ -61,6 +61,138 @@ def _random_indices(n_total, ratio, seed, epoch):
     return perm[:k]
 
 
+# ---------------------------------------------------------------------------
+# MVF support: loss history (learnability view) + reliability cache plumbing
+# ---------------------------------------------------------------------------
+
+def _loss_history_path(output_dir, epoch: int) -> Path:
+    return Path(output_dir) / f"loss_history_epoch{epoch}.pt"
+
+
+def _save_loss_history(output_dir, epoch: int, r_loss: torch.Tensor) -> None:
+    p = _loss_history_path(output_dir, epoch)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".pt.tmp")
+    torch.save(r_loss.detach().cpu(), tmp)
+    os.replace(tmp, p)
+    logger.info("Saved loss history for epoch %d to %s", epoch, p)
+
+
+def _load_loss_history(output_dir, epoch: int):
+    p = _loss_history_path(output_dir, epoch)
+    if epoch < 1 or not p.exists():
+        return None
+    try:
+        return torch.load(p, map_location="cpu", weights_only=True)
+    except Exception as e:
+        logger.warning("Could not load loss history at %s (%s)", p, e)
+        return None
+
+
+def _prepare_mvf(
+    mvf_ctx: Dict[str, Any],
+    *,
+    model,
+    cfg,
+    epoch: int,
+    device,
+    n_pool: int,
+):
+    """Assemble the ``mvf`` dict consumed by ``collect_episode``.
+
+    - Reliability Q: loaded from the run's cache when present; otherwise
+      the counterfactual pool loss is computed here (one forward pass) and
+      Q is derived inside collect_episode from this epoch's pool loss —
+      then persisted by :func:`_finalize_mvf`.
+    - Learnability: previous refresh's loss vector, if this run saved one.
+      (A refresh that reused a cached selection skips collect_episode and
+      saves no history — the next epoch then falls back to rank(L) only.)
+    """
+    from ..core import reliability as rel
+
+    output_dir = cfg["output_dir"]
+    params = mvf_ctx.get("params", {}) or {}
+    mvf: Dict[str, Any] = {
+        "completeness": mvf_ctx["completeness"],
+        "cluster_ids": mvf_ctx.get("cluster_ids"),
+        "eta": float(params.get("eta", 0.5)),
+        "gamma": float(params.get("gamma", 1.0)),
+        "eps": float(params.get("eps", 0.01)),
+        "reliability": None,
+        "loss_cf": None,
+        "loss_prev": None,
+    }
+
+    cache = rel.load_reliability_cache(output_dir)
+    if cache is not None and cache["q"].numel() == n_pool:
+        mvf["reliability"] = cache["q"]
+    else:
+        if cache is not None:
+            logger.warning(
+                "Reliability cache size %d != pool size %d — recomputing.",
+                cache["q"].numel(), n_pool,
+            )
+        cf_dataset = mvf_ctx.get("cf_dataset")
+        if cf_dataset is None:
+            raise ValueError(
+                "MVF score_mode requires a counterfactual pool: set "
+                "tads.mvf.counterfactual_data_files (generate it with "
+                "scripts/make_corrupted_pool.py --emit-counterfactual).",
+            )
+        if len(cf_dataset) != n_pool:
+            raise ValueError(
+                f"Counterfactual pool size {len(cf_dataset)} != candidate "
+                f"pool size {n_pool} — pools must be index-aligned.",
+            )
+        if epoch > 1:
+            logger.warning(
+                "Reliability is being computed at epoch %d (not the base "
+                "checkpoint) — resuming without reliability_cache.pt? Q will "
+                "reflect the current checkpoint.", epoch,
+            )
+        mvf["loss_cf"] = rel.compute_pool_loss(
+            model, cf_dataset,
+            batch_size=int(cfg.get("episode_batch_size", 1)),
+            device=str(device),
+            tag="counterfactual",
+        )
+
+    mvf["loss_prev"] = _load_loss_history(output_dir, epoch - 1)
+    if mvf["loss_prev"] is not None and mvf["loss_prev"].numel() != n_pool:
+        logger.warning(
+            "Loss history size %d != pool size %d — ignoring history.",
+            mvf["loss_prev"].numel(), n_pool,
+        )
+        mvf["loss_prev"] = None
+    return mvf
+
+
+def _finalize_mvf(mvf, episode, *, cfg, epoch: int) -> Dict[str, Any]:
+    """Persist per-epoch MVF state (loss history + reliability cache) and
+    return metric extras."""
+    from ..core import reliability as rel
+
+    output_dir = cfg["output_dir"]
+    _save_loss_history(output_dir, epoch, episode["r_loss"])
+    if mvf["reliability"] is None and episode.get("reliability") is not None:
+        rel.save_reliability_cache(
+            output_dir,
+            q=episode["reliability"],
+            completeness=mvf["completeness"],
+            loss_orig=episode["r_loss"],
+            loss_cf=mvf["loss_cf"],
+            epoch=epoch,
+        )
+    extras: Dict[str, Any] = {
+        "score_mode": "mvf",
+        "q_mean": float(episode["reliability"].mean().item()),
+        "d_mean": float(episode["difficulty"].mean().item()),
+        "completeness_mean": float(mvf["completeness"].float().mean().item()),
+        "progress_active": mvf["loss_prev"] is not None,
+    }
+    return extras
+
+
 def _broadcast_selection(selected, *, epoch=0, output_dir=None, device=None):
     """File-poll selection share — no inter-write/read NCCL barrier.
 
@@ -207,8 +339,17 @@ def _broadcast_selection(selected, *, epoch=0, output_dir=None, device=None):
     return result
 
 
-def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
-    """Return (selected_indices, extras) for the given epoch."""
+def select_indices(
+    method, *, model, anchor, dataset, cfg, epoch, seed, device, mvf_ctx=None,
+):
+    """Return (selected_indices, extras) for the given epoch.
+
+    ``mvf_ctx`` — optional context for the multi-view-fusion score
+    (built by ``tads.train`` when ``tads.score_mode == "mvf"``):
+    ``{"completeness": (N,) tensor, "cf_dataset": Dataset | None,
+    "cluster_ids": list[int] | None, "params": {eta, gamma, eps}}``.
+    None keeps the legacy scoring path untouched.
+    """
     n_total = len(dataset)
     ratio = float(cfg["selection_ratio"])
     extras = {}
@@ -303,6 +444,13 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
             tads_cfg = cfg.get("tads", {}) or {}
             exp_tag = str(cfg.get("model_key", "?")) + "/alpaca/" + method
 
+            mvf = None
+            if mvf_ctx is not None:
+                mvf = _prepare_mvf(
+                    mvf_ctx, model=model, cfg=cfg, epoch=epoch,
+                    device=device, n_pool=n_total,
+                )
+
             print("[trace] rank=0 BEFORE collect_episode", flush=True)
             episode = collect_episode(
                 model=model,
@@ -316,6 +464,7 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
                 seed=seed,
                 epoch=epoch,
                 exp_tag=exp_tag,
+                mvf=mvf,
             )
             print("[trace] rank=0 AFTER collect_episode | episode_keys="
                   + str(list(episode.keys())), flush=True)
@@ -335,6 +484,10 @@ def select_indices(method, *, model, anchor, dataset, cfg, epoch, seed, device):
                 "align_mean": episode["align_mean"],
                 "align_std": episode["align_std"],
             })
+            if mvf is not None:
+                extras.update(
+                    _finalize_mvf(mvf, episode, cfg=cfg, epoch=epoch),
+                )
         except Exception as _e:
             print("[trace] rank=0 EXCEPTION in main branch: "
                   + type(_e).__name__ + ": " + str(_e), flush=True)

@@ -18,6 +18,17 @@ Top-B samples by s_i form the training subset for this epoch.
 Setting λ=0 (or use_anchor=False) recovers the composite-reward base
 ranking exactly (paper §3.3): s_i = R_i.
 
+MVF mode (``mvf`` kwarg; docs/plan_low_quality_multiview.md):
+    The low-quality-pool score replaces the uncertainty-carrying R with a
+    quality-gated fusion of three genuinely distinct views —
+
+        S_i = (Q_i · c_i + ε)^γ · (D_i^t + ε) · (1 + λ · widetilde-align_i)
+
+    where Q_i is the (static, cached) counterfactual reliability, c_i the
+    completeness gate, D_i^t the progress-modulated learnable difficulty,
+    and the alignment factor is unchanged. Passing ``mvf=None`` (default)
+    keeps the legacy path bit-identical.
+
 Note on "reward" naming: `R`, `r_loss`, `r_entropy`, `r_weight` are kept for
 paper / prior-work (DOTS, Active IT) convention compatibility. The TADS
 pipeline carries **no RL semantics** — every step is a closed-form
@@ -50,8 +61,11 @@ from typing import Any, Dict, List, Optional
 import torch
 from torch.utils.data import DataLoader
 
+from .dedup import constrained_topk
 from .reward import compute_rewards
 from .scorer import (
+    learnable_difficulty,
+    mvf_score,
     normalize_alignment,
     pool_reward,
     select_top_b,
@@ -95,8 +109,26 @@ def collect_episode(
     exp_tag: Optional[str] = None,
     progress_interval: int = 50,
     empty_cache_interval: int = 10,
+    mvf: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run one episode over the candidate pool and return selection results.
+
+    ``mvf`` — when None (default) the legacy composite-reward score
+    s_i = R_i · (1 + λ·widetilde-align_i) is used, bit-identical to the
+    shipped pipeline. When given, the multi-view-fusion score
+    S_i = (Q_i·c_i + ε)^γ · (D_i + ε) · (1 + λ·widetilde-align_i)
+    replaces it (docs/plan_low_quality_multiview.md §1.4). Expected keys:
+
+        reliability   (N,) Q in [0,1], or None to derive it here from
+                      ``loss_cf`` (Q = rank01(loss_cf − loss_orig); done at
+                      the epoch that populates the cache)
+        loss_cf       (N,) counterfactual pool loss, required when
+                      ``reliability`` is None
+        completeness  (N,) c in (0,1] — EOS/truncation gate
+        loss_prev     (N,) previous-refresh pool loss, or None at t=1
+        cluster_ids   list[int] near-duplicate cluster ids (-1 = unique),
+                      or None to skip the dedup constraint
+        eta, gamma, eps   scalars (plan §1.2 / §1.4)
 
     Memory: ``empty_cache_interval=10`` keeps the CUDA caching allocator
     from fragmenting across the ~3000 episode batches. With Llama-2-7B +
@@ -265,10 +297,7 @@ def collect_episode(
     # ---- Pool-level composite reward (paper Eqs. 3-4) ----
     R, r_weight_value = pool_reward(all_r_loss_t, all_r_entropy_t)
 
-    # ---- Alignment and final score (paper §3.3 anchor + Eq. 10) ----
-    # Paper §3.3 final paragraph explicitly excludes z-score / R̃ from the
-    # ranking rule. We therefore pass raw R directly to `tads_score`, which
-    # computes s_i = R_i · (1 + λ · widetilde-align_i)  (paper Eq. 10).
+    # ---- Alignment normalisation (paper §3.3 anchor; shared by both modes) ----
     if apply_anchor:
         alignment_raw = torch.cat(all_alignment_raw, dim=0).view(-1)
         alignment, _alignment_collapsed = normalize_alignment(alignment_raw)
@@ -277,35 +306,87 @@ def collect_episode(
                 "TADS alignment COLLAPSED (max-min < 1e-8) | "
                 "alignment_raw.std=%.2e. widetilde-align set to 0.5 for "
                 "every sample → anchor factor becomes constant (1 + 0.5λ) "
-                "and TADS reduces to the composite-reward base ranking "
-                "for this epoch. Check anchor PCA gap or multi-layer "
-                "cancellation.",
+                "and the score reduces to its base ranking for this epoch. "
+                "Check anchor PCA gap or multi-layer cancellation.",
                 float(alignment_raw.std().item()),
             )
-        score = tads_score(R, alignment, lam)
         align_mean = float(alignment.mean().item())
         align_std = float(alignment.std().item())
-        boost = 1.0 + lam * alignment
-        logger.info(
-            "TADS score | epoch=%d | lam=%.3f | R_mean=%.4f | "
-            "align_mean=%.4f | align_std=%.4f | "
-            "boost_mean=%.4f | boost_max=%.4f",
-            epoch, lam,
-            float(R.mean().item()),
-            align_mean, align_std,
-            float(boost.mean().item()), float(boost.max().item()),
-        )
     else:
-        # λ = 0 or use_anchor=False — paper §3.3: "Setting λ = 0 recovers
-        # the composite-reward base ranking exactly."
-        score = R
         alignment = None
         align_mean = None
         align_std = None
         _alignment_collapsed = False
+
+    # ---- Final score ----
+    q = None
+    difficulty = None
+    if mvf is None:
+        # Legacy path (paper Eq. 10): s_i = R_i · (1 + λ · widetilde-align_i).
+        # Paper §3.3 final paragraph excludes z-score / R̃ from the ranking
+        # rule, so raw R goes into `tads_score` directly.
+        if apply_anchor:
+            score = tads_score(R, alignment, lam)
+            boost = 1.0 + lam * alignment
+            logger.info(
+                "TADS score | epoch=%d | lam=%.3f | R_mean=%.4f | "
+                "align_mean=%.4f | align_std=%.4f | "
+                "boost_mean=%.4f | boost_max=%.4f",
+                epoch, lam,
+                float(R.mean().item()),
+                align_mean, align_std,
+                float(boost.mean().item()), float(boost.max().item()),
+            )
+        else:
+            # λ = 0 or use_anchor=False — paper §3.3: "Setting λ = 0
+            # recovers the composite-reward base ranking exactly."
+            score = R
+            logger.info(
+                "Composite-reward-only score (no anchor) | epoch=%d | R_mean=%.4f",
+                epoch, float(R.mean().item()),
+            )
+    else:
+        # MVF path (plan §1.4): S = (Q·c + ε)^γ · (D + ε) · (1 + λ·align).
+        from .reliability import reliability_from_losses  # local: avoid cycle
+
+        q = mvf.get("reliability")
+        if q is None:
+            loss_cf = mvf.get("loss_cf")
+            if loss_cf is None:
+                raise ValueError(
+                    "collect_episode(mvf=...): either 'reliability' or "
+                    "'loss_cf' must be provided.",
+                )
+            q = reliability_from_losses(all_r_loss_t, loss_cf.view(-1).float())
+        q = q.view(-1).float()
+        completeness = mvf["completeness"].view(-1).float()
+        loss_prev = mvf.get("loss_prev")
+        if loss_prev is not None:
+            loss_prev = loss_prev.view(-1).float()
+        eta = float(mvf.get("eta", 0.5))
+        gamma = float(mvf.get("gamma", 1.0))
+        eps = float(mvf.get("eps", 0.01))
+        for name, t in (("reliability", q), ("completeness", completeness)):
+            if t.numel() != total_samples:
+                raise ValueError(
+                    f"collect_episode(mvf=...): {name} length {t.numel()} != "
+                    f"pool size {total_samples} — stale cache or wrong pool?",
+                )
+        difficulty = learnable_difficulty(all_r_loss_t, loss_prev, eta)
+        score = mvf_score(
+            q, completeness, difficulty, alignment,
+            lam=lam, gamma=gamma, eps=eps,
+        )
         logger.info(
-            "Composite-reward-only score (no anchor) | epoch=%d | R_mean=%.4f",
-            epoch, float(R.mean().item()),
+            "MVF score | epoch=%d | lam=%.3f | gamma=%.2f | eta=%.2f | "
+            "Q_mean=%.4f | c_mean=%.4f | D_mean=%.4f | align_mean=%s | "
+            "progress=%s",
+            epoch, lam, gamma, eta,
+            float(q.mean().item()),
+            float(completeness.mean().item()),
+            float(difficulty.mean().item()),
+            f"{align_mean:.4f}" if align_mean is not None else "n/a",
+            "on" if loss_prev is not None else "off (t=1)",
         )
 
     # ---- Top-B selection ----
@@ -315,7 +396,13 @@ def collect_episode(
             "collect_episode: total_samples == 0 — empty candidate pool. "
             "Check dataset_subset_size / data path.",
         )
-    selected_indices: List[int] = select_top_b(score, k).cpu().tolist()
+    cluster_ids = mvf.get("cluster_ids") if mvf is not None else None
+    if cluster_ids is not None:
+        selected_indices: List[int] = (
+            constrained_topk(score, k, cluster_ids).cpu().tolist()
+        )
+    else:
+        selected_indices = select_top_b(score, k).cpu().tolist()
     logger.info(
         "Selection topk | k=%d/%d | first5=%s",
         k, total_samples, selected_indices[:5],
@@ -351,6 +438,14 @@ def collect_episode(
         "selected_indices": selected_indices,
         "rewards": R,
         "alignment": alignment,
+        # Per-sample vectors — consumed by the MVF pipeline (loss history,
+        # reliability cache) and by scripts/score_pool.py diagnostics.
+        "r_loss": all_r_loss_t,
+        "r_entropy": all_r_entropy_t,
+        "reliability": q,
+        "difficulty": difficulty,
+        "score": score,
+        "score_mode": "mvf" if mvf is not None else "tads",
         "r_loss_mean": r_loss_mean,
         "r_entropy_mean": r_entropy_mean,
         "r_weight": r_weight_value,

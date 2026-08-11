@@ -521,10 +521,11 @@ def main() -> None:
     n_total_full = len(dataset)
 
     sub_n = cfg.get("dataset_subset_size")
+    keep_indices = None
     if sub_n is not None and int(sub_n) < n_total_full:
         g = torch.Generator(); g.manual_seed(seed)
-        keep = torch.randperm(n_total_full, generator=g).tolist()[: int(sub_n)]
-        dataset = dataset.select(keep)
+        keep_indices = torch.randperm(n_total_full, generator=g).tolist()[: int(sub_n)]
+        dataset = dataset.select(keep_indices)
         if is_main_process():
             logger.info("Sub-sampled dataset to %d (seed=%d)", len(dataset), seed)
     n_total = len(dataset)
@@ -548,6 +549,77 @@ def main() -> None:
             max_samples_for_pca=int(anchor_cfg.get("max_samples_for_pca", 2000)),
             pca_batch_size=int(anchor_cfg.get("pca_batch_size", 4)),
             device=str(device),
+        )
+
+    # ---------- MVF context (score_mode: mvf; low-quality-pool score) ----------
+    # Builds the reliability/learnability side inputs on rank 0 only —
+    # selection itself runs on rank 0, and the counterfactual tokenisation
+    # would otherwise race on the HF datasets cache across ranks.
+    mvf_ctx = None
+    tads_cfg_top = cfg.get("tads", {}) or {}
+    if (
+        method == "tads"
+        and str(tads_cfg_top.get("score_mode", "tads")) == "mvf"
+        and is_main_process()
+    ):
+        from tads.core.dedup import load_clusters
+        from tads.core.reliability import completeness_from_dataset
+
+        mvf_cfg = tads_cfg_top.get("mvf", {}) or {}
+        cf_files = mvf_cfg.get("counterfactual_data_files") or None
+        cf_dataset = None
+        if cf_files:
+            with timer.phase("counterfactual_build", "data"):
+                cf_dataset = build_alpaca_dataset(
+                    tokenizer=tokenizer,
+                    cache_dir=os.path.join(effective_cache, "counterfactual"),
+                    max_seq_len=int(cfg["max_seq_len"]),
+                    dataset_name=None,
+                    data_files=str(cf_files),
+                    prompt_style=style_key,
+                )
+            if keep_indices is not None:
+                cf_dataset = cf_dataset.select(keep_indices)
+            if len(cf_dataset) != n_total:
+                raise ValueError(
+                    f"Counterfactual pool size {len(cf_dataset)} != candidate "
+                    f"pool size {n_total}. The counterfactual file must be "
+                    f"index-aligned with data_files (regenerate both with "
+                    f"scripts/make_corrupted_pool.py).",
+                )
+        cluster_ids = None
+        cluster_file = mvf_cfg.get("dedup_clusters_file") or None
+        if cluster_file:
+            cluster_ids = load_clusters(str(cluster_file))
+            if keep_indices is not None:
+                cluster_ids = [cluster_ids[i] for i in keep_indices]
+            if len(cluster_ids) != n_total:
+                raise ValueError(
+                    f"dedup_clusters_file length {len(cluster_ids)} != pool "
+                    f"size {n_total} — cluster file built for a different pool?",
+                )
+        completeness = completeness_from_dataset(
+            dataset,
+            eos_token_id=tokenizer.eos_token_id,
+            c_trunc=float(mvf_cfg.get("c_trunc", 0.2)),
+        )
+        mvf_ctx = {
+            "completeness": completeness,
+            "cf_dataset": cf_dataset,
+            "cluster_ids": cluster_ids,
+            "params": {
+                "eta": float(mvf_cfg.get("eta", 0.5)),
+                "gamma": float(mvf_cfg.get("gamma", 1.0)),
+                "eps": float(mvf_cfg.get("eps", 0.01)),
+            },
+        }
+        logger.info(
+            "MVF context ready | counterfactual=%s | dedup_clusters=%s | "
+            "eta=%.2f gamma=%.2f eps=%.3f c_trunc=%.2f",
+            "yes" if cf_dataset is not None else "no (cache required)",
+            "yes" if cluster_ids is not None else "no",
+            mvf_ctx["params"]["eta"], mvf_ctx["params"]["gamma"],
+            mvf_ctx["params"]["eps"], float(mvf_cfg.get("c_trunc", 0.2)),
         )
 
     # ---------- optimizer / scheduler ----------
@@ -770,6 +842,7 @@ def main() -> None:
                 epoch=epoch,
                 seed=seed,
                 device=device,
+                mvf_ctx=mvf_ctx,
             )
             save_selection(run_dir, epoch, selected)
 

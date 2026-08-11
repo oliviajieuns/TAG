@@ -1,5 +1,13 @@
 # TADS → Information Fusion Special Issue: Execution Plan
 
+> **SUPERSEDED (2026-08-11).** The submission direction has pivoted from
+> layer-as-view eigengap fusion to signal-level multi-view fusion
+> (reliability × learnability × alignment) on low-quality instruction
+> pools — see `docs/plan_low_quality_multiview.md`, which is now the
+> active plan and is implemented in `tads/` (score_mode: mvf). This file
+> is kept for the record; the eigengap-weighted layer fusion idea remains
+> viable future work.
+
 **Status:** design doc, nothing in this plan implemented yet.
 **Target:** Elsevier *Information Fusion* special issue — "Multi-view Fusion and Learning on Low-quality Data: Foundation Models in Theories, Algorithms and Applications." Submission deadline 2026-08-30.
 **Supersedes:** the CIKM 2026 submission target (see caveat in §6 — dual-submission must be resolved with co-authors before starting).

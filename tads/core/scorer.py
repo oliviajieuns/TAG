@@ -25,7 +25,7 @@ the main path in ``selector.collect_episode`` passes raw R directly to
 from __future__ import annotations
 
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 
@@ -186,6 +186,134 @@ def tads_score(
     if lam < 0:
         raise ValueError(f"tads_score: lam must be >= 0, got {lam}")
     return R * (1.0 + lam * alignment_norm)
+
+
+# ---------------------------------------------------------------------------
+# MVF scoring path (reliability × learnability × alignment)
+# ---------------------------------------------------------------------------
+# The multi-view-fusion score replaces the uncertainty-as-quality composite
+# with three disentangled views (docs/plan_low_quality_multiview.md §1):
+#
+#     Q_i   reliability   — counterfactual instruction fidelity (static,
+#                           base checkpoint; tads/core/reliability.py)
+#     c_i   completeness  — EOS/truncation gate, data-level
+#     D_i^t learnability  — rank(L^t) modulated by epoch-to-epoch progress
+#     A_i^t alignment     — hidden-state anchor alignment (unchanged)
+#
+#     S_i^t = (Q_i · c_i + ε)^γ · (D_i^t + ε) · (1 + λ · A_i^t)
+#
+# Q·c enters as a multiplicative GATE, not an additive term: a noisy
+# sample's high loss must not be able to offset its low reliability.
+# Entropy is intentionally absent — it is uncertainty, not quality, and is
+# kept only as a logged diagnostic / ablation arm.
+
+
+def rank01(x: torch.Tensor) -> torch.Tensor:
+    """Normalised rank transform to [0, 1]: smallest value → 0, largest → 1.
+
+    Ties are broken by position (stable argsort), which keeps the transform
+    deterministic. For N == 1 the single element maps to 0.5.
+    """
+    n = x.numel()
+    if n == 0:
+        return x.float()
+    if n == 1:
+        return torch.full_like(x.float(), 0.5)
+    order = torch.argsort(x, stable=True)
+    ranks = torch.empty(n, dtype=torch.float32, device=x.device)
+    ranks[order] = torch.arange(n, dtype=torch.float32, device=x.device)
+    return ranks / float(n - 1)
+
+
+def learnable_difficulty(
+    loss_t: torch.Tensor,
+    loss_prev: Optional[torch.Tensor] = None,
+    eta: float = 0.5,
+) -> torch.Tensor:
+    """Learnable-difficulty view D_i^t (plan §1.2).
+
+        t = 1 (no history):  D_i = rank01(L_i^t)
+        t ≥ 2:               P_i = rank01([L_i^{t-1} - L_i^t]_+)
+                             D_i = rank01(L_i^t) · (η + (1-η) · P_i)
+
+    High current loss alone is ambiguous between "hard but clean" and
+    "noise". Progress P disambiguates: a sample whose loss is falling
+    across refreshes is hard-but-learnable and keeps its difficulty
+    weight; a persistently-stuck sample is discounted toward η·rank(L).
+
+    Args:
+        loss_t: (N,) per-sample response CE loss at the current refresh.
+        loss_prev: (N,) loss at the previous refresh, or None at t=1.
+        eta: floor in [0, 1] on the progress modulation (η=1 disables it).
+    """
+    if not (0.0 <= eta <= 1.0):
+        raise ValueError(f"learnable_difficulty: eta must be in [0,1], got {eta}")
+    base = rank01(loss_t)
+    if loss_prev is None:
+        return base
+    if loss_prev.shape != loss_t.shape:
+        raise ValueError(
+            f"learnable_difficulty: shape mismatch loss_t={tuple(loss_t.shape)} "
+            f"vs loss_prev={tuple(loss_prev.shape)}"
+        )
+    progress = rank01(torch.clamp(loss_prev - loss_t, min=0.0))
+    return base * (eta + (1.0 - eta) * progress)
+
+
+def mvf_score(
+    reliability: torch.Tensor,
+    completeness: torch.Tensor,
+    difficulty: torch.Tensor,
+    alignment_norm: Optional[torch.Tensor],
+    *,
+    lam: float = 1.0,
+    gamma: float = 1.0,
+    eps: float = 0.01,
+) -> torch.Tensor:
+    """Quality-gated multi-view fusion score (plan §1.4):
+
+        S_i = (Q_i · c_i + ε)^γ · (D_i + ε) · (1 + λ · Ã_i)
+
+    Args:
+        reliability: (N,) Q_i in [0, 1] (rank-normalised counterfactual
+            fidelity; see ``tads.core.reliability``).
+        completeness: (N,) c_i in (0, 1] (1 = complete response;
+            ``c_trunc`` for truncated ones).
+        difficulty: (N,) D_i in [0, 1] from :func:`learnable_difficulty`.
+        alignment_norm: (N,) min-max-normalised anchor alignment in [0, 1],
+            or None when the anchor is disabled (factor becomes 1).
+        lam: anchor weight λ ≥ 0 (same role as in :func:`tads_score`).
+        gamma: gate sharpness γ ≥ 0. γ=0 disables the reliability gate
+            (ablation arm); larger γ makes the gate harder.
+        eps: gate floor — keeps S non-zero so ranking below the gate stays
+            defined and γ-exponentiation is stable at Q·c = 0.
+    """
+    for name, t in (
+        ("reliability", reliability),
+        ("completeness", completeness),
+        ("difficulty", difficulty),
+    ):
+        if t.shape != reliability.shape:
+            raise ValueError(
+                f"mvf_score: shape mismatch {name}={tuple(t.shape)} "
+                f"vs reliability={tuple(reliability.shape)}"
+            )
+    if lam < 0:
+        raise ValueError(f"mvf_score: lam must be >= 0, got {lam}")
+    if gamma < 0:
+        raise ValueError(f"mvf_score: gamma must be >= 0, got {gamma}")
+    if eps <= 0:
+        raise ValueError(f"mvf_score: eps must be > 0, got {eps}")
+    gate = torch.pow(reliability * completeness + eps, gamma)
+    score = gate * (difficulty + eps)
+    if alignment_norm is not None:
+        if alignment_norm.shape != reliability.shape:
+            raise ValueError(
+                f"mvf_score: shape mismatch alignment={tuple(alignment_norm.shape)} "
+                f"vs reliability={tuple(reliability.shape)}"
+            )
+        score = score * (1.0 + lam * alignment_norm)
+    return score
 
 
 def select_top_b(scores: torch.Tensor, b: int) -> torch.Tensor:

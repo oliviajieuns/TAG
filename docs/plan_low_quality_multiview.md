@@ -1,6 +1,10 @@
 # TADS 재설계: Reliability × Learnability × Alignment Multi-View Fusion for Low-Quality Instruction Data
 
-**Status:** 설계 문서. 이 문서의 내용은 아직 구현되지 않음.
+**Status:** 구현 완료 (2026-08-11). §1의 점수(`score_mode: mvf`), §3의 오염
+데이터 생성(`tads/data/corruption.py`, `scripts/make_corrupted_pool.py`),
+§4 Phase-A 진단(`scripts/score_pool.py`), §5의 전체 항목이 코드에 반영됨.
+§2의 PPO 관련 항목은 main 브랜치에서 이미 deterministic scoring으로 해결되어
+있었음(`tads/core/scorer.py`) — legacy 경로는 `score_mode: tads`로 유지.
 **Target:** Elsevier *Information Fusion* SI — "Multi-view Fusion and Learning on Low-quality Data" (마감 2026-08-30).
 **Supersedes:** 기존 layer-as-view eigengap fusion 계획. 이번 방향은 signal-level 3-view(신뢰도/학습가능성/정렬)로 전환하며, hidden-state geometry(정렬)는 현행 유지. eigengap 층별 가중은 이번 사이클에서 제외(선택적 future work).
 
