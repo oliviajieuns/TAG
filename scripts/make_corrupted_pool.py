@@ -83,6 +83,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -93,11 +94,21 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tads.data.corruption import (  # noqa: E402
-    corrupt_pool,
-    make_counterfactual,
-    response_word_len,
-)
+def _load_module(name: str, rel_path: str):
+    """Load a repo module by file path WITHOUT importing the ``tads``
+    package __init__ (which pulls in torch). Pool generation is pure
+    Python and must stay runnable on nodes whose torch install is broken
+    or absent."""
+    spec = importlib.util.spec_from_file_location(name, _REPO_ROOT / rel_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_corruption = _load_module("_tads_corruption", "tads/data/corruption.py")
+corrupt_pool = _corruption.corrupt_pool
+make_counterfactual = _corruption.make_counterfactual
+response_word_len = _corruption.response_word_len
 
 IN_PLACE = ("mismatch", "noisy", "truncated", "wrong_answer")
 
@@ -351,7 +362,9 @@ def main() -> None:
                 _dump(cf_k, out_dir / f"counterfactual_{k + 1}.json")
 
     if args.emit_dedup_clusters:
-        from tads.core.dedup import near_duplicate_clusters
+        near_duplicate_clusters = _load_module(
+            "_tads_dedup", "tads/core/dedup.py",
+        ).near_duplicate_clusters
 
         texts = [str(r.get("instruction", "")) for r in all_records]
         cluster_ids = near_duplicate_clusters(
