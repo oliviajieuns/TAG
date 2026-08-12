@@ -58,18 +58,23 @@ export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-mode
 export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/jieuns.shin/datasets/alpaca_gpt4.json}"
 
 # --- Output roots ---
-export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/minsoo3.kim/tads-checkpoints}"
-export DATA_CACHE="${DATA_CACHE:-/group-volume/minsoo3.kim/tads-checkpoints/cache}"
+# n9 cluster: minsoo3.kim/tads-checkpoints was the OTHER cluster's shared
+# team default. On n9, jieuns.shin's own group-volume namespace is what
+# this user actually has (writable, uncontested) — default there instead
+# so a from-scratch checkout writes training output/checkpoints/cache
+# somewhere real without needing a manual export every session.
+export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/jieuns.shin/tads-checkpoints}"
+export DATA_CACHE="${DATA_CACHE:-/group-volume/jieuns.shin/tads-checkpoints/cache}"
 # `tads-eval-results` holds eval results for the TADS-family methods
 # (random / full / data_agent / tads). Comparison baselines (NAIT, SelectIT,
 # ...) write to sibling roots so each method's score history is separable
 # without per-run path mangling.
-export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/tads-eval-results}"
-export NAIT_EVAL_RESULTS_ROOT="${NAIT_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/nait-eval-results}"
-export SELECTIT_EVAL_RESULTS_ROOT="${SELECTIT_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/selectit-eval-results}"
-export LIMA_EVAL_RESULTS_ROOT="${LIMA_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/lima-eval-results}"
-export ALPAGASUS_EVAL_RESULTS_ROOT="${ALPAGASUS_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/alpagasus-eval-results}"
-export Q2Q_EVAL_RESULTS_ROOT="${Q2Q_EVAL_RESULTS_ROOT:-/group-volume/minsoo3.kim/q2q-eval-results}"
+export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-/group-volume/jieuns.shin/tads-eval-results}"
+export NAIT_EVAL_RESULTS_ROOT="${NAIT_EVAL_RESULTS_ROOT:-/group-volume/jieuns.shin/nait-eval-results}"
+export SELECTIT_EVAL_RESULTS_ROOT="${SELECTIT_EVAL_RESULTS_ROOT:-/group-volume/jieuns.shin/selectit-eval-results}"
+export LIMA_EVAL_RESULTS_ROOT="${LIMA_EVAL_RESULTS_ROOT:-/group-volume/jieuns.shin/lima-eval-results}"
+export ALPAGASUS_EVAL_RESULTS_ROOT="${ALPAGASUS_EVAL_RESULTS_ROOT:-/group-volume/jieuns.shin/alpagasus-eval-results}"
+export Q2Q_EVAL_RESULTS_ROOT="${Q2Q_EVAL_RESULTS_ROOT:-/group-volume/jieuns.shin/q2q-eval-results}"
 
 # --- Benchmark data dirs ---
 export MMLU_DATA_DIR="${MMLU_DATA_DIR:-/group-volume/IT-datasets/mmlu/all}"
