@@ -58,6 +58,18 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+# Mirrors the guard in tads/train.py: transformers eager-imports
+# `from torchvision.io import VideoReader` via its video model registry,
+# which raises on torchvision builds without ffmpeg support — even though
+# this script never touches video. Stub the missing attribute BEFORE any
+# transformers import so the import resolves to a harmless placeholder.
+try:
+    import torchvision.io as _tv_io
+    if not hasattr(_tv_io, "VideoReader"):
+        _tv_io.VideoReader = type("VideoReader", (), {})
+except Exception:
+    pass  # torchvision absent entirely is fine — this script never uses it.
+
 import torch  # noqa: E402
 
 from tads.core.reliability import (  # noqa: E402
