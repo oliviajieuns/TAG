@@ -18,10 +18,23 @@
 # The model loader does case-insensitive sibling lookup if these paths don't
 # match the on-disk casing exactly (Linux is case-sensitive; HF / cluster
 # naming conventions vary). So both `qwen2.5-7b` and `Qwen2.5-7B` resolve.
+#
+# n9 cluster (run267080-tads and siblings): /group-volume/nait-models does
+# NOT exist here, and a full sweep of /group-volume found no BASE checkpoint
+# for Llama-2-7B, Mistral-7B-v0.1, or DeepSeek-7B anywhere (only Instruct /
+# DPO-derived variants under /group-volume/models and /group-volume/cubist).
+# Decision (2026-08-12): run the Qwen2.5 family on this cluster's INSTRUCT
+# checkpoints instead of downloading base weights. This is a real deviation
+# from the paper's "SFT from a base checkpoint" setup — Instruct models are
+# already instruction-tuned, so results here are NOT directly comparable to
+# the base-model numbers from other clusters. Note this explicitly in any
+# writeup that mixes runs from both. Llama-2/Mistral/DeepSeek stay pointed
+# at their old (base-model) defaults, which are simply absent on this
+# cluster — the missing-path warning below is intentional, not a bug.
 export MODEL_PATH_LLAMA2_7B="${MODEL_PATH_LLAMA2_7B:-/group-volume/nait-models/Llama-2-7b-hf}"
-export MODEL_PATH_QWEN25_7B="${MODEL_PATH_QWEN25_7B:-/group-volume/nait-models/qwen2.5-7b}"
-export MODEL_PATH_QWEN25_05B="${MODEL_PATH_QWEN25_05B:-/group-volume/nait-models/qwen2.5-0.5b}"
-export MODEL_PATH_QWEN25_14B="${MODEL_PATH_QWEN25_14B:-/group-volume/jieuns/models/Qwen2.5-14B}"
+export MODEL_PATH_QWEN25_7B="${MODEL_PATH_QWEN25_7B:-/group-volume/models/Qwen2.5-7B-Instruct}"
+export MODEL_PATH_QWEN25_05B="${MODEL_PATH_QWEN25_05B:-/group-volume/models/Qwen2.5-0.5B-Instruct}"
+export MODEL_PATH_QWEN25_14B="${MODEL_PATH_QWEN25_14B:-/group-volume/models/Qwen2.5-14B-Instruct}"
 export MODEL_PATH_MISTRAL_7B="${MODEL_PATH_MISTRAL_7B:-/group-volume/nait-models/mistral-7b-v0.1}"
 export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-models/DeepSeek-LLM-7B-Base}"
 
@@ -262,7 +275,7 @@ _tads_warn() {
 
 # Required for training (any one of the four models you actually plan to use)
 _tads_warn MODEL_PATH_LLAMA2_7B   "$MODEL_PATH_LLAMA2_7B"   "Llama-2-7B base checkpoint dir"
-_tads_warn MODEL_PATH_QWEN25_7B   "$MODEL_PATH_QWEN25_7B"   "Qwen2.5-7B base checkpoint dir"
+_tads_warn MODEL_PATH_QWEN25_7B   "$MODEL_PATH_QWEN25_7B"   "Qwen2.5-7B checkpoint dir (base on most clusters; defaults to the Instruct checkpoint on n9 — see comment above)"
 _tads_warn MODEL_PATH_MISTRAL_7B  "$MODEL_PATH_MISTRAL_7B"  "Mistral-7B-v0.1 base checkpoint dir"
 _tads_warn MODEL_PATH_DEEPSEEK_7B "$MODEL_PATH_DEEPSEEK_7B" "DeepSeek-LLM-7B base checkpoint dir"
 _tads_warn ALPACA_DATA_FILES      "$ALPACA_DATA_FILES"      "Alpaca-GPT4 training file (parquet / json / jsonl / csv)"
