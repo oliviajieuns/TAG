@@ -27,12 +27,22 @@ export MODEL_PATH_DEEPSEEK_7B="${MODEL_PATH_DEEPSEEK_7B:-/group-volume/nait-mode
 
 # --- IT training data (Alpaca-GPT4 local file) ---
 # File extension picks the loader automatically: .parquet / .json / .jsonl / .csv.
-# Default is a glob over the canonical cluster layout (the HF Alpaca-GPT4
-# distribution shards into hashed filenames like
-# `train-00000-of-00001-XXXX.json`, so a single-file path is brittle across
-# re-downloads). Override with a concrete file path before sourcing if you
-# want exact-match behaviour.
-export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/IT-datasets/alpaca_gpt4/data/train-00000-of-00001-6ef3991c06080e14.json}"
+#
+# n9 cluster (run267080-tads and siblings) has NO /group-volume/IT-datasets
+# mount — only datasets/, models/, hf_home/ under /group-volume directly.
+# Regenerate this file with (HF hub, offline mode temporarily off; the
+# liangxin/Alpaca_GPT4 mirror ships a non-standard `conversations` schema,
+# so this falls back to vicgalle/alpaca-gpt4 — same underlying data,
+# standard instruction/input/output columns):
+#   HF_DATASETS_OFFLINE=0 HF_HUB_OFFLINE=0 python -c '
+#   import json, os
+#   from datasets import load_dataset
+#   ds = load_dataset("vicgalle/alpaca-gpt4")["train"]
+#   recs = [{"instruction": r["instruction"], "input": r.get("input") or "", "output": r["output"]} for r in ds]
+#   out = "/group-volume/jieuns.shin/datasets/alpaca_gpt4.json"
+#   os.makedirs(os.path.dirname(out), exist_ok=True)
+#   json.dump(recs, open(out, "w"), ensure_ascii=False)'
+export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/jieuns.shin/datasets/alpaca_gpt4.json}"
 
 # --- Output roots ---
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/minsoo3.kim/tads-checkpoints}"
