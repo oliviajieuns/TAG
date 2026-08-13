@@ -28,3 +28,17 @@ defaults:
   - configs/experiments/lowq/_shared_light_05b.yaml
 
 output_subdir: lowq/tag_05b
+tads:
+  tag:
+    # Keep the per-token NLLs in the gate cache (fp16). At 0.5B pool scale
+    # this is tens of MB and it makes the REQUIRED span-width sweep free:
+    # G is re-derived for a new W / tau / s with no forward pass.
+    #
+    # The sweep is required, not optional. Delta^min is a minimum over
+    # M = ceil(n/W) spans, so M — and with it the order-statistic drift of
+    # the tail — grows with response length, while per-span noise shrinks
+    # like 1/sqrt(W). The two effects pull in opposite directions and their
+    # balance decides both the clean false-veto rate and the detection
+    # power; W is therefore a first-order hyper-parameter, not a detail.
+    # See docs/tag-paper-deltas.md P2 for the quantitative argument.
+    store_token_losses: true

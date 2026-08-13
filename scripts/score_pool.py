@@ -155,6 +155,74 @@ def cluster_fraction(
     return distinct / max(1, len(top))
 
 
+def length_bias_report(
+    gate: "torch.Tensor",
+    n_tokens: "torch.Tensor",
+    labels: "torch.Tensor",
+    n_bins: int = 5,
+) -> Dict:
+    """Is the gate a length detector in disguise?
+
+    Delta^min is a MINIMUM over M spans and M grows with response length, so
+    the tail statistic drifts downward for long responses even when they are
+    perfectly clean — an order-statistic bias the paper already acknowledges
+    for the token-level variant it discarded. With a single global scale s
+    that drift turns into a length-dependent veto rate, which would (a)
+    confound the corruption results and (b) invite the obvious reviewer
+    objection, especially since truncated (T3) corruptions are SHORT and
+    would therefore be vetoed LESS than long clean responses on this axis.
+
+    This reports, per response-length quantile bin: the mean gate, the exact
+    veto rate, and the dirty base rate. A gate that is doing its job shows a
+    flat-ish veto rate across bins with the dirty rate varying; a gate that
+    is length-confounded shows veto rate climbing monotonically with length.
+    """
+    g = gate.detach().float().view(-1)
+    n_tok = n_tokens.detach().float().view(-1)
+    lab = labels.detach().float().view(-1)
+    n = g.numel()
+    order = torch.argsort(n_tok)
+    bins = torch.tensor_split(order, n_bins)
+    out = {"n_bins": n_bins, "bins": []}
+    for b in bins:
+        if b.numel() == 0:
+            continue
+        out["bins"].append({
+            "n": int(b.numel()),
+            "tokens_min": float(n_tok[b].min().item()),
+            "tokens_max": float(n_tok[b].max().item()),
+            "tokens_mean": float(n_tok[b].mean().item()),
+            "gate_mean": float(g[b].mean().item()),
+            "veto_rate": float((g[b] == 0).float().mean().item()),
+            "dirty_rate": float(lab[b].mean().item()),
+            "clean_veto_rate": (
+                float((g[b][lab[b] == 0] == 0).float().mean().item())
+                if int((lab[b] == 0).sum().item()) > 0 else None
+            ),
+        })
+    # Rank correlation between length and the gate: the single number that
+    # says whether the gate ranks by length.
+    if n > 1:
+        from tads.core.scorer import rank01
+        rg, rl = rank01(g), rank01(n_tok)
+        rg = rg - rg.mean()
+        rl = rl - rl.mean()
+        denom = float((rg.norm() * rl.norm()).item())
+        out["spearman_gate_vs_length"] = (
+            float((rg @ rl).item() / denom) if denom > 0 else 0.0
+        )
+    # The honest headline: does the clean veto rate climb with length?
+    clean_rates = [b["clean_veto_rate"] for b in out["bins"]
+                   if b["clean_veto_rate"] is not None]
+    if len(clean_rates) >= 2:
+        out["clean_veto_rate_first_bin"] = clean_rates[0]
+        out["clean_veto_rate_last_bin"] = clean_rates[-1]
+        out["clean_veto_length_ratio"] = (
+            clean_rates[-1] / clean_rates[0] if clean_rates[0] > 0 else None
+        )
+    return out
+
+
 def _build_gate_cfg(params: Dict, scale: Optional[float]):
     """GateConfig from a tads.tag block — mirrors the training-side builder
     in tads.pipelines.selection so a diagnostic run and a training run
@@ -577,6 +645,17 @@ def main() -> None:
         for ratio in ratios:
             k = max(1, int(n * ratio))
             report["tag"][f"budget_fits@{ratio:g}"] = bool(n_adm >= k)
+        report["tag"]["length_bias"] = length_bias_report(
+            tag_components["gate"], tag_components["n_common"], labels,
+        )
+        _lb = report["tag"]["length_bias"]
+        logger.info(
+            "TAG length bias | spearman(G, len)=%.3f | clean veto rate "
+            "shortest bin %.3f -> longest bin %.3f",
+            _lb.get("spearman_gate_vs_length", float("nan")),
+            _lb.get("clean_veto_rate_first_bin", float("nan")),
+            _lb.get("clean_veto_rate_last_bin", float("nan")),
+        )
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
