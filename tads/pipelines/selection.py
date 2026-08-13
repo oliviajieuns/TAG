@@ -151,7 +151,8 @@ def _build_gate_config(params: Dict[str, Any], scale: Optional[float]):
         c_trunc=float(params.get("c_trunc", 0.2)),
         eps_den=float(params.get("eps_den", 1e-3)),
         min_common_tokens=int(params.get("min_common_tokens", 8)),
-        undefined_policy=str(params.get("undefined_policy", "pass")),
+        undefined_policy=str(params.get("undefined_policy", "neutral")),
+        undefined_gate_value=float(params.get("undefined_gate_value", 0.6)),
         scale=scale,
         dispersion_discount=bool(params.get("dispersion_discount", True)),
     )
@@ -189,6 +190,7 @@ def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
                     f"interchangeable — regenerate with "
                     f"scripts/calibrate_reliability.py --mode tag.",
                 )
+            _warn_gate_ref_config_mismatch(ref.get("gate_config"), params, ref_file)
             ref = ref["delta_hat"]
         return gatelib.calibrate_gate_scale(
             ref,
@@ -196,6 +198,41 @@ def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
             target_q=float(params.get("calibration_target_q", 0.8)),
         )
     return None
+
+
+# Fields whose value changes the Delta_hat DISTRIBUTION, and therefore make a
+# calibration derived under one setting invalid under another.
+_CALIBRATION_BOUND_FIELDS = (
+    "span_tokens", "tau", "tau_mode", "min_span_tokens",
+    "tail_mode", "tail_quantile", "include_eos",
+)
+
+
+def _warn_gate_ref_config_mismatch(ref_cfg, params, ref_file) -> None:
+    """The reference records the gate config it was computed under; check it.
+
+    ``s`` is a quantile of the clean reference's Delta_hat, and Delta_hat's
+    distribution depends on how the response was partitioned. Calibrating at
+    W=16 and gating at W=32 silently mis-scales every gate value in the run,
+    with no symptom other than a wrong veto rate — which is exactly the
+    quantity the paper reports.
+    """
+    if not isinstance(ref_cfg, dict):
+        return
+    diffs = {
+        f: (ref_cfg.get(f), params.get(f))
+        for f in _CALIBRATION_BOUND_FIELDS
+        if f in ref_cfg and f in params and ref_cfg[f] != params[f]
+    }
+    if diffs:
+        raise ValueError(
+            f"gate_ref_file {ref_file} was calibrated under a different span "
+            f"configuration: {diffs} (ref -> requested). The scale s is a "
+            f"quantile of Delta_hat, whose distribution depends on the span "
+            f"partition, so this calibration does not transfer. Regenerate "
+            f"with scripts/calibrate_reliability.py --mode tag using the SAME "
+            f"config, or pin tads.tag.gate_scale explicitly."
+        )
 
 
 def _prepare_tag(
@@ -247,7 +284,23 @@ def _prepare_tag(
 
     cache = gatelib.load_gate_cache(output_dir)
     if cache is not None and cache["gate"].numel() == n_pool:
-        if cache.get("config") == gcfg.identity():
+        cached_cfg = cache.get("config") or {}
+        if scale is None and cached_cfg.get("scale") is not None:
+            # An UNPINNED scale is derived once, at the base checkpoint, from
+            # the pool itself — so the cached value IS this run's scale, not a
+            # different configuration. Comparing None against it would miss
+            # the cache at epoch 2 and then hit the base-checkpoint hard
+            # error, killing every run that does not pin gate_scale (i.e. the
+            # shipped default). Adopt the cached scale instead.
+            gcfg = _build_gate_config(params, float(cached_cfg["scale"]))
+            tag["gate_config"] = gcfg
+            tag["scale_used"] = gcfg.scale
+            logger.info(
+                "TAG gate: adopting the scale derived at the base checkpoint "
+                "(s=%.6g) from the cache; no gate_scale/gate_ref_file was "
+                "pinned for this run.", gcfg.scale,
+            )
+        if cached_cfg == gcfg.identity():
             tag["gate"] = cache["gate"]
             logger.info("TAG gate: cache hit (config unchanged) — no forward pass.")
         else:

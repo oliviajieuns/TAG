@@ -14,8 +14,8 @@
 # The calibration reference is produced on a CLEAN pool with
 #   python scripts/calibrate_reliability.py --mode tag \
 #       --config configs/experiments/lowq/light_tag_05b.yaml \
-#       --data-files $POOLS/clean_ref/pool.json \
-#       --cf-files $POOLS/clean_ref/counterfactual.json \
+#       --pool $POOLS/clean_ref/pool.json \
+#       --counterfactual $POOLS/clean_ref/counterfactual.json \
 #       --out $POOLS/clean_ref/delta_hat_05b.pt
 #
 # Training hyperparameters come ONLY from _shared_light_05b.yaml (plan §5.2

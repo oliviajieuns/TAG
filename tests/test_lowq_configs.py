@@ -128,7 +128,6 @@ def test_tag_arm_carries_span_and_gate_params():
     assert tag["tau_mode"] == "per_token"
     assert tag["tail_mode"] == "min"
     assert tag["include_eos"] is False
-    assert tag["undefined_policy"] == "pass"
 
 
 def test_tag_and_mvf_arms_do_not_share_a_score_block():
@@ -196,3 +195,52 @@ def test_gate_scale_set_env_resolves_to_float(monkeypatch):
     assert _resolve_gate_scale(
         {"gate_scale": cfg["tads"]["tag"]["gate_scale"]}
     ) == pytest.approx(0.15)
+
+
+# --------------------------------------------------------------------------
+# Regression: an UNPINNED gate scale must survive to epoch 2
+# --------------------------------------------------------------------------
+
+def test_unpinned_gate_scale_is_adopted_from_the_cache(tmp_path, monkeypatch):
+    """With no gate_scale/gate_ref_file (the shipped default) the scale is
+    derived in-pool at epoch 1 and stored in the cache. At epoch 2 the
+    requested scale is still None, so a naive identity comparison misses the
+    cache, tries to recompute, and hits the base-checkpoint hard error —
+    killing every default TAG run at epoch 2. The cached scale IS this run's
+    base-checkpoint derivation and must be adopted."""
+    import torch
+    from tads.core.gate import GateConfig, save_gate_cache
+    from tads.pipelines.selection import _prepare_tag
+
+    n = 6
+    cfg_used = GateConfig(span_tokens=4, scale=0.0123)
+    result = {
+        "gate": torch.full((n,), 0.5),
+        "completeness": torch.ones(n),
+        "delta_bar": torch.zeros(n), "delta_min": torch.zeros(n),
+        "delta_hat": torch.zeros(n), "n_spans": torch.ones(n, dtype=torch.long),
+        "n_common": torch.full((n,), 8, dtype=torch.long),
+        "undefined": torch.zeros(n, dtype=torch.bool),
+        "empty_c": torch.zeros(n, dtype=torch.bool),
+    }
+    save_gate_cache(tmp_path, result=result, cfg=cfg_used, epoch=1)
+
+    monkeypatch.delenv("TADS_GATE_SCALE", raising=False)
+    monkeypatch.delenv("TADS_GATE_REF", raising=False)
+    tag_ctx = {
+        "completeness": torch.ones(n),
+        "cf_datasets": [],                    # must not be needed: cache hit
+        "params": {"span_tokens": 4, "gate_scale": "", "gate_ref_file": ""},
+    }
+    tag = _prepare_tag(
+        tag_ctx, model=None, cfg={"output_dir": str(tmp_path)},
+        epoch=2, device="cpu", n_pool=n,
+    )
+    assert tag["gate"] is not None
+    assert tag["gate_config"].scale == pytest.approx(0.0123)
+
+
+def test_tag_arm_uses_neutral_undefined_policy():
+    cfg = _load("light_tag_05b")
+    assert cfg["tads"]["tag"]["undefined_policy"] == "neutral"
+    assert cfg["tads"]["tag"]["undefined_gate_value"] == 0.6

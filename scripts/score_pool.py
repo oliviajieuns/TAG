@@ -240,7 +240,8 @@ def _build_gate_cfg(params: Dict, scale: Optional[float]):
         c_trunc=float(params.get("c_trunc", 0.2)),
         eps_den=float(params.get("eps_den", 1e-3)),
         min_common_tokens=int(params.get("min_common_tokens", 8)),
-        undefined_policy=str(params.get("undefined_policy", "pass")),
+        undefined_policy=str(params.get("undefined_policy", "neutral")),
+        undefined_gate_value=float(params.get("undefined_gate_value", 0.6)),
         scale=scale,
         dispersion_discount=bool(params.get("dispersion_discount", True)),
     )

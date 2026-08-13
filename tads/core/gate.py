@@ -117,9 +117,16 @@ class GateConfig:
     eps_den: floor on any denominator in Eqs. 3-4.
     min_common_tokens: a sample whose true/counterfactual responses share
         fewer than this many token positions has no usable evidence.
-    undefined_policy: what to do with such samples — "pass" (G = c_i, no
-        evidence means no verdict; default), "neutral" (G = c_i * 0.5), or
-        "veto" (G = 0).
+    undefined_policy: what to do with such samples. "neutral" (default)
+        assigns G = c_i * undefined_gate_value — the gate value a typical
+        clean sample receives, so a sample nobody could judge is neither
+        promoted nor punished. "pass" (G = c_i) is the SUPREMUM no evidenced
+        sample can reach and exists only as an ablation showing the gate is
+        doing the work; "veto" (G = 0) is the opposite ablation.
+    undefined_gate_value: the neutral gate value, default 0.6 = 2*0.8 - 1,
+        i.e. exactly what the default calibration target (90% of clean data
+        at raw sigma >= 0.8) assigns to the clean reference's 10th
+        percentile.
     scale (s): sigmoid scale of Eq. 6, calibrated once per backbone on a
         clean reference pool via :func:`calibrate_gate_scale`. None triggers
         an in-pool fallback that is DIAGNOSTIC ONLY.
@@ -137,7 +144,8 @@ class GateConfig:
     c_trunc: float = 0.2
     eps_den: float = 1e-3
     min_common_tokens: int = 8
-    undefined_policy: str = "pass"
+    undefined_policy: str = "neutral"
+    undefined_gate_value: float = 0.6
     scale: Optional[float] = None
     dispersion_discount: bool = True
 
@@ -166,6 +174,21 @@ class GateConfig:
             raise ValueError(
                 f"GateConfig: undefined_policy must be one of {_UNDEFINED_POLICIES}, "
                 f"got {self.undefined_policy!r}"
+            )
+        if not (0.0 <= self.undefined_gate_value <= 1.0):
+            raise ValueError(
+                f"GateConfig: undefined_gate_value must be in [0,1], "
+                f"got {self.undefined_gate_value}"
+            )
+        if self.tau_mode == "absolute" and self.tau < 1.0:
+            logger.warning(
+                "GateConfig: tau_mode='absolute' thresholds the span's SUMMED "
+                "counterfactual NLL, but tau=%.3f looks like a per-token value "
+                "(a full span of %d tokens sums to roughly %.1f x that). The "
+                "absolute arm needs its own tau — otherwise it measures a "
+                "~%dx threshold change, not sum-vs-mean.",
+                self.tau, self.span_tokens, float(self.span_tokens),
+                self.span_tokens,
             )
         if self.scale is not None and self.scale <= 0:
             raise ValueError(f"GateConfig: scale must be > 0 or None, got {self.scale}")
@@ -601,14 +624,23 @@ def _apply_undefined_policy(
     completeness: torch.Tensor,
     undefined: torch.Tensor,
     policy: str,
+    neutral_value: float,
 ) -> torch.Tensor:
-    """No evidence, no verdict — see ``GateConfig.undefined_policy``."""
+    """No evidence, no verdict — see ``GateConfig.undefined_policy``.
+
+    Note why ``pass`` is NOT the default. ``2*sigma(z) - 1 < 1`` for every
+    finite z, so ``G = c_i`` is a value no EVIDENCED sample can ever attain:
+    handing it to zero-evidence samples would rank them above every sample
+    the gate actually examined. Short responses would then be promoted
+    precisely because they were too short to judge. ``neutral`` instead
+    assigns the gate value a typical clean sample receives.
+    """
     if not bool(undefined.any()):
         return gate
     if policy == "pass":
         repl = completeness.float()
     elif policy == "neutral":
-        repl = completeness.float() * 0.5
+        repl = completeness.float() * float(neutral_value)
     else:  # "veto"
         repl = torch.zeros_like(gate)
     return torch.where(undefined, repl, gate)
@@ -666,7 +698,10 @@ def compute_gate(
     for k, (tc, nc) in enumerate(zip(token_cf, n_cf)):
         comp = gate_components(token_true, n_true, tc, nc, cfg=cfg)
         g = gate_from_delta_hat(comp["delta_hat"], completeness, scale=scale)
-        g = _apply_undefined_policy(g, completeness, comp["undefined"], cfg.undefined_policy)
+        g = _apply_undefined_policy(
+            g, completeness, comp["undefined"],
+            cfg.undefined_policy, cfg.undefined_gate_value,
+        )
         per_k.append(comp)
         gates.append(g)
 
@@ -834,16 +869,43 @@ def save_gate_cache(
     )
 
 
+# Fields whose value is baked into artifacts the cache CANNOT re-derive:
+# ``include_eos`` decides which tokens the forward pass kept, and ``c_trunc``
+# is baked into the completeness vector the caller computed from the dataset.
+# Changing either invalidates the cache outright — re-deriving would silently
+# apply the OLD value while stamping the cache with the NEW identity, so every
+# later run would then get a "cache hit" on a wrong gate.
+_FORWARD_BOUND_FIELDS = ("include_eos", "c_trunc")
+
+
 def recompute_gate_from_cache(
     cache: Dict[str, Any],
     cfg: GateConfig,
 ) -> Optional[Dict[str, torch.Tensor]]:
     """Re-derive G from cached token losses under a new config, no forward.
 
-    Returns None when the cache does not carry the raw token losses, in
-    which case the caller must re-run the forward pass.
+    Returns None when the cache cannot honour the requested config — either
+    it does not carry the raw token losses, or the change touches a field
+    that is baked into the cached artifacts (see ``_FORWARD_BOUND_FIELDS``).
+    The caller must then re-run the forward pass.
     """
     if "token_true" not in cache or "token_cf" not in cache:
+        return None
+    cached_cfg = cache.get("config") or {}
+    stale = [
+        f for f in _FORWARD_BOUND_FIELDS
+        if f in cached_cfg and cached_cfg[f] != getattr(cfg, f)
+    ]
+    if stale:
+        logger.warning(
+            "TAG gate cache cannot be re-derived: %s changed (%s -> %s). "
+            "These are baked into the cached token losses / completeness "
+            "vector, so a no-forward re-derivation would apply the OLD value "
+            "under the NEW config identity. Recomputing from scratch.",
+            ", ".join(stale),
+            {f: cached_cfg.get(f) for f in stale},
+            {f: getattr(cfg, f) for f in stale},
+        )
         return None
     token_true = cache["token_true"].float()
     n_true = cache.get("n_true")

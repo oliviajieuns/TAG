@@ -319,3 +319,63 @@ def test_compute_gate_rejects_mismatched_completeness_length():
 def test_gate_config_rejects_invalid_values(kw):
     with pytest.raises(ValueError):
         _cfg(**kw)
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the adversarial review (2026-08-13)
+# ---------------------------------------------------------------------------
+
+def test_undefined_neutral_does_not_outrank_evidenced_samples():
+    """G = c_i is the SUPREMUM no evidenced sample can reach (2*sigma-1 < 1),
+    so handing it to zero-evidence samples would rank them above every sample
+    the gate actually examined — short responses promoted for being short."""
+    tok_true = torch.tensor([[0.01] * 12])   # about as clean as it gets
+    tok_cf = torch.tensor([[9.0] * 12])
+    n = torch.tensor([12])
+    best = compute_gate(
+        tok_true, n, [tok_cf], [n], torch.ones(1), cfg=_cfg(),
+    )["gate"]
+
+    short_true = torch.tensor([[0.5, 0.5]])
+    short_cf = torch.tensor([[3.0, 3.0]])
+    ns = torch.tensor([2])
+    neutral = compute_gate(
+        short_true, ns, [short_cf], [ns], torch.ones(1),
+        cfg=_cfg(undefined_policy="neutral"),
+    )
+    assert bool(neutral["undefined"][0])
+    assert float(neutral["gate"][0]) < float(best[0]), (
+        "an unjudgeable sample must not outrank the best evidenced sample"
+    )
+    assert float(neutral["gate"][0]) == pytest.approx(0.6)
+
+    # The 'pass' ablation is exactly the pathology, kept for the ablation row.
+    passed = compute_gate(
+        short_true, ns, [short_cf], [ns], torch.ones(1),
+        cfg=_cfg(undefined_policy="pass"),
+    )["gate"]
+    assert float(passed[0]) == pytest.approx(1.0)
+    assert float(passed[0]) > float(best[0])
+
+
+def test_recompute_from_cache_refuses_forward_bound_changes():
+    """include_eos and c_trunc are baked into the cached token losses and
+    completeness vector. Re-deriving under a new value would apply the OLD
+    one while stamping the NEW identity, so every later run would then get a
+    'cache hit' on a silently wrong gate."""
+    from tads.core.gate import recompute_gate_from_cache
+
+    tok_true, n, tok_cf, n_cf = _three_samples()
+    cfg = _cfg()
+    res = compute_gate(tok_true, n, [tok_cf], [n_cf], torch.ones(3), cfg=cfg)
+    cache = {
+        "token_true": tok_true, "n_true": n,
+        "token_cf": [tok_cf], "n_cf": [n_cf],
+        "completeness": torch.ones(3),
+        "gate": res["gate"], "config": cfg.identity(),
+    }
+    # A pure span-parameter change IS re-derivable without a forward.
+    assert recompute_gate_from_cache(cache, _cfg(tau=0.9)) is not None
+    # These two are not.
+    assert recompute_gate_from_cache(cache, _cfg(include_eos=True)) is None
+    assert recompute_gate_from_cache(cache, _cfg(c_trunc=0.5)) is None

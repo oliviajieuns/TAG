@@ -152,7 +152,8 @@ def main() -> None:
             c_trunc=float(tag_cfg.get("c_trunc", 0.2)),
             eps_den=float(tag_cfg.get("eps_den", 1e-3)),
             min_common_tokens=int(tag_cfg.get("min_common_tokens", 8)),
-            undefined_policy=str(tag_cfg.get("undefined_policy", "pass")),
+            undefined_policy=str(tag_cfg.get("undefined_policy", "neutral")),
+            undefined_gate_value=float(tag_cfg.get("undefined_gate_value", 0.6)),
             # The scale is what we are about to derive.
             scale=1.0,
         )

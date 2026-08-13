@@ -64,10 +64,16 @@ tads:
     # many token positions has no usable evidence (the two prompts differ in
     # length, so max_seq_len budgeting can truncate them differently).
     min_common_tokens: 8
-    # What to do with those: "pass" (G = c_i — no evidence, no verdict),
-    # "neutral" (G = c_i/2), or "veto" (G = 0). Default refuses to veto a
-    # sample over a tokenisation artifact.
-    undefined_policy: pass
+    # What to do with those. "neutral" (default) assigns
+    # G = c_i * undefined_gate_value — the value a typical clean sample gets,
+    # so a sample nobody could judge is neither promoted nor punished.
+    # NOT "pass" (G = c_i): since 2*sigma(z) - 1 < 1 for every finite z,
+    # c_i is a supremum no EVIDENCED sample can reach, so passing would rank
+    # unjudgeable samples above every sample the gate actually examined —
+    # short responses promoted precisely for being too short to judge.
+    # "pass" and "veto" remain as the two ablation arms.
+    undefined_policy: neutral
+    undefined_gate_value: 0.6   # = 2*calibration_target_q - 1
     # Calibrated scale s: set ONE of the two. gate_scale is the explicit
     # value; gate_ref_file points to a .pt with the clean-reference Δ̂
     # tensor (or {"delta_hat": tensor}) from which
