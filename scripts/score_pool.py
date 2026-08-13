@@ -28,6 +28,19 @@ Signals compared (each used AS a selection score, higher = selected):
     ifd            L(y|x)/L(y): IFD (Li et al. 2024)   (needs --uncond-loss;
                    closest published relative of Q)
 
+TAG signals (paper Eqs. 2-6; computed when the config has a tads.tag block,
+or with --tag-gate. They need a TOKEN-LEVEL counterfactual forward, which is
+one extra pool forward per pool on top of the mean-loss passes above):
+    delta_bar      1 - L(y|x)/L(y|x^-)                  (Eq. 3, overall gain)
+    delta_min      worst admissible span's gain         (Eq. 5, tail gain)
+    delta_hat      min(delta_bar, delta_min)            (Eq. 6 input)
+    G              c·(2σ(Δ̂/s) - 1)_+                    (Eq. 6, the gate)
+    tag_score      G · R · (1 + λ·align)                (Eq. 1, full TAG)
+
+Comparing delta_bar against delta_min IS the paper's span ablation: if the
+tail gain does not beat the overall gain on the localized corruption types
+(T5 wrong-answer, T7 fluent-wrong), Eqs. 4-5 are not earning their place.
+
 Metrics per signal:
     dirty@K        corrupted fraction of the top-K selection (K = the
                    configured selection_ratio and any extra --ks)
@@ -142,6 +155,62 @@ def cluster_fraction(
     return distinct / max(1, len(top))
 
 
+def _build_gate_cfg(params: Dict, scale: Optional[float]):
+    """GateConfig from a tads.tag block — mirrors the training-side builder
+    in tads.pipelines.selection so a diagnostic run and a training run
+    compute the SAME G from the same YAML."""
+    from tads.core.gate import GateConfig
+
+    return GateConfig(
+        span_tokens=int(params.get("span_tokens", 16)),
+        tau=float(params.get("tau", 0.5)),
+        tau_mode=str(params.get("tau_mode", "per_token")),
+        min_span_tokens=int(params.get("min_span_tokens", 4)),
+        tail_mode=str(params.get("tail_mode", "min")),
+        tail_quantile=float(params.get("tail_quantile", 0.0)),
+        include_eos=bool(params.get("include_eos", False)),
+        c_trunc=float(params.get("c_trunc", 0.2)),
+        eps_den=float(params.get("eps_den", 1e-3)),
+        min_common_tokens=int(params.get("min_common_tokens", 8)),
+        undefined_policy=str(params.get("undefined_policy", "pass")),
+        scale=scale,
+        dispersion_discount=bool(params.get("dispersion_discount", True)),
+    )
+
+
+def _resolve_gate_scale_cli(params: Dict) -> Optional[float]:
+    """Explicit gate_scale > gate_ref_file calibration > None (in-pool).
+
+    ``${oc.env:VAR,}`` resolves to the EMPTY STRING when unset, so the
+    strip() check is required — `or None` would additionally swallow a
+    legitimate 0.0 (which GateConfig rejects anyway, but the distinction
+    matters for the error message the user sees).
+    """
+    from tads.core import gate as gatelib
+
+    scale = params.get("gate_scale")
+    if scale is not None and str(scale).strip() != "":
+        return float(scale)
+    ref_file = params.get("gate_ref_file")
+    if ref_file and str(ref_file).strip() != "":
+        ref = torch.load(str(ref_file), map_location="cpu", weights_only=True)
+        if isinstance(ref, dict):
+            if "delta_hat" not in ref:
+                raise ValueError(
+                    f"gate_ref_file {ref_file} has no 'delta_hat' key (found "
+                    f"{sorted(ref.keys())}). The TAG gate calibrates on the "
+                    f"Delta_hat ratio, not the MVF raw ΔL — regenerate with "
+                    f"scripts/calibrate_reliability.py --mode tag."
+                )
+            ref = ref["delta_hat"]
+        return gatelib.calibrate_gate_scale(
+            ref,
+            target_pct=float(params.get("calibration_target_pct", 0.10)),
+            target_q=float(params.get("calibration_target_q", 0.8)),
+        )
+    return None
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--config", required=True, help="experiment YAML (pool wiring)")
@@ -155,6 +224,17 @@ def main() -> None:
                         "ppl and ifd baseline signal rows")
     p.add_argument("--no-anchor", action="store_true",
                    help="skip the trajectory anchor (drops legacy_score/mvf alignment factor)")
+    p.add_argument("--tag-gate", dest="tag_gate", action="store_true", default=None,
+                   help="force the TAG signals on (token-level counterfactual "
+                        "forward: +1 pool forward per pool). Default: on when "
+                        "the config has a tads.tag block.")
+    p.add_argument("--no-tag-gate", dest="tag_gate", action="store_false",
+                   help="force the TAG signals off")
+    p.add_argument("--save-signals", default=None,
+                   help="write every per-sample signal vector to this .pt "
+                        "(needed for the reliability diagram, the "
+                        "predicted-vs-measured Dirty@K figure, and per-view "
+                        "attribution — the JSON report is aggregate only)")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
 
@@ -169,10 +249,20 @@ def main() -> None:
 
     tads_cfg = cfg.get("tads", {}) or {}
     mvf_cfg = tads_cfg.get("mvf", {}) or {}
+    tag_cfg = tads_cfg.get("tag", {}) or {}
     lam = float(tads_cfg.get("lam", 1.0))
     gamma = float(mvf_cfg.get("gamma", 1.0))
     eps = float(mvf_cfg.get("eps", 0.01))
-    c_trunc = float(mvf_cfg.get("c_trunc", 0.2))
+    # A TAG arm has no tads.mvf block, so c_trunc must come from whichever
+    # score block the config actually carries.
+    c_trunc = float(tag_cfg.get("c_trunc", mvf_cfg.get("c_trunc", 0.2)))
+    want_tag = bool(tag_cfg) if args.tag_gate is None else bool(args.tag_gate)
+    if args.tag_gate and not tag_cfg:
+        logger.warning(
+            "--tag-gate was requested but the config has no tads.tag block; "
+            "the gate will use gate.py defaults and in-pool calibration "
+            "(diagnostic-only). Point --config at a TAG arm for reported runs.",
+        )
 
     tokenizer = load_tokenizer(cfg["model_path"])
     model = load_model(
@@ -202,14 +292,22 @@ def main() -> None:
             f"data_files does not match this manifest."
         )
 
-    cf_files = mvf_cfg.get("counterfactual_data_files") or None
+    cf_files = (
+        mvf_cfg.get("counterfactual_data_files")
+        or tag_cfg.get("counterfactual_data_files")
+        or None
+    )
     if not cf_files:
         raise ValueError(
-            "config has no tads.mvf.counterfactual_data_files — the Q/gate/"
-            "mvf_score signals need the counterfactual pool."
+            "config has no tads.mvf.counterfactual_data_files nor "
+            "tads.tag.counterfactual_data_files — every reliability signal "
+            "(Q, gate, mvf_score, delta_*, G, tag_score) needs the "
+            "counterfactual pool."
         )
     if not isinstance(cf_files, (list, tuple)):
-        cf_files = [cf_files]
+        # Comma-separated strings express K > 1 through a single env var,
+        # matching the training-side plumbing in tads/train.py.
+        cf_files = [s.strip() for s in str(cf_files).split(",") if s.strip()]
     cf_datasets = []
     for k_cf, one in enumerate(cf_files, start=1):
         cf_dataset = build_alpaca_dataset(
@@ -229,7 +327,11 @@ def main() -> None:
             )
         cf_datasets.append(cf_dataset)
 
-    cluster_path = args.dedup_clusters or (mvf_cfg.get("dedup_clusters_file") or None)
+    cluster_path = args.dedup_clusters or (
+        mvf_cfg.get("dedup_clusters_file")
+        or tag_cfg.get("dedup_clusters_file")
+        or None
+    )
     cluster_ids = None
     if cluster_path:
         from tads.core.dedup import load_clusters
@@ -337,6 +439,62 @@ def main() -> None:
         "additive": s_add,
     }
 
+    # ---- TAG signals (paper Eqs. 2-6) ----
+    # These need per-token counterfactual losses, which neither
+    # compute_rewards nor compute_pool_loss preserves (both reduce to a
+    # sequence mean), so this is a separate token-level pass over the true
+    # pool and each counterfactual pool.
+    tag_components = None
+    if want_tag:
+        from tads.core import gate as gatelib
+
+        gcfg_params = dict(tag_cfg)
+        gcfg_params.setdefault("c_trunc", c_trunc)
+        g_scale = _resolve_gate_scale_cli(gcfg_params)
+        gcfg = _build_gate_cfg(gcfg_params, g_scale)
+        logger.info(
+            "TAG gate | W=%d tau=%.3f(%s) min_span=%d tail=%s include_eos=%s "
+            "| scale=%s | token-level forwards: %d",
+            gcfg.span_tokens, gcfg.tau, gcfg.tau_mode, gcfg.min_span_tokens,
+            gcfg.tail_mode, gcfg.include_eos, g_scale, 1 + len(cf_datasets),
+        )
+        tok_true, n_true = gatelib.compute_pool_token_losses(
+            model, dataset,
+            batch_size=int(cfg.get("episode_batch_size", 1)),
+            device=str(args.device), tag="true",
+            eos_token_id=tokenizer.eos_token_id,
+            drop_trailing_eos=not gcfg.include_eos,
+        )
+        tok_cf, n_cf_list = [], []
+        for k_cf, one_ds in enumerate(cf_datasets, start=1):
+            tc, nc = gatelib.compute_pool_token_losses(
+                model, one_ds,
+                batch_size=int(cfg.get("episode_batch_size", 1)),
+                device=str(args.device),
+                tag=f"cf_tokens_{k_cf}" if len(cf_datasets) > 1 else "cf_tokens",
+                eos_token_id=tokenizer.eos_token_id,
+                drop_trailing_eos=not gcfg.include_eos,
+            )
+            tok_cf.append(tc)
+            n_cf_list.append(nc)
+        if gcfg.scale is None:
+            probe = gatelib.gate_components(
+                tok_true, n_true, tok_cf[0], n_cf_list[0], cfg=gcfg,
+            )
+            gcfg = _build_gate_cfg(
+                gcfg_params, gatelib.resolve_scale(gcfg, probe["delta_hat"]),
+            )
+        tag_components = gatelib.compute_gate(
+            tok_true, n_true, tok_cf, n_cf_list, completeness, cfg=gcfg,
+        )
+        tag_components["scale_used"] = gcfg.scale
+        g_i = tag_components["gate"]
+        signals["delta_bar"] = tag_components["delta_bar"]
+        signals["delta_min"] = tag_components["delta_min"]
+        signals["delta_hat"] = tag_components["delta_hat"]
+        signals["G"] = g_i
+        signals["tag_score"] = g_i * legacy
+
     if args.uncond_loss:
         uncond = torch.load(args.uncond_loss, map_location="cpu", weights_only=True)
         if isinstance(uncond, dict):
@@ -397,10 +555,55 @@ def main() -> None:
             ),
         )
 
+    if want_tag and tag_components is not None:
+        report["tag"] = {
+            "gate_scale": tag_components.get("scale_used"),
+            "gate_mean": float(tag_components["gate"].mean().item()),
+            "gate_zero_frac": float(
+                (tag_components["gate"] == 0).float().mean().item()
+            ),
+            "n_undefined": int(tag_components["undefined"].sum().item()),
+            "n_empty_C": int(tag_components["empty_c"].sum().item()),
+            "mean_spans": float(tag_components["n_spans"].float().mean().item()),
+            "mean_valid_spans": float(
+                tag_components["n_valid_spans"].float().mean().item()
+            ),
+        }
+        # The veto only holds while the admissible set covers the budget —
+        # report the headroom so a shortfall cannot go unnoticed in the table.
+        n_adm = int((tag_components["gate"] > 0).sum().item())
+        report["tag"]["n_admissible"] = n_adm
+        report["tag"]["admissible_frac"] = n_adm / max(1, n)
+        for ratio in ratios:
+            k = max(1, int(n * ratio))
+            report["tag"][f"budget_fits@{ratio:g}"] = bool(n_adm >= k)
+
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(report, f, indent=2)
+
+    if args.save_signals:
+        sig_path = Path(args.save_signals)
+        sig_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "signals": {k: v.detach().cpu() for k, v in signals.items()},
+            "dirty_labels": labels.detach().cpu(),
+            "completeness": completeness.detach().cpu(),
+            "n": n,
+            "config": str(args.config),
+            "manifest": str(args.manifest),
+        }
+        if tag_components is not None:
+            payload["tag_components"] = {
+                k: v.detach().cpu()
+                for k, v in tag_components.items()
+                if torch.is_tensor(v)
+            }
+        if cluster_ids is not None:
+            payload["cluster_ids"] = list(cluster_ids)
+        torch.save(payload, sig_path)
+        logger.info("Per-sample signals written to %s", sig_path)
     logger.info(
         "Report written to %s | base dirty rate %.3f", out_path, base_rate,
     )
