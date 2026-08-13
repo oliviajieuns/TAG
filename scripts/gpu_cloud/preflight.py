@@ -152,7 +152,22 @@ def make_model_check(cfg_path):
         tok = load_tokenizer(str(p))
         if tok.eos_token_id is None:
             return _FAIL, f"tokenizer at {p} has no eos_token_id"
-        return _OK, f"{p.name}, vocab {tok.vocab_size}, eos={tok.eos_token_id}"
+        detail = f"{p.name}, vocab {tok.vocab_size}, eos={tok.eos_token_id}"
+        if "instruct" in p.name.lower() or "-it" in p.name.lower():
+            # Not a failure — on some clusters base weights simply are not
+            # available — but it changes what the numbers mean twice over,
+            # so it must not pass silently.
+            return _WARN, detail + (
+                " — this is an INSTRUCT checkpoint, not a base model. Two "
+                "consequences: (a) the paper's setup is SFT from a base "
+                "checkpoint, so these numbers are not directly comparable to "
+                "base-model runs; (b) an instruction-tuned model follows "
+                "instructions better, so Delta_hat separates clean from "
+                "corrupted MORE easily than it would from base — the gate "
+                "looks better than the base-model setting would show. State "
+                "the deviation explicitly."
+            )
+        return _OK, detail
     return _fn
 
 

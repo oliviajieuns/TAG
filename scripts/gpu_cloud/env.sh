@@ -52,7 +52,14 @@ _TAG_M05B="$(_tag_first_existing config.json \
   /group-volume/models/Qwen2.5-0.5B \
   /group-volume/models/Qwen2.5-0.5B-Instruct)"
 export MODEL_PATH_QWEN25_05B="${_TAG_M05B:-$TAG_WORKSPACE/models/qwen2.5-0.5b}"
-export MODEL_PATH_QWEN25_7B="${MODEL_PATH_QWEN25_7B:-$TAG_WORKSPACE/models/qwen2.5-7b}"
+
+_TAG_M7B="$(_tag_first_existing config.json \
+  "${MODEL_PATH_QWEN25_7B:-/nonexistent}" \
+  "$TAG_WORKSPACE/models/qwen2.5-7b" \
+  /group-volume/nait-models/qwen2.5-7b \
+  /group-volume/models/Qwen2.5-7B \
+  /group-volume/models/Qwen2.5-7B-Instruct)"
+export MODEL_PATH_QWEN25_7B="${_TAG_M7B:-$TAG_WORKSPACE/models/qwen2.5-7b}"
 
 export POOLS="${POOLS:-$TAG_WORKSPACE/pools}"
 
@@ -94,7 +101,16 @@ _tag_mark() { [ -e "$1" ] && echo "found" || echo "MISSING (bootstrap will creat
 
 if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] workspace : $TAG_WORKSPACE"
-  echo "[tag-env] model     : $MODEL_PATH_QWEN25_05B  [$(_tag_mark "$MODEL_PATH_QWEN25_05B/config.json")]"
+  echo "[tag-env] model 0.5b: $MODEL_PATH_QWEN25_05B  [$(_tag_mark "$MODEL_PATH_QWEN25_05B/config.json")]"
+  echo "[tag-env] model 7b  : $MODEL_PATH_QWEN25_7B  [$(_tag_mark "$MODEL_PATH_QWEN25_7B/config.json")]"
+  case "$MODEL_PATH_QWEN25_7B" in
+    *Instruct*|*instruct*)
+      echo "[tag-env] NOTE: the 7B checkpoint is an INSTRUCT model, not a base"
+      echo "[tag-env]       model. That is a real deviation from 'SFT from a base"
+      echo "[tag-env]       checkpoint' and must be stated in any writeup that"
+      echo "[tag-env]       mixes it with base-model numbers."
+      ;;
+  esac
   echo "[tag-env] raw corpus: $ALPACA_RAW_JSON  [$(_tag_mark "$ALPACA_RAW_JSON")]"
   echo "[tag-env] pool      : $ALPACA_DATA_FILES  [$(_tag_mark "$ALPACA_DATA_FILES")]"
   echo "[tag-env] gate ref  : $TADS_GATE_REF  [$(_tag_mark "$TADS_GATE_REF")]"
