@@ -1,0 +1,95 @@
+# TAG — Training-Adaptive data selection with a reliability Gate (paper Eq. 1).
+#
+#   s_i^(t) = G_i · R_i^(t) · (1 + λ · ã_i^(t))
+#
+# Unlike score_mode: mvf, TAG does NOT replace the composite reward. The
+# trajectory-anchored selector is kept intact — R_i = w·L_i + (1−w)·H_i and
+# the min-max anchor factor are exactly the legacy ones — and one static
+# factor is multiplied in front. G ≡ 1 therefore reproduces the legacy
+# ranking bit-for-bit, which makes the gate cleanly ablatable.
+#
+# The gate (paper Eqs. 2-6), computed ONCE at the base checkpoint and cached
+# in tag_gate_cache.pt (no per-refresh cost):
+#
+#   δ_{i,k} = ℓ_k(y_i|x_i⁻) − ℓ_k(y_i|x_i)                          (Eq. 2)
+#   Δ̄_i    = 1 − L(y_i|x_i) / L(y_i|x_i⁻)                           (Eq. 3)
+#   Δ_{i,m} = 1 − Σ_{k∈S_m} ℓ_k(y_i|x_i) / Σ_{k∈S_m} ℓ_k(y_i|x_i⁻)  (Eq. 4)
+#   Δ^min_i = min_{m : S_m ∈ C_i} Δ_{i,m}                            (Eq. 5)
+#   G_i     = c_i · (2σ(Δ̂_i/s) − 1)₊ ,  Δ̂_i = min(Δ̄_i, Δ^min_i)     (Eq. 6)
+#
+# Ratio (not raw ΔL) so the statistic is scale-free; span-min so localized
+# corruption (wrong final answer, spliced sentence) cannot hide behind a
+# healthy mean; σ(0) = ½ so Δ̂ ≤ 0 maps to G = 0 EXACTLY — the veto that
+# makes the fusion non-compensatory.
+method: tads
+episode_batch_size: 16
+tads:
+  lam: 1.0
+  use_anchor: true
+  score_mode: tag          # "tads" (legacy Eq.10) | "mvf" | "tag"
+  tag:
+    # Index-aligned counterfactual pool(s): same records, instruction+input
+    # replaced by a length-bucket-matched unrelated pair. A single path, a
+    # YAML list, or a COMMA-SEPARATED string (K > 1 enables the
+    # dispersion-discounted multi-counterfactual gate):
+    #   export TADS_CF_FILES=p/counterfactual_1.json,p/counterfactual_2.json
+    # Generate together with the pool:
+    #   python scripts/make_corrupted_pool.py ... --emit-counterfactual \
+    #       --num-counterfactuals K
+    counterfactual_data_files: ${oc.env:TADS_CF_FILES,}
+    # Near-duplicate cluster ids (one int per record, -1 = unique).
+    # Generate with --emit-dedup-clusters. Empty = no dedup constraint.
+    # NOTE: the legacy score path never deduplicated; TAG threads this
+    # through explicitly so duplicated instructions cannot be selected
+    # repeatedly just because they pass the gate.
+    dedup_clusters_file: ${oc.env:TADS_DEDUP_FILE,}
+
+    # ---- span aggregation (Eqs. 4-5) ----
+    span_tokens: 16        # W: fixed response-token window per span
+    tau: 0.5               # low-information threshold defining C_i
+    # "per_token" compares tau against the span's MEAN counterfactual NLL
+    # (length-independent). "absolute" is the literal Eq. 5 reading (SUM),
+    # kept as an ablation arm — it silently drops every trailing partial
+    # span, so it is a length filter in disguise. See docs/tag-paper-deltas.md P1.
+    tau_mode: per_token
+    min_span_tokens: 4     # spans shorter than this never enter C_i
+    tail_mode: min         # "min" = Eq. 5 exactly | "quantile" = ablation
+    tail_quantile: 0.0     # used only when tail_mode: quantile
+    include_eos: false     # EOS excluded: termination is c_i's job, not the contrast's
+
+    # ---- gate (Eq. 6) ----
+    c_trunc: 0.2           # completeness assigned to non-terminating responses
+    eps_den: 0.001         # denominator floor in Eqs. 3-4
+    # A sample whose true/counterfactual responses share fewer than this
+    # many token positions has no usable evidence (the two prompts differ in
+    # length, so max_seq_len budgeting can truncate them differently).
+    min_common_tokens: 8
+    # What to do with those: "pass" (G = c_i — no evidence, no verdict),
+    # "neutral" (G = c_i/2), or "veto" (G = 0). Default refuses to veto a
+    # sample over a tokenisation artifact.
+    undefined_policy: pass
+    # Calibrated scale s: set ONE of the two. gate_scale is the explicit
+    # value; gate_ref_file points to a .pt with the clean-reference Δ̂
+    # tensor (or {"delta_hat": tensor}) from which
+    # s = P{target_pct}(Δ̂_clean)/logit(target_q).
+    # NOT interchangeable with the MVF reliability_ref_file — that stores
+    # raw ΔL in nats, this stores the Δ̂ ratio. Generate with
+    #   python scripts/calibrate_reliability.py --mode tag ...
+    # Leaving both empty falls back to in-pool self-calibration with a loud
+    # warning — diagnostics only, never for reported runs.
+    gate_scale: ${oc.env:TADS_GATE_SCALE,}
+    gate_ref_file: ${oc.env:TADS_GATE_REF,}
+    calibration_target_pct: 0.10
+    calibration_target_q: 0.8
+    # K > 1 only: discount the mean gate by (1 − 2·std_k)₊ so unstable
+    # cross-counterfactual evidence is trusted less.
+    dispersion_discount: true
+
+    # ---- lifecycle / arms ----
+    # Store per-token NLLs in the cache (fp16, ~2·N·T_max bytes per pool).
+    # Makes W / tau / s sweeps free — G is re-derived with no forward pass.
+    store_token_losses: false
+    # G is DEFINED at the base checkpoint. Missing cache at epoch > 1 is a
+    # hard error; true accepts a wrong-checkpoint G explicitly.
+    allow_late_gate: false
+    static: false          # true = freeze the epoch-1 selection (TAG-static arm)

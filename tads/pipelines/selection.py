@@ -136,6 +136,257 @@ def _resolve_reliability_scale(params: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+def _build_gate_config(params: Dict[str, Any], scale: Optional[float]):
+    """Assemble a :class:`tads.core.gate.GateConfig` from the YAML subtree."""
+    from ..core.gate import GateConfig
+
+    return GateConfig(
+        span_tokens=int(params.get("span_tokens", 16)),
+        tau=float(params.get("tau", 0.5)),
+        tau_mode=str(params.get("tau_mode", "per_token")),
+        min_span_tokens=int(params.get("min_span_tokens", 4)),
+        tail_mode=str(params.get("tail_mode", "min")),
+        tail_quantile=float(params.get("tail_quantile", 0.0)),
+        include_eos=bool(params.get("include_eos", False)),
+        c_trunc=float(params.get("c_trunc", 0.2)),
+        eps_den=float(params.get("eps_den", 1e-3)),
+        min_common_tokens=int(params.get("min_common_tokens", 8)),
+        undefined_policy=str(params.get("undefined_policy", "pass")),
+        scale=scale,
+        dispersion_discount=bool(params.get("dispersion_discount", True)),
+    )
+
+
+def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
+    """Resolve the TAG gate's sigmoid scale s (paper Eq. 6).
+
+    Priority: explicit ``gate_scale`` > calibration from ``gate_ref_file``
+    (a .pt holding the clean-reference Delta_hat tensor, or a dict with key
+    'delta_hat') > None (in-pool fallback inside ``gate.resolve_scale``,
+    which warns loudly and is diagnostic-only).
+
+    The reference statistic MUST be ``Delta_hat``, not the MVF module's raw
+    ``ΔL``: they are different quantities (a ratio in [-inf, 1] versus a
+    difference in nats), so ``reliability_ref_file`` is NOT interchangeable
+    with ``gate_ref_file``.
+    """
+    from ..core import gate as gatelib
+
+    scale = params.get("gate_scale")
+    # ${oc.env:TADS_GATE_SCALE,} resolves to the EMPTY STRING when unset —
+    # float('') would crash every TAG run at epoch-1 selection.
+    if scale is not None and str(scale).strip() != "":
+        return float(scale)
+    ref_file = params.get("gate_ref_file")
+    if ref_file and str(ref_file).strip() != "":
+        ref = torch.load(str(ref_file), map_location="cpu", weights_only=True)
+        if isinstance(ref, dict):
+            if "delta_hat" not in ref:
+                raise ValueError(
+                    f"gate_ref_file {ref_file} is a dict without a 'delta_hat' key "
+                    f"(found {sorted(ref.keys())}). The TAG gate calibrates on "
+                    f"Delta_hat; an MVF reliability reference (raw ΔL) is not "
+                    f"interchangeable — regenerate with "
+                    f"scripts/calibrate_reliability.py --mode tag.",
+                )
+            ref = ref["delta_hat"]
+        return gatelib.calibrate_gate_scale(
+            ref,
+            target_pct=float(params.get("calibration_target_pct", 0.10)),
+            target_q=float(params.get("calibration_target_q", 0.8)),
+        )
+    return None
+
+
+def _prepare_tag(
+    tag_ctx: Dict[str, Any],
+    *,
+    model,
+    cfg,
+    epoch: int,
+    device,
+    n_pool: int,
+):
+    """Assemble the ``tag`` dict consumed by ``collect_episode`` (paper Eq. 1).
+
+    G is a property of the DATA, so it is computed once at the base
+    checkpoint and cached in ``tag_gate_cache.pt`` (a SEPARATE file from the
+    MVF ``reliability_cache.pt`` — the two store different statistics under
+    similar names and would silently cross-validate).
+
+    Three paths, cheapest first:
+      1. cache hit with a matching :class:`GateConfig` -> reuse G directly;
+      2. cache hit with cached per-token losses but a different config ->
+         re-derive G with NO forward pass (this is what
+         ``store_token_losses`` buys: sweeping W / tau / s becomes free);
+      3. no usable cache -> run the token-level forwards. At epoch > 1 this
+         is a hard error instead, because G computed at a later checkpoint
+         is a different quantity than the one the paper defines.
+    """
+    from ..core import gate as gatelib
+
+    output_dir = cfg["output_dir"]
+    params = tag_ctx.get("params", {}) or {}
+    scale = _resolve_gate_scale(params)
+    gcfg = _build_gate_config(params, scale)
+    completeness = tag_ctx["completeness"]
+
+    tag: Dict[str, Any] = {
+        "gate": None,
+        "cluster_ids": tag_ctx.get("cluster_ids"),
+        "gate_config": gcfg,
+        "allow_late_gate": bool(params.get("allow_late_gate", False)),
+        "store_token_losses": bool(params.get("store_token_losses", False)),
+        "components": None,
+        "token_true": None,
+        "n_true": None,
+        "token_cf": None,
+        "n_cf": None,
+        "scale_used": scale,
+    }
+
+    cache = gatelib.load_gate_cache(output_dir)
+    if cache is not None and cache["gate"].numel() == n_pool:
+        if cache.get("config") == gcfg.identity():
+            tag["gate"] = cache["gate"]
+            logger.info("TAG gate: cache hit (config unchanged) — no forward pass.")
+        else:
+            redone = gatelib.recompute_gate_from_cache(cache, gcfg)
+            if redone is not None:
+                tag["gate"] = redone["gate"]
+                tag["components"] = redone
+                gatelib.save_gate_cache(
+                    output_dir, result=redone, cfg=gcfg,
+                    epoch=int(cache.get("epoch", epoch)),
+                    token_true=cache.get("token_true"),
+                    n_true=cache.get("n_true"),
+                    token_cf=cache.get("token_cf"),
+                    n_cf=cache.get("n_cf"),
+                    store_token_losses=True,
+                )
+            else:
+                logger.warning(
+                    "TAG gate cache config %s != requested %s and the cache has "
+                    "no per-token losses to re-derive from — recomputing. Set "
+                    "tads.tag.store_token_losses: true to make config sweeps free.",
+                    cache.get("config"), gcfg.identity(),
+                )
+    elif cache is not None:
+        logger.warning(
+            "TAG gate cache size %d != pool size %d — recomputing.",
+            cache["gate"].numel(), n_pool,
+        )
+
+    if tag["gate"] is None:
+        cf_datasets = tag_ctx.get("cf_datasets") or []
+        if not cf_datasets:
+            raise ValueError(
+                "TAG score_mode requires a counterfactual pool: set "
+                "tads.tag.counterfactual_data_files (generate it with "
+                "scripts/make_corrupted_pool.py --emit-counterfactual).",
+            )
+        for k, cf_dataset in enumerate(cf_datasets, start=1):
+            if len(cf_dataset) != n_pool:
+                raise ValueError(
+                    f"Counterfactual pool #{k} size {len(cf_dataset)} != "
+                    f"candidate pool size {n_pool} — pools must be "
+                    f"index-aligned.",
+                )
+        if epoch > 1 and not tag["allow_late_gate"]:
+            # Fail BEFORE burning 1+K pool forwards.
+            raise RuntimeError(
+                f"_prepare_tag: no usable gate cache at epoch {epoch} (> 1). "
+                f"G is defined at the BASE checkpoint (paper Eq. 6) — restore "
+                f"tag_gate_cache.pt from the run's output dir, or set "
+                f"tads.tag.allow_late_gate: true to explicitly accept a "
+                f"wrong-checkpoint G.",
+            )
+        eos_id = tag_ctx.get("eos_token_id")
+        drop_eos = not gcfg.include_eos
+        bs = int(cfg.get("episode_batch_size", 1))
+        logger.info(
+            "TAG gate: computing per-token losses over %d pools (1 true + %d "
+            "counterfactual) at the base checkpoint.", 1 + len(cf_datasets),
+            len(cf_datasets),
+        )
+        token_true, n_true = gatelib.compute_pool_token_losses(
+            model, tag_ctx["dataset"], batch_size=bs, device=str(device),
+            tag="true", eos_token_id=eos_id, drop_trailing_eos=drop_eos,
+        )
+        token_cf: List[torch.Tensor] = []
+        n_cf: List[torch.Tensor] = []
+        for k, cf_dataset in enumerate(cf_datasets, start=1):
+            tc, nc = gatelib.compute_pool_token_losses(
+                model, cf_dataset, batch_size=bs, device=str(device),
+                tag=f"counterfactual_{k}" if len(cf_datasets) > 1 else "counterfactual",
+                eos_token_id=eos_id, drop_trailing_eos=drop_eos,
+            )
+            token_cf.append(tc)
+            n_cf.append(nc)
+
+        if gcfg.scale is None:
+            # Calibrate on THIS pool only as an explicitly diagnostic
+            # fallback; resolve_scale warns loudly.
+            probe = gatelib.gate_components(
+                token_true, n_true, token_cf[0], n_cf[0], cfg=gcfg,
+            )
+            gcfg = _build_gate_config(
+                params, gatelib.resolve_scale(gcfg, probe["delta_hat"]),
+            )
+            tag["gate_config"] = gcfg
+            tag["scale_used"] = gcfg.scale
+        result = gatelib.compute_gate(
+            token_true, n_true, token_cf, n_cf, completeness, cfg=gcfg,
+        )
+        tag["gate"] = result["gate"]
+        tag["components"] = result
+        tag["token_true"] = token_true
+        tag["n_true"] = n_true
+        tag["token_cf"] = token_cf
+        tag["n_cf"] = n_cf
+    return tag
+
+
+def _finalize_tag(tag, episode, *, cfg, epoch: int) -> Dict[str, Any]:
+    """Persist the gate cache (when freshly computed) and return extras."""
+    from ..core import gate as gatelib
+
+    output_dir = cfg["output_dir"]
+    _save_loss_history(output_dir, epoch, episode["r_loss"])
+    comp = tag.get("components")
+    if comp is not None and tag.get("token_true") is not None:
+        gatelib.save_gate_cache(
+            output_dir,
+            result=comp,
+            cfg=tag["gate_config"],
+            epoch=epoch,
+            token_true=tag["token_true"],
+            n_true=tag["n_true"],
+            token_cf=tag["token_cf"],
+            n_cf=tag["n_cf"],
+            store_token_losses=bool(tag.get("store_token_losses", False)),
+        )
+    gate_t = episode.get("gate")
+    extras: Dict[str, Any] = {
+        "score_mode": "tag",
+        "gate_scale": tag.get("scale_used"),
+    }
+    if gate_t is not None:
+        extras.update({
+            "gate_mean": float(gate_t.float().mean().item()),
+            "gate_zero_frac": float((gate_t == 0).float().mean().item()),
+        })
+    if comp is not None:
+        extras.update({
+            "delta_bar_mean": float(comp["delta_bar"].mean().item()),
+            "delta_min_mean": float(comp["delta_min"].mean().item()),
+            "delta_hat_mean": float(comp["delta_hat"].mean().item()),
+            "gate_undefined": int(comp["undefined"].sum().item()),
+            "gate_empty_c": int(comp["empty_c"].sum().item()),
+        })
+    return extras
+
+
 def _prepare_mvf(
     mvf_ctx: Dict[str, Any],
     *,
@@ -492,6 +743,7 @@ def _anchor_stability(anchor, prev_v) -> float:
 
 def select_indices(
     method, *, model, anchor, dataset, cfg, epoch, seed, device, mvf_ctx=None,
+    tag_ctx=None,
 ):
     """Return (selected_indices, extras) for the given epoch.
 
@@ -501,10 +753,22 @@ def select_indices(
     "cluster_ids": list[int] | None, "params": {eta, gamma, eps, d_floor,
     progress_mode, static, adaptive_lam, reliability_*}}``.
     None keeps the legacy scoring path untouched.
+
+    ``tag_ctx`` — optional context for the TAG score (built when
+    ``tads.score_mode == "tag"``): ``{"completeness": (N,) tensor,
+    "dataset": Dataset, "cf_datasets": [Dataset, ...], "cluster_ids":
+    list[int] | None, "eos_token_id": int, "params": {span_tokens, tau,
+    tail_mode, gate_scale, ...}}``. Mutually exclusive with ``mvf_ctx``.
     """
     n_total = len(dataset)
     ratio = float(cfg["selection_ratio"])
     extras = {}
+
+    if mvf_ctx is not None and tag_ctx is not None:
+        raise ValueError(
+            "select_indices: mvf_ctx and tag_ctx are mutually exclusive — "
+            "tads.score_mode selects exactly one of 'mvf' / 'tag'.",
+        )
 
     if method == "full":
         selected = list(range(n_total))
@@ -583,29 +847,40 @@ def select_indices(
     # training-adaptive component (per-refresh D/A recomputation) from the
     # score design itself. Without this arm, "adaptive beats static" is
     # unfalsifiable.
+    # `static` is a property of the ARM, not of the score design, so both
+    # score modes honour it (TAG-static is the paper's adaptive-vs-static
+    # control just as MVF-static was). `adaptive_lam` stays MVF-only: TAG's
+    # Eq. 1 uses a fixed λ.
     _mvf_params = (mvf_ctx or {}).get("params") or {}
-    if bool(_mvf_params.get("static")) and epoch > 1:
+    _mode_params = _mvf_params or ((tag_ctx or {}).get("params") or {})
+    if bool(_mode_params.get("static")) and epoch > 1:
+        _static_key = "tag" if (tag_ctx is not None and not _mvf_params) else "mvf"
         if _output_dir_raw is None:
-            raise ValueError("mvf.static requires output_dir to locate the epoch-1 selection.")
+            raise ValueError(
+                f"{_static_key}.static requires output_dir to locate the "
+                f"epoch-1 selection."
+            )
         _frozen_path = Path(_output_dir_raw) / "selected_indices_epoch1.json"
         if not _frozen_path.exists():
             raise RuntimeError(
-                f"mvf.static=true but {_frozen_path} does not exist — the "
-                f"epoch-1 selection must complete (and be saved) first.",
+                f"{_static_key}.static=true but {_frozen_path} does not exist — "
+                f"the epoch-1 selection must complete (and be saved) first.",
             )
         with open(_frozen_path) as _f:
             _frozen = json.load(_f)
         if not isinstance(_frozen, list) or not _frozen:
-            raise RuntimeError(f"mvf.static: {_frozen_path} is empty or malformed.")
+            raise RuntimeError(
+                f"{_static_key}.static: {_frozen_path} is empty or malformed."
+            )
         logger.info(
-            "MVF-static: reusing frozen epoch-1 selection (%d indices) at "
-            "epoch %d.", len(_frozen), epoch,
+            "%s-static: reusing frozen epoch-1 selection (%d indices) at "
+            "epoch %d.", _static_key.upper(), len(_frozen), epoch,
         )
         selected = [int(x) for x in _frozen] if is_main_process() else []
         selected = _broadcast_selection(
             selected, epoch=epoch, output_dir=_output_dir_raw, device=device,
         )
-        extras["mvf_static_reuse"] = True
+        extras[f"{_static_key}_static_reuse"] = True
         return selected, extras
 
     if is_main_process():
@@ -653,6 +928,14 @@ def select_indices(
                     device=device, n_pool=n_total,
                 )
 
+            tag = None
+            if tag_ctx is not None:
+                tag_ctx.setdefault("dataset", dataset)
+                tag = _prepare_tag(
+                    tag_ctx, model=model, cfg=cfg, epoch=epoch,
+                    device=device, n_pool=n_total,
+                )
+
             print("[trace] rank=0 BEFORE collect_episode", flush=True)
             episode = collect_episode(
                 model=model,
@@ -667,6 +950,7 @@ def select_indices(
                 epoch=epoch,
                 exp_tag=exp_tag,
                 mvf=mvf,
+                tag=tag,
             )
             print("[trace] rank=0 AFTER collect_episode | episode_keys="
                   + str(list(episode.keys())), flush=True)
@@ -689,6 +973,10 @@ def select_indices(
             if mvf is not None:
                 extras.update(
                     _finalize_mvf(mvf, episode, cfg=cfg, epoch=epoch),
+                )
+            if tag is not None:
+                extras.update(
+                    _finalize_tag(tag, episode, cfg=cfg, epoch=epoch),
                 )
         except Exception as _e:
             print("[trace] rank=0 EXCEPTION in main branch: "

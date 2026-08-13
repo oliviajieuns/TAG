@@ -556,10 +556,22 @@ def main() -> None:
     # selection itself runs on rank 0, and the counterfactual tokenisation
     # would otherwise race on the HF datasets cache across ranks.
     mvf_ctx = None
+    tag_ctx = None
     tads_cfg_top = cfg.get("tads", {}) or {}
+    _score_mode = str(tads_cfg_top.get("score_mode", "tads"))
+    _VALID_SCORE_MODES = ("tads", "mvf", "tag")
+    if method == "tads" and _score_mode not in _VALID_SCORE_MODES:
+        # Previously an unknown score_mode fell through to the LEGACY path
+        # with no error and no warning, so a typo silently ran an ungated
+        # baseline under the name of a gated arm.
+        raise ValueError(
+            f"tads.score_mode={_score_mode!r} is not recognised. Valid: "
+            f"{_VALID_SCORE_MODES} ('tads' = legacy Eq. 10, 'mvf' = "
+            f"multi-view fusion, 'tag' = reliability-gated Eq. 1).",
+        )
     if (
         method == "tads"
-        and str(tads_cfg_top.get("score_mode", "tads")) == "mvf"
+        and _score_mode == "mvf"
         and is_main_process()
     ):
         from tads.core.dedup import load_clusters
@@ -660,6 +672,121 @@ def main() -> None:
             mvf_ctx["params"]["progress_mode"],
             mvf_ctx["params"]["static"],
             mvf_ctx["params"]["adaptive_lam"],
+        )
+
+    # ---------- TAG context (score_mode: tag; paper Eq. 1) ----------
+    # Same rank-0-only contract as the MVF block above: the counterfactual
+    # tokenisation would race on the HF datasets cache across ranks, and
+    # selection itself only runs on rank 0.
+    if (
+        method == "tads"
+        and _score_mode == "tag"
+        and is_main_process()
+    ):
+        from tads.core.dedup import load_clusters
+        from tads.core.reliability import completeness_from_dataset
+
+        tag_cfg = tads_cfg_top.get("tag", {}) or {}
+        cf_files = tag_cfg.get("counterfactual_data_files") or None
+        if cf_files and not isinstance(cf_files, (list, tuple)):
+            cf_files = [p.strip() for p in str(cf_files).split(",") if p.strip()]
+        if not cf_files:
+            raise ValueError(
+                "tads.score_mode='tag' requires tads.tag.counterfactual_data_files "
+                "(the x^- pool). Generate it with:\n"
+                "    python scripts/make_corrupted_pool.py ... --emit-counterfactual\n"
+                "then export TADS_CF_FILES=<pool>/counterfactual.json",
+            )
+        cf_datasets = []
+        with timer.phase("counterfactual_build", "data"):
+            for k, one in enumerate(cf_files, start=1):
+                cf_dataset = build_alpaca_dataset(
+                    tokenizer=tokenizer,
+                    cache_dir=os.path.join(
+                        effective_cache,
+                        "counterfactual" if k == 1 else f"counterfactual_{k}",
+                    ),
+                    max_seq_len=int(cfg["max_seq_len"]),
+                    dataset_name=None,
+                    data_files=str(one),
+                    prompt_style=style_key,
+                )
+                if keep_indices is not None:
+                    cf_dataset = cf_dataset.select(keep_indices)
+                if len(cf_dataset) != n_total:
+                    raise ValueError(
+                        f"Counterfactual pool #{k} size {len(cf_dataset)} != "
+                        f"candidate pool size {n_total}. Counterfactual files "
+                        f"must be index-aligned with data_files (regenerate "
+                        f"both with scripts/make_corrupted_pool.py).",
+                    )
+                cf_datasets.append(cf_dataset)
+        cluster_ids = None
+        cluster_file = tag_cfg.get("dedup_clusters_file") or None
+        if cluster_file:
+            cluster_ids = load_clusters(str(cluster_file))
+            if keep_indices is not None:
+                cluster_ids = [cluster_ids[i] for i in keep_indices]
+            if len(cluster_ids) != n_total:
+                raise ValueError(
+                    f"dedup_clusters_file length {len(cluster_ids)} != pool "
+                    f"size {n_total} — cluster file built for a different pool?",
+                )
+        completeness = completeness_from_dataset(
+            dataset,
+            eos_token_id=tokenizer.eos_token_id,
+            c_trunc=float(tag_cfg.get("c_trunc", 0.2)),
+        )
+
+        def _opt_float(key):
+            """Env-interpolated '' means unset; 0.0 must stay a valid value."""
+            v = tag_cfg.get(key)
+            return None if v is None or str(v).strip() == "" else float(v)
+
+        tag_ctx = {
+            "completeness": completeness,
+            "dataset": dataset,
+            "cf_datasets": cf_datasets,
+            "cluster_ids": cluster_ids,
+            "eos_token_id": tokenizer.eos_token_id,
+            "params": {
+                # ---- span aggregation (paper Eqs. 4-5) ----
+                "span_tokens": int(tag_cfg.get("span_tokens", 16)),
+                "tau": float(tag_cfg.get("tau", 0.5)),
+                "tau_mode": str(tag_cfg.get("tau_mode", "per_token")),
+                "min_span_tokens": int(tag_cfg.get("min_span_tokens", 4)),
+                "tail_mode": str(tag_cfg.get("tail_mode", "min")),
+                "tail_quantile": float(tag_cfg.get("tail_quantile", 0.0)),
+                "include_eos": bool(tag_cfg.get("include_eos", False)),
+                # ---- gate (paper Eq. 6) ----
+                "c_trunc": float(tag_cfg.get("c_trunc", 0.2)),
+                "eps_den": float(tag_cfg.get("eps_den", 1e-3)),
+                "min_common_tokens": int(tag_cfg.get("min_common_tokens", 8)),
+                "undefined_policy": str(tag_cfg.get("undefined_policy", "pass")),
+                "gate_scale": _opt_float("gate_scale"),
+                "gate_ref_file": (tag_cfg.get("gate_ref_file") or None),
+                "calibration_target_pct": float(
+                    tag_cfg.get("calibration_target_pct", 0.10)
+                ),
+                "calibration_target_q": float(tag_cfg.get("calibration_target_q", 0.8)),
+                "dispersion_discount": bool(tag_cfg.get("dispersion_discount", True)),
+                # ---- lifecycle ----
+                "allow_late_gate": bool(tag_cfg.get("allow_late_gate", False)),
+                "store_token_losses": bool(tag_cfg.get("store_token_losses", False)),
+                "static": bool(tag_cfg.get("static", False)),
+            },
+        }
+        logger.info(
+            "TAG context ready | counterfactuals=%d | dedup_clusters=%s | "
+            "W=%d tau=%.3f(%s) min_span=%d tail=%s | c_trunc=%.2f | "
+            "gate_scale=%s ref=%s | undefined=%s | static=%s",
+            len(cf_datasets),
+            "yes" if cluster_ids is not None else "no",
+            tag_ctx["params"]["span_tokens"], tag_ctx["params"]["tau"],
+            tag_ctx["params"]["tau_mode"], tag_ctx["params"]["min_span_tokens"],
+            tag_ctx["params"]["tail_mode"], tag_ctx["params"]["c_trunc"],
+            tag_ctx["params"]["gate_scale"], tag_ctx["params"]["gate_ref_file"],
+            tag_ctx["params"]["undefined_policy"], tag_ctx["params"]["static"],
         )
 
     # ---------- optimizer / scheduler ----------
@@ -883,6 +1010,7 @@ def main() -> None:
                 seed=seed,
                 device=device,
                 mvf_ctx=mvf_ctx,
+                tag_ctx=tag_ctx,
             )
             save_selection(run_dir, epoch, selected)
 

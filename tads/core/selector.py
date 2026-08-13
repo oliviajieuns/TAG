@@ -64,6 +64,7 @@ from torch.utils.data import DataLoader
 from .dedup import constrained_topk
 from .reward import compute_rewards
 from .scorer import (
+    gated_selection_key,
     learnable_difficulty,
     mvf_score,
     normalize_alignment,
@@ -71,6 +72,7 @@ from .scorer import (
     rank01,
     select_top_b,
     tads_score,
+    tag_score,
 )
 from .trajectory_anchor import TrajectoryAnchor
 from .utils import cuda_mem_str
@@ -111,6 +113,7 @@ def collect_episode(
     progress_interval: int = 50,
     empty_cache_interval: int = 10,
     mvf: Optional[Dict[str, Any]] = None,
+    tag: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run one episode over the candidate pool and return selection results.
 
@@ -130,6 +133,19 @@ def collect_episode(
         cluster_ids   list[int] near-duplicate cluster ids (-1 = unique),
                       or None to skip the dedup constraint
         eta, gamma, eps   scalars (plan §1.2 / §1.4)
+
+    ``tag`` — TAG mode (paper Eq. 1), mutually exclusive with ``mvf``. The
+    legacy score is kept intact and multiplied by the static reliability
+    gate: s_i = G_i · R_i · (1 + λ·widetilde-align_i). Expected keys:
+
+        gate          (N,) G in [0,1] from ``tads.core.gate.compute_gate``,
+                      computed at the BASE checkpoint and cached
+        cluster_ids   list[int] near-duplicate cluster ids (-1 = unique),
+                      or None to skip the dedup constraint
+
+    Unlike MVF, TAG adds no new dynamic machinery — R, the min-max
+    alignment, and λ are exactly the legacy ones, so G ≡ 1 reproduces the
+    legacy ranking bit-for-bit.
 
     Memory: ``empty_cache_interval=10`` keeps the CUDA caching allocator
     from fragmenting across the ~3000 episode batches. With Llama-2-7B +
@@ -160,6 +176,12 @@ def collect_episode(
     total_samples = len(dataset)
     t0 = time.time()
 
+    if mvf is not None and tag is not None:
+        raise ValueError(
+            "collect_episode: 'mvf' and 'tag' are mutually exclusive score "
+            "modes — MVF replaces the composite reward, TAG gates it. Pick one.",
+        )
+
     apply_anchor = (
         use_anchor
         and trajectory_anchor is not None
@@ -179,12 +201,15 @@ def collect_episode(
                 device, dtype=torch.float32, non_blocking=True,
             )
 
-    tag = f" | tag={exp_tag}" if exp_tag else ""
+    # NB: named `_log_tag`, not `tag` — `tag` is the TAG-mode parameter.
+    _log_tag = f" | tag={exp_tag}" if exp_tag else ""
     logger.info(
         "collect_episode start | epoch=%d | n=%d | bs=%d | batches=%d | "
-        "ratio=%.2f | use_anchor=%s | lam=%.3f | %s%s",
+        "ratio=%.2f | use_anchor=%s | lam=%.3f | mode=%s | %s%s",
         epoch, total_samples, batch_size, total_batches,
-        selection_ratio, apply_anchor, lam, cuda_mem_str(), tag,
+        selection_ratio, apply_anchor, lam,
+        "mvf" if mvf is not None else ("tag" if tag is not None else "tads"),
+        cuda_mem_str(), _log_tag,
     )
 
     # NCCL heartbeat collective has been REMOVED here. Earlier experiments
@@ -330,6 +355,8 @@ def collect_episode(
     # ---- Final score ----
     q = None
     difficulty = None
+    gate = None
+    ungated_score = None
     if mvf is None:
         # Legacy path (paper Eq. 10): s_i = R_i · (1 + λ · widetilde-align_i).
         # Paper §3.3 final paragraph excludes z-score / R̃ from the ranking
@@ -353,6 +380,40 @@ def collect_episode(
             logger.info(
                 "Composite-reward-only score (no anchor) | epoch=%d | R_mean=%.4f",
                 epoch, float(R.mean().item()),
+            )
+        if tag is not None:
+            # TAG (paper Eq. 1): s_i = G_i · R_i · (1 + λ·widetilde-align_i).
+            # The legacy score computed just above IS the dynamic part; the
+            # gate multiplies it. G is static and cached, so it never
+            # changes across refreshes — see tads/core/gate.py.
+            gate = tag.get("gate")
+            if gate is None:
+                raise ValueError(
+                    "collect_episode(tag=...): 'gate' is required. G is defined "
+                    "at the BASE checkpoint (paper §1, Eq. 6) and is computed by "
+                    "the pipeline before scoring — see tads/core/gate.py.",
+                )
+            gate = gate.view(-1).float()
+            if gate.numel() != total_samples:
+                raise ValueError(
+                    f"collect_episode(tag=...): gate length {gate.numel()} != "
+                    f"pool size {total_samples} — stale cache or wrong pool?",
+                )
+            if bool(torch.isnan(gate).any()) or bool((gate < 0).any()) or bool((gate > 1).any()):
+                raise ValueError(
+                    "collect_episode(tag=...): gate must lie in [0,1] and be "
+                    "NaN-free (paper Eq. 6 clamps to that range).",
+                )
+            ungated_score = score
+            score = tag_score(gate, R, alignment if apply_anchor else None, lam)
+            n_vetoed = int((gate == 0).sum().item())
+            logger.info(
+                "TAG score | epoch=%d | lam=%.3f | G_mean=%.4f | G==0: %d/%d "
+                "(%.1f%%) | R_mean=%.4f | s_mean=%.4f",
+                epoch, lam if apply_anchor else 0.0,
+                float(gate.mean().item()), n_vetoed, total_samples,
+                100.0 * n_vetoed / max(1, total_samples),
+                float(R.mean().item()), float(score.mean().item()),
             )
     else:
         # MVF path (plan §2, v3):
@@ -447,13 +508,47 @@ def collect_episode(
             "collect_episode: total_samples == 0 — empty candidate pool. "
             "Check dataset_subset_size / data path.",
         )
-    cluster_ids = mvf.get("cluster_ids") if mvf is not None else None
+    if mvf is not None:
+        cluster_ids = mvf.get("cluster_ids")
+    elif tag is not None:
+        # The legacy path has never deduplicated (dedup was introduced with
+        # MVF), so TAG must thread cluster_ids explicitly or duplicated
+        # instructions would be selected repeatedly despite the gate.
+        cluster_ids = tag.get("cluster_ids")
+    else:
+        cluster_ids = None
+
+    ranking = score
+    if tag is not None and gate is not None:
+        # Vetoed samples all score exactly 0; rank them below every
+        # admissible sample and break the zero-block by the ungated score
+        # instead of by pool file order (see scorer.gated_selection_key).
+        ranking, n_admissible = gated_selection_key(
+            score,
+            ungated_score if ungated_score is not None else R,
+            gate,
+        )
+        if n_admissible < k:
+            logger.warning(
+                "TAG: only %d/%d samples pass the reliability gate but the "
+                "budget is B=%d — %d slot(s) must be filled with VETOED "
+                "samples (ranked by the ungated score). The non-compensation "
+                "guarantee does not hold for those slots; report this count, "
+                "or lower selection_ratio / raise the gate scale.",
+                n_admissible, total_samples, k, k - n_admissible,
+            )
+        else:
+            logger.info(
+                "TAG selection | admissible=%d/%d | B=%d — budget fits inside "
+                "the gated set.", n_admissible, total_samples, k,
+            )
+
     if cluster_ids is not None:
         selected_indices: List[int] = (
-            constrained_topk(score, k, cluster_ids).cpu().tolist()
+            constrained_topk(ranking, k, cluster_ids).cpu().tolist()
         )
     else:
-        selected_indices = select_top_b(score, k).cpu().tolist()
+        selected_indices = select_top_b(ranking, k).cpu().tolist()
     logger.info(
         "Selection topk | k=%d/%d | first5=%s",
         k, total_samples, selected_indices[:5],
@@ -495,8 +590,12 @@ def collect_episode(
         "r_entropy": all_r_entropy_t,
         "reliability": q,
         "difficulty": difficulty,
+        "gate": gate,
+        "ungated_score": ungated_score,
         "score": score,
-        "score_mode": "mvf" if mvf is not None else "tads",
+        "score_mode": (
+            "mvf" if mvf is not None else ("tag" if tag is not None else "tads")
+        ),
         "r_loss_mean": r_loss_mean,
         "r_entropy_mean": r_entropy_mean,
         "r_weight": r_weight_value,

@@ -432,6 +432,89 @@ def mvf_score(
     return score
 
 
+# ---------------------------------------------------------------------------
+# TAG scoring path (reliability gate × legacy trajectory-anchored score)
+# ---------------------------------------------------------------------------
+# Paper Eq. 1:
+#
+#     s_i^(t) = G_i · R_i^(t) · (1 + λ · widetilde-align_i^(t))
+#
+# Unlike the MVF path, TAG does NOT replace the composite reward: it keeps
+# the trajectory-anchored selector intact and multiplies one static factor in
+# front. R and the alignment factor are computed exactly as in the legacy
+# path (min-max alignment, raw R, no rank transform), so λ=0 + G≡1 recovers
+# the legacy ranking bit-for-bit.
+
+
+def tag_score(
+    gate: torch.Tensor,
+    R: torch.Tensor,
+    alignment_norm: Optional[torch.Tensor],
+    lam: float,
+) -> torch.Tensor:
+    """Paper Eq. 1: ``s_i = G_i · R_i · (1 + λ · widetilde-align_i)``.
+
+    ``alignment_norm=None`` drops the anchor factor (λ=0 / use_anchor=False),
+    giving ``s_i = G_i · R_i``.
+
+    Both dynamic factors are bounded above — R by the pool's own reward range
+    and the anchor factor by ``1+λ`` — which is what makes ``G_i = 0`` an
+    unconditional veto rather than a large penalty.
+    """
+    if gate.shape != R.shape:
+        raise ValueError(
+            f"tag_score: shape mismatch gate={tuple(gate.shape)} vs R={tuple(R.shape)}"
+        )
+    if lam < 0:
+        raise ValueError(f"tag_score: lam must be >= 0, got {lam}")
+    base = R if alignment_norm is None else tads_score(R, alignment_norm, lam)
+    return gate.float() * base
+
+
+def gated_selection_key(
+    score: torch.Tensor,
+    fallback_score: torch.Tensor,
+    gate: torch.Tensor,
+) -> Tuple[torch.Tensor, int]:
+    """Total order that keeps the veto intact and still breaks zero-ties.
+
+    A vetoed sample scores EXACTLY 0 (Eq. 6 clamps at zero gain), so when the
+    budget B exceeds the number of admissible samples, ``topk`` would have to
+    choose among a large block of exact ties — and ``torch.topk`` resolves
+    ties by index, which promotes the candidate pool's FILE ORDER into the
+    selection. That is the same class of bug the ``rank01`` midrank fix
+    removed from the progress statistic (plan §1-4).
+
+    The key is a two-level order:
+
+        admissible (G > 0)  ->  2 + rank01(gated score)      in [2, 3]
+        vetoed     (G == 0) ->      rank01(fallback score)   in [0, 1]
+
+    so every admissible sample outranks every vetoed one, ties inside each
+    block are broken by the pool-relative rank of a meaningful statistic, and
+    the caller can hand the key straight to ``select_top_b`` or
+    ``constrained_topk`` — the dedup constraint composes unchanged.
+
+    ``fallback_score`` should be the UNGATED score ``R·(1+λ·ã)``: if the
+    reliable pool cannot fill the budget, the leftover slots are filled by
+    the ordinary training-adaptive criterion rather than arbitrarily.
+
+    Returns ``(key, n_admissible)``.
+    """
+    if not (score.shape == fallback_score.shape == gate.shape):
+        raise ValueError(
+            f"gated_selection_key: shape mismatch score={tuple(score.shape)}, "
+            f"fallback={tuple(fallback_score.shape)}, gate={tuple(gate.shape)}"
+        )
+    admissible = gate.float() > 0
+    key = torch.where(
+        admissible,
+        2.0 + rank01(score),
+        rank01(fallback_score),
+    )
+    return key, int(admissible.sum().item())
+
+
 def select_top_b(scores: torch.Tensor, b: int) -> torch.Tensor:
     """Return the top-B indices of `scores` in descending order."""
     if b <= 0:

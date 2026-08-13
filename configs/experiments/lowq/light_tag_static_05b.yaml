@@ -1,0 +1,21 @@
+# Lowq arm: TAG-STATIC control — the gated score computed ONCE at epoch 1,
+# selection frozen for every later refresh. Isolates the training-adaptive
+# component (per-refresh R/ã recomputation) from the gate itself; without
+# this arm, "training-adaptive beats static" is unfalsifiable (plan §5.1).
+#
+# Note what this arm does NOT vary: G is static in BOTH arms by design
+# (paper Eq. 6 — it is a property of the data). The only difference is
+# whether the dynamic factors are refreshed, which is exactly the claim
+# under test.
+#
+# Same env wiring as light_tag_05b.yaml.
+# Order matters: method FIRST, shared fragment LAST (see light_tag_05b.yaml
+# note; verified by tests/test_lowq_configs.py).
+defaults:
+  - configs/methods/tag.yaml
+  - configs/experiments/lowq/_shared_light_05b.yaml
+
+output_subdir: lowq/tag_static_05b
+tads:
+  tag:
+    static: true

@@ -35,6 +35,8 @@ _ARMS = [
     "light_tads_legacy_05b",
     "light_tads_mvf_05b",
     "light_tads_mvf_static_05b",
+    "light_tag_05b",
+    "light_tag_static_05b",
 ]
 
 
@@ -101,6 +103,43 @@ def test_mvf_static_arm_freezes_selection():
     assert cfg["tads"]["mvf"]["static"] is True
 
 
+def test_tag_arm_resolves_tag_score_mode():
+    cfg = _load("light_tag_05b")
+    assert cfg["method"] == "tads"
+    assert cfg["tads"]["score_mode"] == "tag"
+    assert cfg["selection_ratio"] == 0.1
+    # TAG keeps the legacy dynamic score intact — the anchor must stay on,
+    # otherwise the arm silently degrades to s = G · R (paper Eq. 1 with
+    # lam = 0) and the trajectory claim goes untested.
+    assert cfg["tads"]["use_anchor"] is True
+    assert cfg["tads"]["lam"] == 1.0
+
+
+def test_tag_static_arm_freezes_selection():
+    cfg = _load("light_tag_static_05b")
+    assert cfg["tads"]["score_mode"] == "tag"
+    assert cfg["tads"]["tag"]["static"] is True
+
+
+def test_tag_arm_carries_span_and_gate_params():
+    cfg = _load("light_tag_05b")
+    tag = cfg["tads"]["tag"]
+    assert tag["span_tokens"] == 16
+    assert tag["tau_mode"] == "per_token"
+    assert tag["tail_mode"] == "min"
+    assert tag["include_eos"] is False
+    assert tag["undefined_policy"] == "pass"
+
+
+def test_tag_and_mvf_arms_do_not_share_a_score_block():
+    """A TAG arm must not inherit MVF's parameters (or vice versa) — the two
+    modes are mutually exclusive and their configs are separate subtrees."""
+    tag_cfg = _load("light_tag_05b")
+    mvf_cfg = _load("light_tads_mvf_05b")
+    assert "mvf" not in tag_cfg["tads"]
+    assert "tag" not in mvf_cfg["tads"]
+
+
 # --------------------------------------------------------------------------
 # TADS_RELIABILITY_SCALE plumbing: unset env var -> empty string in the
 # resolved config -> None (never float('')) in the selection pipeline
@@ -130,3 +169,30 @@ def test_reliability_scale_set_env_resolves_to_float(monkeypatch):
     scale = cfg["tads"]["mvf"]["reliability_scale"]
     assert scale == "0.25"
     assert _resolve_reliability_scale({"reliability_scale": scale}) == pytest.approx(0.25)
+
+
+def test_gate_scale_unset_env_resolves_empty_and_means_unset(monkeypatch):
+    """Same empty-string trap as TADS_RELIABILITY_SCALE, new env var."""
+    from tads.pipelines.selection import _resolve_gate_scale
+
+    monkeypatch.delenv("TADS_GATE_SCALE", raising=False)
+    monkeypatch.delenv("TADS_GATE_REF", raising=False)
+    cfg = _load("light_tag_05b")
+    assert cfg["tads"]["tag"]["gate_scale"] == ""
+    assert cfg["tads"]["tag"]["gate_ref_file"] == ""
+    assert _resolve_gate_scale({"gate_scale": ""}) is None
+    assert _resolve_gate_scale({"gate_scale": "  "}) is None
+    assert _resolve_gate_scale({"gate_scale": None}) is None
+    # An empty gate_ref_file must not be treated as a path to torch.load.
+    assert _resolve_gate_scale({"gate_scale": "", "gate_ref_file": ""}) is None
+
+
+def test_gate_scale_set_env_resolves_to_float(monkeypatch):
+    from tads.pipelines.selection import _resolve_gate_scale
+
+    monkeypatch.setenv("TADS_GATE_SCALE", "0.15")
+    cfg = _load("light_tag_05b")
+    assert cfg["tads"]["tag"]["gate_scale"] == "0.15"
+    assert _resolve_gate_scale(
+        {"gate_scale": cfg["tads"]["tag"]["gate_scale"]}
+    ) == pytest.approx(0.15)
