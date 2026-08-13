@@ -83,6 +83,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -317,6 +318,19 @@ def main() -> None:
     if args.emit_fluent_wrong_targets:
         global_spec["fluent_wrong_pending"] = True
 
+    # Record WHICH corpus this pool came from. The candidate pool and the
+    # clean reference pool used to calibrate the gate must come from the same
+    # corpus: s is a quantile of Delta_hat measured on the reference, so a
+    # reference drawn from a different distribution mis-scales every gate
+    # value in the run — with no symptom other than a wrong veto rate. Only
+    # the manifest can catch that later, so it has to be written here.
+    def _corpus_id(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return {"path": str(Path(path).resolve()), "sha256": h.hexdigest()}
+
     manifest_out = {
         "seed": args.seed,
         "n_original": offset - sum(
@@ -327,6 +341,7 @@ def main() -> None:
         "entries": merged_entries,
         "duplicate_clusters": merged_clusters,
         "sources": all_sources if len(args.input) > 1 else None,
+        "inputs": [_corpus_id(p) for p in args.input],
     }
 
     # T7 step 1 must not produce a final-looking pool.json: the records are

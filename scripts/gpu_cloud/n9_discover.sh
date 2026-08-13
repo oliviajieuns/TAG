@@ -23,7 +23,9 @@ OUT="$TAG_ROOT/discovered_env.sh"
 
 # Roots to search, cheapest first. Add your own by exporting EXTRA_ROOTS.
 MODEL_ROOTS="/group-volume/models /group-volume/nait-models /group-volume/data/models ${EXTRA_MODEL_ROOTS:-}"
-DATA_ROOTS="/group-volume/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/data ${EXTRA_DATA_ROOTS:-}"
+# $TAG_WORKSPACE first: bootstrap materialises Alpaca-GPT4 there, and that
+# copy should win over whatever else happens to be lying around.
+DATA_ROOTS="${TAG_WORKSPACE:-$TAG_ROOT/workspace}/datasets /group-volume/${USER:-nobody}/datasets /group-volume/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/data ${EXTRA_DATA_ROOTS:-}"
 HF_ROOTS="/group-volume/data/hf_home /group-volume/hf_home ${EXTRA_HF_ROOTS:-}"
 
 say()  { printf '%s\n' "$*"; }
