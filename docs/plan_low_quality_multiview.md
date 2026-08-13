@@ -1,6 +1,7 @@
-# TADS → Information Fusion SI 단일 실행 계획 (v3)
+# TAG → Information Fusion SI 단일 실행 계획 (v3.1)
 
-**Status:** ACTIVE — 유일한 실행 문서 (2026-08-12 v3 개정).
+**Status:** ACTIVE — 유일한 실행 문서 (2026-08-13 v3.1: 원고 프레이밍을
+TAG로 확정, §0·§2.0·§8·§11 갱신. 실험/이론/일정은 v3 그대로).
 **Target:** Elsevier *Information Fusion* SI — "Multi-view Fusion and Learning
 on Low-quality Data: Foundation Models in Theories, Algorithms and
 Applications" (마감 **2026-08-30, D-18**). CIKM은 종료, dual-submission 제약
@@ -26,26 +27,116 @@ Applications" (마감 **2026-08-30, D-18**). CIKM은 종료, dual-submission 제
 K-counterfactual), 표 파이프라인 v2, arm config 체계 — 코드 반영 및 테스트
 green (core 59 + corruption 19 + table 12 pass).**
 
+**v3 → v3.1 개정 근거 (2026-08-13):** 원고의 진입 프레임을 "multi-view
+fusion 방법론"에서 **"training-adaptive selection이 저품질 pool에서 깨진다 →
+reliability를 veto로"** 로 재배치. 방법의 셀링 포인트가 세 뷰의 존재가 아니라
+**비보상성(non-compensatory) 그 자체**임이 v3 검증에서 드러났고(§7-1의 γ*
+정리가 실질 기여), 저널 스코프는 fusion 어휘를 §0 그대로 유지하는 것으로
+충분히 방어된다. 부수 결정 두 가지: (a) v3의 "trajectory 전면 삭제"를 **철회**
+— dynamic 두 뷰가 trajectory-anchored selection에서 그대로 상속된다는 점이
+"게이트만 추가했다"는 최소-변경 주장의 근거이므로 명칭을 유지하되 CIKM
+Reviewer 1의 명칭-수식 불일치 지적(audit §1-1)을 §8 명명 규칙으로 봉쇄한다.
+(b) 이름 확정: **TAG** = **T**raining-**A**daptive data selection with a
+reliability **G**ate.
+
+---
+
+## 0′. 확정 제목·초록 (사전 등록 — 이 문서가 그 기록)
+
+**Title:** *Training-Adaptive Data Selection with a Reliability Gate:
+Multi-View Fusion for Low-Quality Instruction Data*
+
+**Keywords:** Multi-view fusion; Low-quality data; Instruction tuning;
+Training-adaptive data selection; Reliability; Trajectory anchoring;
+Hidden-state representations; Foundation models
+
+**Abstract (제출본 기준 문구, `\STATUS{}` 자리는 Gate A′/B 결과로 치환):**
+
+> Data selection for instruction tuning is increasingly
+> *training-adaptive*: an example's usefulness changes as the model moves
+> through its fine-tuning trajectory, and dynamic selectors re-score
+> candidates accordingly. But real instruction pools are low-quality —
+> mismatched pairs, truncated responses, and subtly wrong answers are
+> common — and the difficulty–uncertainty signals that drive dynamic
+> selection actively *prefer* such corruption, because broken samples look
+> hard. We propose TAG (**T**raining-**A**daptive data selection with a
+> reliability **G**ate), which casts the selector as a non-compensatory
+> fusion of three model-intrinsic evidence views. A static *Reliability*
+> view classifies each sample once, before training: a counterfactual
+> likelihood contrast — how much the true instruction improves the
+> response's likelihood over an unrelated one — converted into a
+> zero-anchored gate G_i ∈ [0,1] calibrated on a clean reference pool, and
+> cached at no per-refresh cost. Two dynamic views are inherited unchanged
+> from trajectory-anchored selection: a difficulty–uncertainty carrier
+> R_i^(t), and a trajectory-anchor alignment factor derived from
+> checkpoint-to-checkpoint shifts in hidden representations, supported by a
+> local stability analysis. The fused score is simply
+> s_i^(t) = G_i · R_i^(t) · (1 + λ·ã_i^(t)): because both dynamic factors
+> are bounded, a zeroed gate cannot be compensated by any amount of
+> difficulty or alignment evidence — reliability is a veto, not a vote —
+> while selection among gated samples remains fully adaptive to the
+> training trajectory. On instruction pools with typed,
+> manifest-verified corruptions (mismatched, noisy, truncated,
+> wrong-answer, duplicated), `\STATUS{detection and end-to-end SFT results
+> pending: Dirty@K/AUPRC and seed-paired benchmark comparisons vs.
+> entropy-, perplexity-, and IFD-based selection}`; in prior same-protocol
+> comparisons the underlying training-adaptive selector already
+> outperformed strong static and dynamic baselines while reducing
+> selection-and-tuning cost by 33% relative to a Reward+PPO selector. TAG
+> requires no external judges, reward models, or PPO-style selector
+> training.
+
+**초록에 걸린 검증 부채 3건 (제출 전 반드시 해소 — §11 리스크와 연동):**
+
+1. `\STATUS{}` — Gate A′(§4)·Gate B(§9) 결과로 치환. 미해소 시 제출 불가.
+2. **"33% cost reduction vs. Reward+PPO"** — 이 수치의 출처는 CIKM 원고다.
+   audit §2.1의 "기존 CIKM 숫자 인용 금지"에 정면으로 걸린다. **선택지는 둘
+   뿐**: (a) 새 프로토콜(make_table_v2, sealed run)로 cost를 재측정해 새 숫자로
+   교체, (b) 문장 삭제. 옛 숫자를 그대로 싣는 경로는 없다. D5까지 결정.
+3. **"inherited unchanged"** — 현재 코드의 dynamic carrier는 초록의 R와
+   다르다(§2.0). 코드를 초록에 맞추거나 초록을 코드에 맞추거나, 둘 중 하나.
+
 ---
 
 ## 0. 포지셔닝 (스코프 게이트키퍼 종합)
 
+**뷰 명명 — 원고 표층(초록/intro/method 서두)과 내부 기호의 대응:**
+
+| 원고 명칭 (TAG) | v3 내부 명칭 | 기호 | 획득 시점 |
+|---|---|---|---|
+| Reliability view (static gate) | Consistency view | `G = (Q·c+ε)^γ` | 1회 (base ckpt, 캐시) |
+| Difficulty–uncertainty carrier | Dynamics view | `R^(t)` / `D′` | refresh마다 |
+| Trajectory-anchor alignment | Geometry view | `ã^(t)` | epoch마다 |
+
+내부 문서·코드·config 키는 Q/D/A와 `score_mode: mvf`를 그대로 유지한다(개명
+diff가 회귀 위험만 만든다). 원고에서만 위 좌열을 쓰고, method 서두에 이 대응
+표를 1개 싣는다 — **CIKM Reviewer 1의 "명칭이 수식과 불일치" 지적(audit §1-1)
+재발 방지선이 바로 이 표다.**
+
 **한 문단 요약:** instruction–response pair는 저품질 조건(mismatch=뷰 간
 정렬 오류, truncation=불완전 뷰, noise)이 실제로 발생하는 2-뷰 데이터다.
-선택은 세 개의 **evidence view** — Consistency(Q·c, counterfactual 교차-뷰
-forward), Dynamics(D, refresh 간 loss 궤적), Geometry(A, 층별 hidden-state
-기하) — 를 **보정된 비보상적(log-opinion-pool형) 게이트**로 융합하며, 게이트
-강도는 측정된 pool 오염도와 뷰 안정성에 적응한다.
+training-adaptive 선택기는 이 pool에서 **구조적으로 오작동한다** — 난이도·
+불확실성 신호가 곧 "망가진 샘플일수록 높다"이기 때문이다(초록 1–2문장, F2가
+그 실측). TAG는 선택을 세 개의 **model-intrinsic evidence view** —
+Reliability(G = Q·c, counterfactual 교차-뷰 forward, **static**),
+difficulty–uncertainty carrier(R^(t), refresh 간 loss 궤적), trajectory-anchor
+alignment(ã^(t), 층별 hidden-state 기하) — 의 **보정된 비보상적
+(log-opinion-pool형) 융합**으로 재기술한다. dynamic 두 인자가 유계이므로
+G=0은 어떤 난이도·정렬 증거로도 되살아나지 않고(veto), 게이트를 통과한
+샘플들 사이의 순위는 완전히 trajectory-adaptive하게 남는다. 게이트 강도는
+측정된 pool 오염도와 뷰 안정성에 보정으로 연동된다.
 
-**뷰 명명 (원고 전체 통일):** Consistency view (Q·c) / Dynamics view (D) /
-Geometry view (A). 수식 기호는 Q, D, A 유지.
+**뷰 명명:** 원고 표층은 Reliability / difficulty–uncertainty carrier /
+trajectory-anchor alignment, 내부 기호·코드는 Q(·c), D, A 유지 — 대응표는
+위 §0 서두. 원고 안에서 두 어휘를 섞지 않는다.
 
 **"What constitutes a view" 서브섹션 (필수, method 서두):**
 (a) 데이터 레벨: instruction과 response는 한 태스크의 이질적 2-뷰 — T1
 mismatch가 곧 CFP의 misaligned view, T3 truncation이 incomplete view;
-(b) evidence 레벨: Q/D/A는 생성 과정이 서로 다른 정보원(별도 counterfactual
-forward / 시간축 loss dynamics / hidden-state 기하) — co-training 계열의
-constructed-view 전통 인용; (c) in-journal 선례(Huang et al. 2024) 명시.
+(b) evidence 레벨: 세 뷰는 생성 과정이 서로 다른 정보원(별도 counterfactual
+forward / 시간축 loss dynamics / hidden-state 기하)이고 **획득 스케줄까지
+이질적**(1회 / refresh / epoch) — co-training 계열의 constructed-view 전통
+인용; (c) in-journal 선례(Huang et al. 2024) 명시.
 
 **CFP 토픽 주장 (이 순서·이 강도로, intro에 명시):**
 - **topic 2** (foundation-model representations as views) — 최강 라이선스
@@ -93,7 +184,44 @@ T1a/T1b→misaligned(cross-view correspondence), T6→imbalanced(분석 축),
 
 ## 2. 점수 설계 (MVF v3) [구현 완료]
 
-### 2.1 Consistency Q — zero-anchored calibrated gate (re-zeroed)
+### 2.0 초록 수식 ↔ 구현 대조 (v3.1 신규 — 제출 전 해소 필수)
+
+초록이 제시하는 융합식과 `score_mode: mvf`가 실제로 계산하는 식:
+
+```
+초록:  s_i^(t) = G_i · R_i^(t) · (1 + λ·ã_i^(t))
+구현:  S_i^t   = (Q_i·c_i + ε)^γ · (D′_i + ε) · (1 + λ_t·ã_i^t)
+        D′_i   = d_floor + (1 − d_floor)·D_i^t
+```
+
+대응은 `G_i = (Q_i·c_i + ε)^γ`, `R_i^(t) = D′_i + ε`. 두 군데가 **문자 그대로
+같지 않다** — 원고 심사에서 코드를 대조하는 리뷰어가 반드시 짚는 지점이므로
+지금 결정한다.
+
+| # | 초록 | 구현 | 상태 |
+|---|---|---|---|
+| A | `G_i ∈ [0,1]`, 0이면 veto | `(Q·c+ε)^γ`, ε=0.01 바닥 | **표기 문제만.** ε 바닥은 게이트 아래 순위를 정의된 상태로 두기 위한 것이고 억제비 61×는 §7-1에서 명시적으로 계산된다. 초록의 "cannot be compensated"는 γ>γ* 조건부 주장이므로 method에서 ε·γ*를 드러내면 정합. 초록 문구 수정 불필요, **method에 ε 1문장 필수** |
+| B | `R^(t)` = difficulty–**uncertainty** carrier, trajectory-anchored selection에서 **inherited unchanged** | `D′` = difficulty-only (`rank01(L^t)`×progress, `[0.5,1]` 압축). entropy는 로깅만 — v3가 "uncertainty ≠ quality"를 근거로 **의도적으로 제거** | **실질 불일치.** 아래 둘 중 하나를 D5까지 선택 |
+
+**B의 선택지 (하나만 고른다):**
+
+- **B1 — 초록을 코드에 맞춘다 (권고).** `R^(t)`를 "difficulty carrier"로
+  적고, "inherited unchanged"를 "inherited from trajectory-anchored
+  selection, with entropy removed from the carrier"로 바꾼다. 근거는 이미
+  있다: entropy는 uncertainty이지 quality가 아니며, 저품질 pool에서 오염
+  샘플을 **선호**하는 신호가 바로 그것이다(초록 2문장이 스스로 그렇게
+  말한다 — 그 신호를 carrier에 남겨두는 편이 오히려 서사와 충돌). 비용 0,
+  회귀 위험 0. entropy-in-carrier는 §4 forward-only ablation 1행으로 측정해
+  근거를 붙인다(`R` 신호가 이미 `score_pool.py`에 있으므로 무료).
+- **B2 — 코드를 초록에 맞춘다.** `mvf` carrier를 `pool_reward`의
+  `w·L+(1−w)·H`로 교체. 유계가 아니므로(§7-1의 비보상 여유가 R의 pool
+  스케일에 의존) `rank01` 또는 min-max 유계화가 **반드시** 동반되어야 하고,
+  그 순간 §7-1 γ* 정리의 상수와 골든 회귀 테스트를 다시 유도해야 한다.
+  D-18 시점에 정리·테스트·전 arm 재실행을 다시 여는 선택이므로 권고하지 않음.
+
+기본값은 **B1**. B2로 갈 경우 §7-1·§9 일정·§5.4 예산을 같은 커밋에서 갱신할 것.
+
+### 2.1 Reliability Q (Consistency view) — zero-anchored calibrated gate (re-zeroed)
 
 ```
 ΔL_i = L(y_i | x_i⁻) − L(y_i | x_i)
@@ -332,17 +460,26 @@ partial-view e2e → knockout e2e → dedup-off → source-skewed → SelectIT.
 
 ## 8. 원고 계획 (스코프 리뷰어 required changes 반영)
 
-- **제목 후보 (fusion + low-quality 필수 포함):**
-  (a) *"Adaptive Non-Compensatory Multi-View Fusion for Reliable
-  Instruction-Data Selection from Low-Quality Pools"*
-  (b) *"Reliability-Gated Multi-View Fusion for Training-Adaptive Data
-  Selection on Low-Quality Instruction Data"*
-  Gate B에서 확정. "trajectory" 전면 삭제.
-- **Abstract 구조:** 1문장 low-quality 2-뷰 데이터 문제 → 2–3문장에 세
-  뷰와 오염 분류를 CFP 용어로 명명 → 게이트 융합 + γ* 보장 → 결과.
-  instruction tuning은 응용으로 후치.
+- **제목 확정 (v3.1, Gate B 재론 없음):** *"Training-Adaptive Data Selection
+  with a Reliability Gate: Multi-View Fusion for Low-Quality Instruction
+  Data"* — 부제가 fusion + low-quality를 모두 담으므로 스코프 요건 충족,
+  주제목이 방법의 실제 기여(비보상 게이트)를 말한다. v3의 후보 (a)/(b)는
+  폐기. **"trajectory 전면 삭제" 방침도 철회** — trajectory-anchor alignment는
+  뷰 이름으로 유지하되, §0 대응표와 method의 수식-명칭 일치 규칙으로 CIKM
+  Reviewer 1 지적을 봉쇄한다.
+- **약칭 사용 규칙:** TAG는 초록·intro·결과 표에서 method 이름으로만 쓰고,
+  method 본문의 수식 서술은 기호(G, R, ã)로 한다. arm 표기는 코드와 1:1로
+  — `TAG` = `score_mode: mvf`, `TAG-static` = `mvf.static: true`,
+  `TADS-legacy` = `score_mode: tads`(게이트 없음). 표 캡션에 이 대응을 각주로.
+- **Abstract:** §0′에 확정 문구 등록 완료. 구조는 training-adaptive 전제
+  1문장 → 저품질 pool에서 difficulty–uncertainty가 오염을 **선호**한다는
+  실패 서술 → 세 뷰(획득 스케줄 차이 포함) → 융합식 + veto-not-vote →
+  `\STATUS{}` 결과. **§0′의 검증 부채 3건(STATUS 치환 / 33% 재측정 또는 삭제 /
+  carrier 문구 B1·B2)을 제출 전 전부 닫을 것.**
 - **Intro:** CFP 토픽 명시 문단(§0 순서) + taxonomy 매핑 테이블 + Huang et
-  al. 2024를 둘째 문단에 인용·확장 선언.
+  al. 2024를 둘째 문단에 인용·확장 선언. 첫 문단은 초록과 같은 순서
+  (training-adaptive → 저품질에서의 역선택 → veto)로 전개하고, F2(entropy/
+  PPL/IFD top-K의 오염률)를 그 문단에서 바로 참조한다.
 - **Related work 3단:** ① MVL on low-quality data — TMC(ICLR'21),
   ETMC(TPAMI'23), QMF(ICML'23), PDF(ICML'24), RCML(AAAI'24), 저품질 서베이
   (2404.18947), Kittler'98/log-opinion pools/PoE/EDL(NeurIPS'18); 게스트
@@ -376,10 +513,10 @@ partial-view e2e → knockout e2e → dedup-off → source-skewed → SelectIT.
 | D1–2 (8/11–12) | ✅ 적대적 검증 워크플로, §1 P0 + §2 v3 + §3 오염 + 표 v2 + arm config 구현·테스트 | |
 | D3 (8/13) | GPU 가용량 실측, AlpaGasus API 확인, 7B 백본 확정, elsarticle 시험 컴파일, clean-ref ΔL 계산(`scripts/calibrate_reliability.py` → 보정 s), pool 재생성(T1b/T7 targets), T7 생성. **주의:** tokenize 코드 변경으로 HF map fingerprint가 무효화됨 — 서버 첫 실행에서 전 pool 재토크나이즈(~2분/pool)가 정상이며, 만약 재토크나이즈가 일어나지 않으면(stale cache) `text_complete` 컬럼이 없어 completeness가 token-only로 후퇴함(경고 로그 확인, 필요시 `TADS_FRESH_DATA_CACHE=1`) | |
 | D4 (8/14) | Phase A 실행 (0.5B+7B forward-only, 전 신호) | |
-| D5 (8/15) | Phase A 분석 | **Gate A′** (§4). 실패 → D7 재시도 1회 |
+| D5 (8/15) | Phase A 분석. **+ §0′ 검증 부채 결정 3건 마감**: carrier 문구 B1/B2(§2.0), 33% cost 재측정 vs 삭제, `\STATUS{}` 치환 계획 | **Gate A′** (§4). 실패 → D7 재시도 1회 |
 | D5–11 | Phase B: 0.5B 그리드(§5.4), 7B core. 병렬: 이론(§7 1·2·4), 원고 초고, IFEval, 참고문헌 커트 | |
 | D8– | Phase C 라벨링 병렬 시작 | |
-| D11–12 (8/21–22) | 7B core + clean-equiv 취합 | **Gate B**: §5.4 삭감 적용, 제목 확정, clean-equiv 실패 시 "저품질 강건 + 소폭 clean tax 명시" 서사 전환(사전 결정) |
+| D11–12 (8/21–22) | 7B core + clean-equiv 취합 | **Gate B**: §5.4 삭감 적용 (제목은 §8에서 확정 완료 — 재론 없음), clean-equiv 실패 시 "저품질 강건 + 소폭 clean tax 명시" 서사 전환(사전 결정) |
 | D12–16 | 잔여 run, Phase C 제2 pool(여유 시), 전체 figure/table(v2 파이프라인), 결과 집필 | |
 | D16–18 | 전체 초고, §10 체크리스트, 공저자 검토 | |
 | D18 (8/30) | 제출 | |
@@ -402,16 +539,28 @@ partial-view e2e → knockout e2e → dedup-off → source-skewed → SelectIT.
    곡선 아님 — 데스크 에디터가 2초 안에 스코프를 읽어야 함)
 7. CRediT / 8. Funding / 9. Competing interests / 10. Data availability
    (corruption manifest + 코드 공개 결정 포함) / 11. Acknowledgements /
-   12. Keywords: *Multi-view fusion; Data selection; Instruction tuning;
-   Low-quality data; Foundation models; Reliability* (+ partial-view arm
-   착지 시 *Incomplete multi-view learning*)
+   12. Keywords (v3.1 확정, §0′와 동일): *Multi-view fusion; Low-quality
+   data; Instruction tuning; Training-adaptive data selection; Reliability;
+   Trajectory anchoring; Hidden-state representations; Foundation models*
+   (8개 — Elsevier 권장 상한 확인 후 초과 시 *Hidden-state representations*
+   부터 컷. partial-view arm 착지 시 *Incomplete multi-view learning* 추가)
 13. 전체 소스 제출 / 14. 분량 재확인 / 15. 포털 SI 트랙("VSI: Low-quality
     Data: Foundation Models") + 마감 시간대 확인
 
 ---
 
-## 11. 리스크 (v3 갱신)
+## 11. 리스크 (v3.1 갱신)
 
+- **초록의 검증 부채 3건 (v3.1 신규, 최우선)**: `\STATUS{}` 미치환 = 제출
+  불가. **"33% vs Reward+PPO"는 CIKM 숫자이므로 audit §2.1 위반** — 새
+  프로토콜 재측정 또는 문장 삭제, D5까지 결정(재측정 경로를 택하면 §5.4에
+  cost-측정 run이 추가된다). "inherited unchanged"는 §2.0-B의 실질 불일치
+  — 기본값 B1(초록 문구 수정). 세 건 모두 §0′에 체크 항목으로 등록됨.
+- **명칭 리스크 (재발 경계)**: CIKM Reviewer 1의 reject 사유 1번이
+  "`trajectory anchor` 명칭이 실제 수식과 불일치"였다(audit §1-1). v3.1이
+  trajectory를 되살렸으므로 이 지적이 되살아날 수 있다 — §0 대응표 +
+  method의 기호-명칭 1:1 서술 + 표 캡션 각주(§8 약칭 규칙)가 방어선이며,
+  셋 중 하나라도 빠지면 초록에서 trajectory를 다시 뺀다.
 - **일정**: D1–2 구현은 끝났지만 버퍼는 여전히 0. Gate A′ 재시도 소진 시
   0.5B 표 우선 제출 원칙(7B는 D16까지 연장, 부분 7B 숫자 게재 금지 —
   공저자와 D3 사전 합의).
