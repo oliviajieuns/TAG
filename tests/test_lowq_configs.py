@@ -375,3 +375,35 @@ def test_7b_legacy_arm_has_no_gate():
     cfg = _load("tads_legacy_7b")
     assert cfg["tads"].get("score_mode", "tads") == "tads"
     assert "tag" not in cfg["tads"]
+
+
+# --------------------------------------------------------------------------
+# A missing model path must say so, not become an HF repo id
+# --------------------------------------------------------------------------
+
+def test_missing_local_model_path_is_an_actionable_error():
+    """transformers interprets a nonexistent local path as a hub repo id and
+    raises HFValidationError('Repo id must be in the form ...'), which names a
+    path the user never chose and says nothing about the real cause — an
+    unset MODEL_PATH_* leaving the config default in place."""
+    from tads.modeling.loader import _resolve_local_path
+
+    with pytest.raises(FileNotFoundError, match="MODEL_PATH_QWEN25_7B"):
+        _resolve_local_path("/group-volume/nait-models/qwen2.5-7b")
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        _resolve_local_path("/definitely/not/here")
+
+
+def test_bare_repo_id_is_not_treated_as_a_missing_path():
+    """With local_files_only=True transformers can still resolve 'org/name'
+    from the HF cache, so it must pass through untouched."""
+    from tads.modeling.loader import _resolve_local_path
+
+    assert _resolve_local_path("Qwen/Qwen2.5-7B") == "Qwen/Qwen2.5-7B"
+
+
+def test_case_variant_resolution_still_works(tmp_path):
+    from tads.modeling.loader import _resolve_local_path
+
+    (tmp_path / "MyModel").mkdir()
+    assert _resolve_local_path(str(tmp_path / "mymodel")) == str(tmp_path / "MyModel")

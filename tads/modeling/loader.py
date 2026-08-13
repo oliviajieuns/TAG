@@ -40,19 +40,49 @@ def _resolve_local_path(path: str) -> str:
     if os.path.exists(path):
         return path
     parent = os.path.dirname(path) or "."
-    if not os.path.isdir(parent):
-        return path  # parent missing too — let HF surface the real error
-    name_lower = os.path.basename(path).lower()
-    matches: List[str] = [
-        entry for entry in os.listdir(parent)
-        if entry.lower() == name_lower
-    ]
-    if len(matches) == 1:
-        resolved = os.path.join(parent, matches[0])
-        logger.warning(
-            "Path %r not found; using case-variant %r instead.", path, resolved,
+    if os.path.isdir(parent):
+        name_lower = os.path.basename(path).lower()
+        matches: List[str] = [
+            entry for entry in os.listdir(parent)
+            if entry.lower() == name_lower
+        ]
+        if len(matches) == 1:
+            resolved = os.path.join(parent, matches[0])
+            logger.warning(
+                "Path %r not found; using case-variant %r instead.", path, resolved,
+            )
+            return resolved
+
+    # Anything that is clearly a FILESYSTEM path must exist. Handing a missing
+    # local path to transformers gets it interpreted as a hub repo id, and the
+    # user sees a 30-line traceback ending in
+    #   HFValidationError: Repo id must be in the form 'repo_name' or
+    #   'namespace/repo_name': '/group-volume/nait-models/qwen2.5-7b'
+    # which says nothing about the actual problem — almost always an unset
+    # MODEL_PATH_* leaving the config's default in place. A bare 'org/name'
+    # is still allowed through: with local_files_only=True transformers can
+    # legitimately resolve that from the HF cache.
+    looks_local = os.path.isabs(path) or path.startswith(("./", "../", "~"))
+    if looks_local:
+        hint = ""
+        env_var = {
+            "qwen2.5-7b": "MODEL_PATH_QWEN25_7B",
+            "qwen2.5-0.5b": "MODEL_PATH_QWEN25_05B",
+            "qwen2.5-14b": "MODEL_PATH_QWEN25_14B",
+        }.get(os.path.basename(path).lower())
+        if env_var:
+            hint = (
+                f"\n  This is the config's DEFAULT for {env_var}, which means "
+                f"the variable is unset in this shell.\n"
+                f"  Fix:  source scripts/gpu_cloud/n9_env.sh"
+                f"   (or: export {env_var}=/path/to/checkpoint)"
+            )
+        raise FileNotFoundError(
+            f"model path does not exist: {path}{hint}\n"
+            f"  Checked for a case-variant in {parent} as well.\n"
+            f"  To see what this machine actually has: "
+            f"bash scripts/gpu_cloud/n9_discover.sh"
         )
-        return resolved
     return path
 
 

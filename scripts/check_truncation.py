@@ -21,6 +21,40 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 
+def _require_env(cfg, args) -> None:
+    """Fail with the fix, not with a stack trace, when the env is not sourced.
+
+    Every path in these configs comes from ${oc.env:...} with a cluster
+    default. Running a script from a shell that never sourced the env
+    resolves those defaults, which mostly do not exist — and the resulting
+    errors surface deep inside transformers or json, naming a path the user
+    never chose.
+    """
+    problems = []
+    mp = Path(str(cfg.get("model_path", "")))
+    if not (mp / "config.json").exists():
+        problems.append(f"model_path does not exist: {mp}")
+    pool = Path(str(args.pool or cfg.get("data_files", "")))
+    if not pool.exists():
+        problems.append(f"pool does not exist: {pool}")
+    if problems:
+        sys.exit(
+            "\n".join(
+                ["error: this config resolves to paths that are not here:"]
+                + [f"  - {p}" for p in problems]
+                + [
+                    "",
+                    "Almost always an unsourced environment. Fix:",
+                    "  source scripts/gpu_cloud/n9_env.sh      # cluster",
+                    "  source scripts/gpu_cloud/env.sh         # generic box",
+                    "",
+                    "To see what this machine has: "
+                    "bash scripts/gpu_cloud/n9_discover.sh",
+                ]
+            )
+        )
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--config", required=True)
@@ -33,6 +67,7 @@ def main() -> None:
     from tads.modeling.loader import load_tokenizer
 
     cfg = load_config(args.config)
+    _require_env(cfg, args)
     tok = load_tokenizer(cfg["model_path"])
     pool_path = args.pool or cfg["data_files"]
     recs = json.load(open(pool_path))
