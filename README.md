@@ -114,6 +114,23 @@ the most consequential is the order-statistic drift of `Δ^min` with
 response length, which makes the span width `W` a first-order
 hyper-parameter rather than a detail.
 
+## Running it
+
+On a fresh GPU box (Lambda / RunPod / vast.ai / a bare VM) — everything lands
+under one workspace, no cluster mounts needed:
+
+    source scripts/gpu_cloud/env.sh          # workspace + env vars
+    bash   scripts/gpu_cloud/bootstrap.sh    # deps, weights, data, pools, calibration
+    python scripts/gpu_cloud/preflight.py    # cheap checks before GPU hours
+    bash   scripts/run_tag_lowq_05b.sh smoke # ~2 min, proves the epoch-2 path
+
+See `docs/gpu-cloud-quickstart.md`. `scripts/setup_env.sh` is the n9-cluster
+equivalent and points at `/group-volume` paths.
+
+The `smoke` stage is worth running once per machine: `G` is defined at the
+base checkpoint and cached, so the whole gate lifecycle — cache write, cache
+hit, and the hard error when it is missing — only exercises at **epoch 2**.
+
 ## Low-quality-pool experiments
 
 The whole TAG sequence (pools → calibrate → detection → SFT) is wrapped in

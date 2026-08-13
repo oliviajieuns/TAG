@@ -299,6 +299,13 @@ def main() -> None:
                         "the config has a tads.tag block.")
     p.add_argument("--no-tag-gate", dest="tag_gate", action="store_false",
                    help="force the TAG signals off")
+    p.add_argument("--span-tokens", type=int, default=None,
+                   help="override tads.tag.span_tokens (W) for this run — the "
+                        "required W sweep. With store_token_losses the gate is "
+                        "re-derived from cached token losses, but score_pool "
+                        "always re-forwards, so budget one pass per W.")
+    p.add_argument("--tau", type=float, default=None,
+                   help="override tads.tag.tau for this run")
     p.add_argument("--save-signals", default=None,
                    help="write every per-sample signal vector to this .pt "
                         "(needed for the reliability diagram, the "
@@ -519,6 +526,29 @@ def main() -> None:
 
         gcfg_params = dict(tag_cfg)
         gcfg_params.setdefault("c_trunc", c_trunc)
+        if args.span_tokens is not None:
+            gcfg_params["span_tokens"] = int(args.span_tokens)
+        if args.tau is not None:
+            gcfg_params["tau"] = float(args.tau)
+        if args.span_tokens is not None or args.tau is not None:
+            # A calibrated s is a quantile of Delta_hat under a SPECIFIC span
+            # partition. Overriding W or tau here without recalibrating would
+            # mis-scale the gate — _resolve_gate_scale_cli would also reject
+            # the mismatch, so say plainly what is happening.
+            logger.warning(
+                "CLI override: span_tokens=%s tau=%s. If a gate_ref_file is "
+                "configured it was calibrated under the CONFIG's partition and "
+                "no longer matches; recalibrate per W, or sweep with an "
+                "explicit gate_scale, or accept the in-pool fallback for a "
+                "detection-only comparison.",
+                args.span_tokens, args.tau,
+            )
+            if str(gcfg_params.get("gate_ref_file") or "").strip():
+                gcfg_params["gate_ref_file"] = ""
+                logger.warning(
+                    "  -> dropping gate_ref_file for this sweep point; the "
+                    "gate will self-calibrate in-pool (diagnostic-only).",
+                )
         g_scale = _resolve_gate_scale_cli(gcfg_params)
         gcfg = _build_gate_cfg(gcfg_params, g_scale)
         logger.info(

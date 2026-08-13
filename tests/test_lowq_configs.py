@@ -244,3 +244,54 @@ def test_tag_arm_uses_neutral_undefined_policy():
     cfg = _load("light_tag_05b")
     assert cfg["tads"]["tag"]["undefined_policy"] == "neutral"
     assert cfg["tads"]["tag"]["undefined_gate_value"] == 0.6
+
+
+def test_missing_gate_ref_file_is_an_actionable_error_not_a_silent_fallback(tmp_path):
+    """A configured-but-absent gate_ref_file must fail loudly. Falling back to
+    in-pool self-calibration would silently produce a reported run whose gate
+    means something different from what the config says."""
+    from tads.pipelines.selection import _resolve_gate_scale
+
+    missing = tmp_path / "delta_hat_missing.pt"
+    with pytest.raises(FileNotFoundError, match="calibrate_reliability.py --mode tag"):
+        _resolve_gate_scale({"gate_scale": "", "gate_ref_file": str(missing)})
+
+
+def test_mvf_reference_is_rejected_by_the_tag_gate(tmp_path):
+    """The MVF artifact stores raw Delta_L in nats, the TAG one a ratio.
+    Feeding the former to the gate would calibrate s an order of magnitude
+    too high and effectively disable it, with no visible symptom."""
+    import torch
+    from tads.pipelines.selection import _resolve_gate_scale
+
+    ref = tmp_path / "delta_mvf.pt"
+    torch.save({"delta": torch.linspace(0.1, 2.0, 200)}, ref)
+    with pytest.raises(ValueError, match="delta_hat"):
+        _resolve_gate_scale({"gate_scale": "", "gate_ref_file": str(ref)})
+
+
+def test_gate_ref_with_a_different_span_config_is_rejected(tmp_path):
+    """s is a quantile of Delta_hat, whose distribution depends on the span
+    partition — calibrating at W=16 and gating at W=32 mis-scales every gate
+    value in the run."""
+    import torch
+    from tads.core.gate import GateConfig
+    from tads.pipelines.selection import _resolve_gate_scale
+
+    ref = tmp_path / "delta_hat.pt"
+    torch.save(
+        {
+            "delta_hat": torch.linspace(0.05, 0.95, 200),
+            "gate_config": GateConfig(span_tokens=16, scale=1.0).identity(),
+        },
+        ref,
+    )
+    # Same partition: accepted.
+    assert _resolve_gate_scale(
+        {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 16}
+    ) > 0
+    # Different W: rejected.
+    with pytest.raises(ValueError, match="different span configuration"):
+        _resolve_gate_scale(
+            {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 32}
+        )

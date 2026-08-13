@@ -1,0 +1,146 @@
+# Running TAG on a GPU cloud box
+
+For a fresh machine — Lambda, RunPod, vast.ai, a bare A100 VM — with nothing
+but the repo and a GPU. `scripts/setup_env.sh` is for the n9 cluster and
+points at `/group-volume` mounts that do not exist elsewhere; use
+`scripts/gpu_cloud/` instead, which keeps everything under one workspace.
+
+## The short version
+
+```bash
+git clone <repo> && cd TAG
+source scripts/gpu_cloud/env.sh          # workspace + all env vars
+bash   scripts/gpu_cloud/bootstrap.sh    # deps, weights, data, pools, calibration
+python scripts/gpu_cloud/preflight.py    # cheap checks — do not skip this
+bash   scripts/run_tag_lowq_05b.sh smoke     # ~2 min, proves the epoch-2 path
+bash   scripts/run_tag_lowq_05b.sh phasea    # detection table
+bash   scripts/run_tag_lowq_05b.sh phaseb    # full SFT run
+```
+
+Put the workspace on a scratch disk if `/` is small:
+
+```bash
+TAG_WORKSPACE=/mnt/data/tag source scripts/gpu_cloud/env.sh
+```
+
+Requirements: one GPU with ≥12 GB (0.5B + LoRA fits comfortably in 24 GB),
+~10 GB disk, and outbound network for the bootstrap's download steps only.
+
+## Why the smoke stage exists
+
+`G` is defined at the **base checkpoint** and cached, so the entire gate
+lifecycle — cache write, cache hit, and the hard error when the cache is
+missing — only exercises at **epoch 2**. A single-epoch test proves nothing
+about it. During development this repo had a bug where every run with the
+shipped defaults trained happily through epoch 1 and died at the start of
+epoch 2; a one-epoch check would not have caught it.
+
+`smoke` runs 2 epochs on a small subset (`SMOKE_N`, default 512) and then
+inspects the artifacts: gate cache present, two distinct selections written,
+and the realised veto accounting. Run it once on a new machine before
+spending real GPU hours.
+
+## What preflight checks, and why each one is there
+
+| Check | Why it costs GPU time to miss |
+|---|---|
+| GPU / CUDA, bf16 | A CPU-only torch wheel is the most common cloud-image surprise; the loader defaults to bf16, which pre-Ampere cards emulate very slowly |
+| dependencies | `peft` is only needed for LoRA — and every lowq arm is LoRA, so it fails at model load, minutes in |
+| pool ↔ counterfactual alignment | Training only checks **lengths**. A stale counterfactual of the right length passes silently and the gate then contrasts responses against the wrong instructions — the run completes and the numbers are meaningless |
+| counterfactual actually deranged | If instructions were not shuffled, Δ ≈ 0 everywhere and the gate vetoes the whole pool. Compared against the collision rate expected from repeated instructions, so a legitimately deranged pool on a repetitive corpus does not false-alarm |
+| gate reference | Wrong *kind* of reference (an MVF `delta` in nats instead of a TAG `delta_hat` ratio) would scale `s` an order of magnitude too high and quietly disable the gate |
+| gate reference span config | `s` is a quantile of Δ̂, whose distribution depends on the span partition. Calibrating at W=16 and gating at W=32 mis-scales every gate value, with no symptom but a wrong veto rate |
+| manifest ↔ pool | Phase A's Dirty@K is meaningless if the manifest describes a different pool |
+| disk | The tokenised cache plus (with `store_token_losses`) an fp16 token-loss tensor per pool |
+
+Exit code 0 means nothing failed; `--strict` also fails on warnings.
+
+## Calibration is not optional
+
+The bootstrap's `calibrate` step derives the gate scale `s` from a **clean**
+reference pool. Skipping it makes the gate self-calibrate in-pool, which
+reintroduces exactly the pool dependence that anchoring at `Δ̂ = 0` removes —
+`G` then depends on how dirty a sample's neighbours are. The code warns
+loudly, preflight warns, and the smoke report warns, but nothing stops you:
+it is fine for a smoke test and wrong for a reported run.
+
+If `TADS_GATE_REF` names a file that does not exist, the run fails with the
+exact command to generate it rather than silently falling back.
+
+## Reading the smoke report
+
+```
+  ok    gate cache written (12.4 MB)
+  ok    2 epochs selected; epoch1 n=520, epoch2 n=520, overlap 71%
+  ok    epoch 1: gate_mean=0.7412 zero_frac=0.183 admissible=4247/520 vetoed_selected=0
+```
+
+- `vetoed_selected=0` is the one that matters: it is the run's own evidence
+  that the veto held for every selected sample. Anything above 0 must be
+  reported, not silently accepted.
+- `zero_frac` above 0.9 almost always means the scale is wrong — usually the
+  in-pool fallback on an uncalibrated run.
+- 100% overlap between epochs means selection stopped responding to the
+  trajectory, which is expected only for the `-static` control arm.
+
+## The span-width sweep
+
+`span_tokens` (W) is a first-order hyper-parameter, not a detail: Δ^min is a
+minimum over `M ≈ n/W` spans, so the tail statistic drifts down with response
+length, while per-span noise shrinks like `1/√W`. The two effects pull in
+opposite directions. The 0.5B arm sets `store_token_losses: true` so the
+sweep costs **no forward pass** — G is re-derived from cached token losses:
+
+```bash
+for W in 8 16 32 64; do
+  python scripts/score_pool.py \
+    --config configs/experiments/lowq/light_tag_05b.yaml \
+    --manifest $POOLS/composite20/corruption_manifest.json \
+    --out     $POOLS/composite20/report_W$W.json \
+    --span-tokens $W
+done
+```
+
+Note what `--span-tokens` does to calibration: `s` is a quantile of Δ̂ under a
+*specific* partition, so a reference calibrated at the config's W no longer
+applies. The flag therefore drops `gate_ref_file` for that sweep point and
+self-calibrates in-pool, which is fine for **comparing detection across W**
+(the quantity being compared is the ranking) and not fine for a reported
+absolute veto rate. Once W is chosen, recalibrate at that W and re-run.
+
+Watch `tag.length_bias` in each report: the clean false-veto rate should not
+swing much across response-length quantiles. See
+`docs/tag-paper-deltas.md` §B2 for the quantitative argument.
+
+## Multi-GPU
+
+Selection runs on rank 0 only and shares its result through a filesystem
+sentinel rather than an NCCL barrier (a barrier there deadlocked earlier
+versions — rank 0 spends a long time inside `collect_episode` while the
+other ranks sit in the collective). Training itself is ordinary DDP:
+
+```bash
+torchrun --nproc_per_node=4 -m tads.train \
+    --config configs/experiments/lowq/light_tag_05b.yaml
+```
+
+At 0.5B a single GPU is usually faster than the DDP overhead.
+
+## Troubleshooting
+
+**`no usable gate cache at epoch N (> 1)`** — `G` must come from the base
+checkpoint. Either restore `tag_gate_cache.pt` into the run dir, or start a
+fresh run. `tads.tag.allow_late_gate: true` accepts a wrong-checkpoint `G`
+explicitly, which is a deliberate escape hatch, not a fix.
+
+**Over 90% of the pool vetoed** — almost always an uncalibrated scale. Check
+that `TADS_GATE_REF` exists and that the calibration reported a healthy
+fraction of positive Δ̂ (it warns below 80%). A genuinely low fraction on a
+*clean* pool means the counterfactuals are not actually unrelated.
+
+**OOM during the gate forward** — lower `episode_batch_size`; the token-level
+pass keeps a per-token vector per sample rather than a scalar.
+
+**Cache seems stale after editing tokenisation** — the HF `map` fingerprint
+has served stale tokenisations before. Set `TADS_FRESH_DATA_CACHE=1` for one
+run.

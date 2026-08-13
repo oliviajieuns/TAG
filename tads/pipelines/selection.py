@@ -180,6 +180,23 @@ def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
         return float(scale)
     ref_file = params.get("gate_ref_file")
     if ref_file and str(ref_file).strip() != "":
+        if not Path(str(ref_file)).exists():
+            # Deliberately NOT a silent fall-back to in-pool calibration: the
+            # user asked for a calibrated gate, and quietly substituting the
+            # pool-dependent one would produce a reported run whose gate means
+            # something different from what the config says.
+            raise FileNotFoundError(
+                f"tads.tag.gate_ref_file points to {ref_file}, which does not "
+                f"exist. Generate it on a CLEAN reference pool with:\n"
+                f"    python scripts/calibrate_reliability.py --mode tag \\\n"
+                f"        --config <this config> \\\n"
+                f"        --pool <clean>/pool.json \\\n"
+                f"        --counterfactual <clean>/counterfactual.json \\\n"
+                f"        --out {ref_file}\n"
+                f"(on a GPU box: bash scripts/gpu_cloud/bootstrap.sh calibrate)\n"
+                f"To run without calibration anyway — diagnostics only — unset "
+                f"TADS_GATE_REF so the gate self-calibrates in-pool with a warning."
+            )
         ref = torch.load(str(ref_file), map_location="cpu", weights_only=True)
         if isinstance(ref, dict):
             if "delta_hat" not in ref:
