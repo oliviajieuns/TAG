@@ -270,6 +270,9 @@ def _prepare_tag(
 
     tag: Dict[str, Any] = {
         "gate": None,
+        # Orders the vetoed block if a backfill is ever forced — see
+        # scorer.gated_selection_key.
+        "delta_hat": None,
         "cluster_ids": tag_ctx.get("cluster_ids"),
         "gate_config": gcfg,
         "allow_late_gate": bool(params.get("allow_late_gate", False)),
@@ -302,11 +305,13 @@ def _prepare_tag(
             )
         if cached_cfg == gcfg.identity():
             tag["gate"] = cache["gate"]
+            tag["delta_hat"] = cache.get("delta_hat")
             logger.info("TAG gate: cache hit (config unchanged) — no forward pass.")
         else:
             redone = gatelib.recompute_gate_from_cache(cache, gcfg)
             if redone is not None:
                 tag["gate"] = redone["gate"]
+                tag["delta_hat"] = redone["delta_hat"]
                 tag["components"] = redone
                 gatelib.save_gate_cache(
                     output_dir, result=redone, cfg=gcfg,
@@ -392,6 +397,7 @@ def _prepare_tag(
             token_true, n_true, token_cf, n_cf, completeness, cfg=gcfg,
         )
         tag["gate"] = result["gate"]
+        tag["delta_hat"] = result["delta_hat"]
         tag["components"] = result
         tag["token_true"] = token_true
         tag["n_true"] = n_true
@@ -423,6 +429,11 @@ def _finalize_tag(tag, episode, *, cfg, epoch: int) -> Dict[str, Any]:
     extras: Dict[str, Any] = {
         "score_mode": "tag",
         "gate_scale": tag.get("scale_used"),
+        # The realised veto accounting — the only evidence in the run
+        # artifacts that the non-compensation claim held for THIS run.
+        "n_admissible": episode.get("n_admissible"),
+        "n_vetoed_selected": episode.get("n_vetoed_selected"),
+        "selection_budget": episode.get("selection_budget"),
     }
     if gate_t is not None:
         extras.update({
@@ -862,7 +873,23 @@ def select_indices(
     # path is ONLY hit when the file is present; a fresh start still runs
     # the full episode.
     _output_dir_raw = cfg.get("output_dir") or cfg.get("output_root")
-    if _output_dir_raw is not None:
+    # The reuse shortcut returns BEFORE any gate/reliability computation, and
+    # its key is the epoch number alone. For TAG that is a trap: reusing an
+    # epoch-1 selection skips priming tag_gate_cache.pt, and epoch 2 then hits
+    # the base-checkpoint hard error. Only take the shortcut when the gate
+    # cache this mode depends on already exists.
+    _skip_selection_cache = False
+    if tag_ctx is not None and _output_dir_raw is not None:
+        from ..core import gate as gatelib
+        if not gatelib.cache_path_for(_output_dir_raw).exists():
+            _skip_selection_cache = True
+            logger.info(
+                "TAG: a cached selection for epoch %d exists but "
+                "tag_gate_cache.pt does not — running the full episode so the "
+                "gate cache is primed (reusing the selection would strand "
+                "every later epoch on the base-checkpoint error).", epoch,
+            )
+    if _output_dir_raw is not None and not _skip_selection_cache:
         _cached_path = Path(_output_dir_raw) / f"selected_indices_epoch{epoch}.json"
         if _cached_path.exists():
             try:

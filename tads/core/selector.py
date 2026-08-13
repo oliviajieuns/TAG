@@ -519,15 +519,26 @@ def collect_episode(
         cluster_ids = None
 
     ranking = score
+    n_admissible = None
     if tag is not None and gate is not None:
         # Vetoed samples all score exactly 0; rank them below every
-        # admissible sample and break the zero-block by the ungated score
-        # instead of by pool file order (see scorer.gated_selection_key).
-        ranking, n_admissible = gated_selection_key(
-            score,
-            ungated_score if ungated_score is not None else R,
-            gate,
-        )
+        # admissible sample and break the zero-block by the gate's own
+        # evidence rather than by pool file order (see
+        # scorer.gated_selection_key). Delta_hat orders the vetoed block by
+        # how close each sample came to passing, so a forced backfill takes
+        # the least unreliable rejects; the ungated reward would take the
+        # highest-loss ones, i.e. the most corrupted.
+        vetoed_order = tag.get("delta_hat")
+        if vetoed_order is not None:
+            vetoed_order = vetoed_order.view(-1).float()
+            if vetoed_order.numel() != total_samples:
+                raise ValueError(
+                    f"collect_episode(tag=...): delta_hat length "
+                    f"{vetoed_order.numel()} != pool size {total_samples}",
+                )
+        else:
+            vetoed_order = ungated_score if ungated_score is not None else R
+        ranking, n_admissible = gated_selection_key(score, vetoed_order, gate)
         if n_admissible < k:
             logger.warning(
                 "TAG: only %d/%d samples pass the reliability gate but the "
@@ -553,6 +564,32 @@ def collect_episode(
         "Selection topk | k=%d/%d | first5=%s",
         k, total_samples, selected_indices[:5],
     )
+
+    # What ACTUALLY happened, not what was predicted. n_admissible counts
+    # G > 0 pool-wide, but with the dedup constraint constrained_topk can
+    # only take one sample per near-duplicate cluster, so the admissible set
+    # can be exhausted before B even when n_admissible >= B. The realised
+    # count is the only number that supports (or refutes) the veto claim for
+    # a given run, so it is measured and reported rather than inferred.
+    n_vetoed_selected = None
+    if tag is not None and gate is not None:
+        sel_t = torch.as_tensor(selected_indices, dtype=torch.long)
+        n_vetoed_selected = int((gate[sel_t] == 0).sum().item())
+        if n_vetoed_selected:
+            logger.warning(
+                "TAG: %d/%d SELECTED samples are vetoed (G == 0). The "
+                "non-compensation guarantee does not hold for those slots — "
+                "report this count. Causes: budget larger than the gated set "
+                "(admissible=%s), or the dedup constraint exhausting the "
+                "admissible clusters.",
+                n_vetoed_selected, k, n_admissible,
+            )
+        else:
+            logger.info(
+                "TAG: every selected sample passes the gate (%d/%d admissible "
+                "pool-wide).", n_admissible if n_admissible is not None else -1,
+                total_samples,
+            )
 
     var_loss_val = (
         float(all_r_loss_t.var().item()) if all_r_loss_t.numel() > 1 else 0.0
@@ -592,6 +629,9 @@ def collect_episode(
         "difficulty": difficulty,
         "gate": gate,
         "ungated_score": ungated_score,
+        "n_admissible": n_admissible,
+        "n_vetoed_selected": n_vetoed_selected,
+        "selection_budget": k,
         "score": score,
         "score_mode": (
             "mvf" if mvf is not None else ("tag" if tag is not None else "tads")

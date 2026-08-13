@@ -475,6 +475,8 @@ def gated_selection_key(
     score: torch.Tensor,
     fallback_score: torch.Tensor,
     gate: torch.Tensor,
+    *,
+    validate: bool = True,
 ) -> Tuple[torch.Tensor, int]:
     """Total order that keeps the veto intact and still breaks zero-ties.
 
@@ -495,9 +497,19 @@ def gated_selection_key(
     the caller can hand the key straight to ``select_top_b`` or
     ``constrained_topk`` — the dedup constraint composes unchanged.
 
-    ``fallback_score`` should be the UNGATED score ``R·(1+λ·ã)``: if the
-    reliable pool cannot fill the budget, the leftover slots are filled by
-    the ordinary training-adaptive criterion rather than arbitrarily.
+    ``fallback_score`` orders the VETOED block. Prefer the gate's own
+    evidence (``Delta_hat``) so a forced backfill takes the LEAST unreliable
+    rejects. Ordering that block by the ungated reward instead would be
+    actively perverse: ``R = w·L + (1−w)·H`` increases with response loss,
+    and the corruptions the gate exists to reject are high-loss, so the
+    backfill would preferentially pull in the most corrupted rejects first.
+
+    ``validate`` checks ``score``/``fallback_score`` for NaN/Inf. This has to
+    happen HERE: the caller hands the KEY to ``select_top_b``, whose own
+    NaN guard would then inspect the key rather than the score — and
+    ``rank01`` maps NaN to the LARGEST rank (``torch.argsort`` puts NaN
+    last), so a NaN score would silently become key ``3.0`` and be selected
+    FIRST.
 
     Returns ``(key, n_admissible)``.
     """
@@ -506,6 +518,15 @@ def gated_selection_key(
             f"gated_selection_key: shape mismatch score={tuple(score.shape)}, "
             f"fallback={tuple(fallback_score.shape)}, gate={tuple(gate.shape)}"
         )
+    if validate:
+        for name, t in (("score", score), ("fallback_score", fallback_score)):
+            if torch.isnan(t).any() or torch.isinf(t).any():
+                raise RuntimeError(
+                    f"gated_selection_key: {name} contains NaN/Inf — likely a "
+                    f"degenerate reward pool or an alignment collapse upstream. "
+                    f"Caught here because rank01 would launder NaN into the TOP "
+                    f"of the ranking, bypassing select_top_b's guard."
+                )
     admissible = gate.float() > 0
     key = torch.where(
         admissible,

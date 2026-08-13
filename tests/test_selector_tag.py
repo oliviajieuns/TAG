@@ -235,3 +235,80 @@ def test_tag_score_without_anchor_is_gate_times_reward():
     R = torch.tensor([1.0, 2.0])
     g = torch.tensor([0.5, 1.0])
     assert torch.allclose(tag_score(g, R, None, 1.0), g * R)
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the adversarial review (2026-08-13)
+# ---------------------------------------------------------------------------
+
+def test_nan_score_is_rejected_not_promoted_to_the_top(tiny_model):
+    """rank01 sorts NaN LAST (torch.argsort), so a NaN score would become
+    key = 2 + 1 = 3.0 — the single highest key — and be selected FIRST. The
+    guard in select_top_b cannot catch it because in TAG mode it receives the
+    KEY, which is never NaN. Validation therefore has to happen on the score."""
+    n = 5
+    score = torch.tensor([1.0, float("nan"), 3.0, 4.0, 5.0])
+    fallback = torch.ones(n)
+    gate = torch.ones(n)
+    with pytest.raises(RuntimeError, match="NaN/Inf"):
+        gated_selection_key(score, fallback, gate)
+    with pytest.raises(RuntimeError, match="NaN/Inf"):
+        gated_selection_key(torch.ones(n), torch.full((n,), float("inf")), gate)
+
+
+def test_backfill_takes_the_least_unreliable_rejects_not_the_highest_loss(tiny_model):
+    """When a backfill is forced, ordering the vetoed block by the ungated
+    reward would pull in the HIGHEST-loss rejects — and the corruptions the
+    gate exists to reject are exactly the high-loss ones. Delta_hat orders
+    them by how close each came to passing instead."""
+    ds = _TinyDataset()
+    n = len(ds)
+    gate = torch.zeros(n)
+    gate[0] = 1.0                      # one admissible sample, budget is 6
+    # Sample 7 is the closest to passing; sample 3 is the furthest.
+    delta_hat = torch.full((n,), -1.0)
+    delta_hat[7] = -0.01
+    delta_hat[3] = -5.0
+    ep = _run(tiny_model, ds, tag={"gate": gate, "delta_hat": delta_hat}, ratio=0.5)
+    sel = ep["selected_indices"]
+    assert sel[0] == 0                 # the admissible sample still ranks first
+    assert sel[1] == 7                 # then the least unreliable reject
+    # ...and the WORST reject is left out of the budget entirely.
+    assert 3 not in sel
+
+
+def test_episode_reports_realised_veto_accounting(tiny_model):
+    """n_admissible is a pool-wide prediction; what supports the paper's claim
+    is how many SELECTED samples were vetoed."""
+    ds = _TinyDataset()
+    n = len(ds)
+    ep_ok = _run(tiny_model, ds, tag={"gate": torch.ones(n)}, ratio=0.5)
+    assert ep_ok["n_admissible"] == n
+    assert ep_ok["n_vetoed_selected"] == 0
+    assert ep_ok["selection_budget"] == n // 2
+
+    gate = torch.zeros(n)
+    gate[0] = 1.0
+    ep_short = _run(tiny_model, ds, tag={"gate": gate}, ratio=0.5)
+    assert ep_short["n_admissible"] == 1
+    assert ep_short["n_vetoed_selected"] == n // 2 - 1
+
+
+def test_dedup_exhaustion_is_counted_even_when_the_budget_would_fit(tiny_model):
+    """n_admissible >= B does NOT imply the veto held: constrained_topk takes
+    at most one sample per near-duplicate cluster, so the admissible set can
+    be exhausted by the dedup constraint before B is reached."""
+    ds = _TinyDataset()
+    n = len(ds)
+    gate = torch.zeros(n)
+    gate[:8] = 1.0                     # 8 admissible, budget 6 -> "fits"
+    clusters = [0] * 8 + [-1] * (n - 8)   # ...but all 8 are ONE cluster
+    ep = _run(
+        tiny_model, ds,
+        tag={"gate": gate, "cluster_ids": clusters}, ratio=0.5,
+    )
+    assert ep["n_admissible"] == 8 >= ep["selection_budget"]
+    assert ep["n_vetoed_selected"] > 0, (
+        "dedup exhausted the admissible clusters, so vetoed samples entered "
+        "the selection even though n_admissible >= B"
+    )

@@ -562,7 +562,19 @@ def main() -> None:
         signals["delta_min"] = tag_components["delta_min"]
         signals["delta_hat"] = tag_components["delta_hat"]
         signals["G"] = g_i
-        signals["tag_score"] = g_i * legacy
+        # The RAW product, for reference...
+        signals["tag_score_raw"] = g_i * legacy
+        # ...but the headline row must rank the way TRAINING ranks. Every
+        # vetoed sample sits at exactly 0.0 in the raw product, and the
+        # metrics here all resolve that tie with torch.topk/argsort, i.e. by
+        # pool file order — so the diagnostic would report a dirty@K that the
+        # trainer never produces. gated_selection_key is the shipped rule.
+        from tads.core.scorer import gated_selection_key
+
+        tag_key, _n_adm = gated_selection_key(
+            g_i * legacy, tag_components["delta_hat"], g_i,
+        )
+        signals["tag_score"] = tag_key
 
     if args.uncond_loss:
         uncond = torch.load(args.uncond_loss, map_location="cpu", weights_only=True)

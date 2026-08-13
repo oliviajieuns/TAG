@@ -110,16 +110,33 @@ every vetoed one and breaks each block by a meaningful statistic (the gated
 score above, the ungated score below); the shortfall is logged as a warning
 and reported per selection ratio as `budget_fits@K`.
 
+**Two further subtleties the code had to settle.**
+
+*Which reject?* Ordering the vetoed block by the ungated reward is actively
+perverse: \(\mathcal{R} = wL + (1-w)H\) increases with response loss, and
+the corruptions the gate exists to reject are precisely the high-loss ones,
+so the backfill would pull in the MOST corrupted rejects first. The code
+orders that block by \(\hat\Delta_i\) — take the least unreliable rejects.
+
+*The dedup constraint can force a backfill even when the budget "fits".*
+\(|\{G_i>0\}| \ge B\) does not imply the veto held: at most one sample per
+near-duplicate cluster may be selected, so the admissible set can be
+exhausted before \(B\) is reached. The realised count
+(`n_vetoed_selected`) is therefore measured after selection and written to
+`metrics.json`, rather than predicted from \(|\{G_i>0\}|\).
+
 **Suggested text.** After Eq. 1:
 
-> When fewer than \(B\) candidates pass the gate, the remaining slots are
-> filled by the ungated score \(\mathcal{R}_i^{(t)}(1+\lambda\,
-> \widetilde{\mathrm{align}}_i^{(t)})\) among the vetoed set, and we report
-> how often this occurs; at our selection ratios the gated set covers the
-> budget in every run.
+> When fewer than \(B\) candidates pass the gate — either because the gated
+> set is smaller than the budget or because the near-duplicate constraint
+> exhausts it — the remaining slots are filled from the vetoed set in
+> increasing order of \(\hat\Delta_i\), i.e. by the least unreliable
+> rejects. We report the realised number of vetoed samples in each selected
+> subset; at our selection ratios it is \(N\).
 
-*(This last clause must be checked against `budget_fits@K` before it is
-claimed. If it does not hold, report the count instead.)*
+*(Substitute the measured `n_vetoed_selected` from `metrics.json`. If it is
+not zero, the non-compensation claim must be stated as holding for the
+remaining slots, not unconditionally.)*
 
 ---
 
@@ -308,10 +325,65 @@ it is the quantitative core of the non-compensation claim.)*
 
 ### C3. "counterfactual form of pointwise mutual information"
 
-\(\sum_k \delta_{i,k}\) is a counterfactual PMI estimate. \(\bar\Delta_i\) is
-that quantity **normalised by the counterfactual loss**, which is what makes
-it scale-free — the normalisation is the contribution, so it should not be
-elided in the sentence that names the statistic.
+Only Eq. 2's numerator is a counterfactual PMI:
+\(\sum_k \delta_{i,k} = \log p(y|x) - \log p(y|x^-)\). What the gate
+actually thresholds is Eq. 3's **ratio**, that PMI divided by the
+counterfactual surprisal. The normalisation is the contribution — it is what
+makes the statistic scale-free and what distinguishes it from IFD's
+\(L(y|x)/L(y)\) — so it should not be elided in the sentence that names the
+statistic.
+
+**Suggested text.** "Eq. 2 is the counterfactual pointwise mutual
+information; Eq. 3 normalises it by the counterfactual surprisal, giving a
+scale-free *relative* PMI."
+
+### C5. With \(K>1\), the dispersion discount sits outside Eq. 6
+
+**Paper.** Eq. 6 defines \(G_i\) purely as a function of \(\hat\Delta_i\),
+and claim (a) is that \(G_i = 0 \iff \hat\Delta_i \le 0\).
+
+**Code.** With \(K>1\) counterfactual pairings the shipped default applies
+\(G_i = \bigl(1 - 2\,\mathrm{std}_k(G_i^{(k)})\bigr)_+ \cdot
+\mathrm{mean}_k G_i^{(k)}\). That second factor appears nowhere in Eq. 6, and
+it can zero the gate even when every \(\hat\Delta^{(k)}_i > 0\) — so under
+\(K>1\), "\(G=0\)" means either "no instruction dependency" *or* "the
+pairings disagree too much to trust". The per-pairing invariant still holds;
+the aggregate one does not.
+
+Note also that the reported/cached \(\hat\Delta_i\) is the across-pairing
+mean while the gate is the mean of per-pairing gates (deliberately: the
+clamp is convex, so gate-of-mean would collapse straddling evidence to an
+exact veto). The two are not in the functional relationship Eq. 6 states.
+
+**Suggested text.** If \(K>1\) is reported at all, state the estimator:
+
+> With \(K\) counterfactual pairings we gate each pairing separately and
+> average, discounting by the cross-pairing dispersion:
+> \(G_i = (1 - 2 s_k)_+ \cdot \mathrm{mean}_k\,
+> c_i(2\sigma(\hat\Delta^{(k)}_i/s)-1)_+\). Gating before averaging is
+> deliberate — the clamp is convex, so averaging first would veto any sample
+> whose evidence straddles zero. Under this extension a zero gate also
+> encodes irreducible disagreement between pairings, not only absent
+> instruction dependency.
+
+*(If \(K=1\) is what ships in the paper, say so and move this to the
+appendix — it is cleaner than defending a second meaning for \(G=0\).)*
+
+### C6. The counterfactual is matched on RESPONSE length, not instruction length
+
+**Paper (Eq. 2).** "\(x_i^-\) a length-matched unrelated instruction sampled
+from the pool."
+
+**Code.** `make_counterfactual` deranges within **response**-length buckets;
+the substituted instruction's own length is unconstrained. That is the right
+choice — matching on response length is what keeps the denominator
+\(\sum_k \ell_k(y_i|x_i^-)\) comparable across samples and stops the gate
+becoming a length detector — but it is not what the sentence says, and the
+difference is exactly why the true and counterfactual prompts have different
+lengths (which is what makes A2's trim necessary).
+
+**Suggested text.** "\(x_i^-\) is an unrelated instruction drawn from the
+same response-length stratum of the pool."
 
 ### C4. The EOS position is excluded from the span aggregation
 
@@ -333,5 +405,11 @@ token counts in the paper match a reimplementation.
 - [ ] C1 "single forward pass" -> "one forward pass per pool, then cached"
 - [ ] C2 non-compensation split into the exact-zero case and the
       small-gate ratio, with the measured reward ratio
-- [ ] `budget_fits@K` checked before claiming the gated set covers the budget
+- [ ] C3 Eq. 3 named as a *relative* PMI, not PMI
+- [ ] C5 the K>1 estimator stated, or K=1 declared and K>1 moved to the
+      appendix
+- [ ] C6 "length-matched instruction" -> "same response-length stratum"
+- [ ] `n_vetoed_selected` from metrics.json reported, not `budget_fits@K`
+      inferred — the dedup constraint can force a backfill even when the
+      gated set is larger than the budget
 - [ ] measured numbers substituted for every placeholder above
