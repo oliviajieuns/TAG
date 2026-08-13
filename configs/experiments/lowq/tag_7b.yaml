@@ -1,0 +1,32 @@
+# Lowq arm: TAG (proposed method) at 7B — the reliability gate multiplying
+# the intact trajectory-anchored score (paper Eq. 1).
+#
+# Wiring (source scripts/gpu_cloud/env.sh sets these):
+#   ALPACA_DATA_FILES=$POOLS/composite20/pool.json
+#   TADS_CF_FILES=$POOLS/composite20/counterfactual.json
+#   TADS_DEDUP_FILE=$POOLS/composite20/dedup_clusters.json
+#   TADS_GATE_REF=$POOLS/clean_ref/delta_hat_7b.pt     # calibrated on 7B
+#   TADS_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt
+#
+# The gate is computed ONCE across all GPUs and shared by every arm and seed
+# (G depends only on pool + base checkpoint + gate config):
+#   bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml
+#
+# The calibration reference must be computed on THIS backbone — Delta_hat is
+# a property of the model's likelihoods, so a 0.5B reference does not
+# transfer to 7B.
+#
+# Order matters: method FIRST, shared fragment LAST, so the shared training
+# pins override the method file's values. Verified by tests/test_lowq_configs.py.
+defaults:
+  - configs/methods/tag.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq/tag_7b
+tads:
+  tag:
+    gate_cache_file: ${oc.env:TADS_GATE_CACHE,}
+    # 7B pools are large and the token-loss tensors are fp16 but still ~2 x
+    # N x T_max bytes per pool; keep them only if you intend a W sweep at 7B
+    # (the sweep is normally done at 0.5B and the chosen W carried over).
+    store_token_losses: false

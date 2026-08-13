@@ -6,7 +6,9 @@
 #   source scripts/gpu_cloud/env.sh
 #   bash scripts/gpu_cloud/bootstrap.sh [step]
 #
-#     step: deps | model | data | pools | calibrate | all   (default: all)
+#     step: deps | model | data | pools | calibrate | all       (0.5B)
+#           model7b | calibrate7b | all7b                       (7B)
+#     (default: all)
 #
 # Needs outbound network for `deps`, `model`, and `data`. The remaining
 # steps are offline. Total: a few minutes plus ~1 GB of downloads; the
@@ -96,6 +98,44 @@ step_pools() {
     --emit-counterfactual --seed 42
 }
 
+step_model_7b() {
+  if [ -f "$MODEL_PATH_QWEN25_7B/config.json" ]; then
+    log "7B model already at $MODEL_PATH_QWEN25_7B — skipping"
+    return
+  fi
+  log "downloading Qwen2.5-7B (base) -> $MODEL_PATH_QWEN25_7B (~15 GB)"
+  mkdir -p "$(dirname "$MODEL_PATH_QWEN25_7B")"
+  HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0 TRANSFORMERS_OFFLINE=0 \
+  python - "$MODEL_PATH_QWEN25_7B" <<'HFPY'
+import sys
+from huggingface_hub import snapshot_download
+target = sys.argv[1]
+snapshot_download(
+    repo_id="Qwen/Qwen2.5-7B", local_dir=target, local_dir_use_symlinks=False,
+    allow_patterns=["*.json", "*.txt", "*.safetensors", "tokenizer*",
+                    "merges.txt", "vocab.json", "*.model"],
+)
+print(f"[done] Qwen/Qwen2.5-7B -> {target}")
+HFPY
+}
+
+step_calibrate_7b() {
+  # Delta_hat is a property of THIS backbone's likelihoods, so a 0.5B
+  # reference does not transfer — 7B needs its own calibration.
+  local out="$POOLS/clean_ref/delta_hat_7b.pt"
+  if [ -f "$out" ]; then
+    log "7B gate reference already at $out — skipping"
+    return
+  fi
+  log "calibrating the 7B gate scale on the clean pool"
+  TADS_GATE_REF="" python scripts/calibrate_reliability.py --mode tag \
+    --config configs/experiments/lowq/tag_7b.yaml \
+    --pool "$POOLS/clean_ref/pool.json" \
+    --counterfactual "$POOLS/clean_ref/counterfactual.json" \
+    --out "$out"
+  log "7B gate reference -> $out   (export TADS_GATE_REF=$out)"
+}
+
 step_calibrate() {
   if [ -f "$TADS_GATE_REF" ]; then
     log "gate reference already at $TADS_GATE_REF — skipping"
@@ -110,21 +150,35 @@ step_calibrate() {
 }
 
 case "$STEP" in
-  deps)      step_deps ;;
-  model)     step_model ;;
-  data)      step_data ;;
-  pools)     step_pools ;;
-  calibrate) step_calibrate ;;
-  all)       step_deps; step_model; step_data; step_pools; step_calibrate ;;
-  *) echo "unknown step: $STEP (deps|model|data|pools|calibrate|all)" >&2; exit 2 ;;
+  deps)         step_deps ;;
+  model)        step_model ;;
+  model7b)      step_model_7b ;;
+  data)         step_data ;;
+  pools)        step_pools ;;
+  calibrate)    step_calibrate ;;
+  calibrate7b)  step_calibrate_7b ;;
+  all)          step_deps; step_model; step_data; step_pools; step_calibrate ;;
+  all7b)        step_deps; step_model_7b; step_data; step_pools; step_calibrate_7b ;;
+  *) echo "unknown step: $STEP (deps|model|model7b|data|pools|calibrate|calibrate7b|all|all7b)" >&2; exit 2 ;;
 esac
 
 log "step '$STEP' complete"
 if [ "$STEP" = "all" ]; then
   echo ""
-  echo "Next:"
+  echo "Next (0.5B):"
   echo "  python scripts/gpu_cloud/preflight.py      # verify before burning GPU hours"
   echo "  bash scripts/run_tag_lowq_05b.sh smoke     # ~2 min end-to-end on a subset"
   echo "  bash scripts/run_tag_lowq_05b.sh phasea    # detection table"
-  echo "  bash scripts/run_tag_lowq_05b.sh phaseb    # full SFT run"
+  echo "  bash scripts/run_lowq_all_arms.sh 42       # 4 arms, one per GPU"
+fi
+if [ "$STEP" = "all7b" ]; then
+  echo ""
+  echo "Next (7B):"
+  echo "  export TADS_GATE_REF=$POOLS/clean_ref/delta_hat_7b.pt"
+  echo "  export TADS_EPISODE_BS_7B=32"
+  echo "  python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml"
+  echo "  bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml"
+  echo "      # ^ shards the gate across every GPU, once; then:"
+  echo "  export TADS_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt"
+  echo "  SCALE=7b bash scripts/run_lowq_all_arms.sh 42"
 fi

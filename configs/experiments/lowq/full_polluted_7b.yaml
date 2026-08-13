@@ -1,0 +1,8 @@
+# Lowq arm: train on the whole corrupted pool at 7B — the no-selection
+# reference that says what the corruption costs if nothing filters it.
+defaults:
+  - configs/methods/full.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq/full_polluted_7b
+selection_ratio: 1.0

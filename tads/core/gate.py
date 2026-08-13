@@ -788,14 +788,55 @@ def cache_path_for(output_dir) -> Path:
     return Path(output_dir) / CACHE_FILENAME
 
 
-def load_gate_cache(output_dir) -> Optional[Dict[str, Any]]:
+def cache_identity(*, model_path, pool_files, n_pool: int) -> Dict[str, Any]:
+    """What a gate cache is valid FOR.
+
+    G is a function of (pool, base checkpoint, gate config) and nothing else
+    — not the seed, not the arm, not the epoch. That is what makes it safe to
+    compute once and share across every arm and seed of an experiment, which
+    is the whole point of :mod:`scripts.precompute_gate`.
+
+    It is also what makes a shared cache dangerous if unlabelled: a cache
+    from a different pool or a different backbone has the right shape and
+    would be reused silently. So the producer records this identity and the
+    consumer checks it.
+    """
+    return {
+        "model_path": str(model_path),
+        "pool_files": str(pool_files),
+        "n_pool": int(n_pool),
+    }
+
+
+def check_cache_identity(cache: Dict[str, Any], want: Dict[str, Any]) -> Optional[str]:
+    """Return a human-readable reason the cache does not apply, or None.
+
+    A cache written before identities existed carries no ``identity`` key; it
+    is accepted with a warning rather than discarded, since the per-run
+    caches that predate sharing were never cross-used.
+    """
+    got = cache.get("identity")
+    if got is None:
+        logger.warning(
+            "TAG gate cache has no identity block (written before shared "
+            "caches existed) — cannot verify it belongs to this pool and "
+            "backbone. Accepting it; regenerate to get the check.",
+        )
+        return None
+    diffs = {k: (got.get(k), want.get(k)) for k in want if got.get(k) != want.get(k)}
+    if not diffs:
+        return None
+    return "; ".join(f"{k}: cache={a!r} run={b!r}" for k, (a, b) in diffs.items())
+
+
+def load_gate_cache(output_dir, path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """Load ``tag_gate_cache.pt``; None when absent, unreadable, or too old.
 
     Deliberately a SEPARATE file from ``reliability_cache.pt``: the MVF cache
     stores a different statistic under the same key names, and the MVF
     validity check would happily accept a TAG cache (and vice versa).
     """
-    p = cache_path_for(output_dir)
+    p = Path(path) if path is not None else cache_path_for(output_dir)
     if not p.exists():
         return None
     try:
@@ -831,6 +872,8 @@ def save_gate_cache(
     token_cf: Optional[Sequence[torch.Tensor]] = None,
     n_cf: Optional[Sequence[torch.Tensor]] = None,
     store_token_losses: bool = False,
+    identity: Optional[Dict[str, Any]] = None,
+    path: Optional[Path] = None,
 ) -> None:
     """Persist G, its diagnostics, and the config that produced it.
 
@@ -839,10 +882,11 @@ def save_gate_cache(
     under a different W / tau / s WITHOUT a forward pass — the same
     affordance the MVF cache provides by storing its raw loss vectors.
     """
-    p = cache_path_for(output_dir)
+    p = Path(path) if path is not None else cache_path_for(output_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     payload: Dict[str, Any] = {
         "cache_version": CACHE_VERSION,
+        "identity": identity,
         "gate": result["gate"].cpu(),
         "completeness": result["completeness"].cpu(),
         "delta_bar": result["delta_bar"].cpu(),

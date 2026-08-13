@@ -18,12 +18,18 @@ set -uo pipefail
 SEED="${1:-42}"
 shift || true
 
-DEFAULT_ARMS=(
-  light_tag_05b
-  light_tag_static_05b
-  light_tads_legacy_05b
-  light_random_05b
-)
+# SCALE=7b runs the 7B grid; anything else runs the 0.5B one.
+SCALE="${SCALE:-05b}"
+if [ "$SCALE" = "7b" ]; then
+  DEFAULT_ARMS=(tag_7b tag_static_7b tads_legacy_7b random_7b)
+else
+  DEFAULT_ARMS=(
+    light_tag_05b
+    light_tag_static_05b
+    light_tads_legacy_05b
+    light_random_05b
+  )
+fi
 ARMS=("$@")
 [ ${#ARMS[@]} -eq 0 ] && ARMS=("${DEFAULT_ARMS[@]}")
 
@@ -38,11 +44,34 @@ fi
 N_GPU="$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l)"
 [ "$N_GPU" -eq 0 ] && { echo "[error] no GPUs visible" >&2; exit 2; }
 
-LOGDIR="$TAG_WORKSPACE/logs/arms_seed${SEED}"
+LOGDIR="$TAG_WORKSPACE/logs/arms_${SCALE}_seed${SEED}"
 mkdir -p "$LOGDIR"
 
-echo "[arms] seed=$SEED  gpus=$N_GPU  episode_bs=${TADS_EPISODE_BS:-2}"
+# A shared gate cache turns N redundant gate computations into zero: every
+# TAG arm here reads the same file. Without it each arm recomputes the gate
+# on its own GPU, which at 7B is 1+K full pool forwards per arm.
+if [ -n "${TADS_GATE_CACHE:-}" ]; then
+  if [ -f "$TADS_GATE_CACHE" ]; then
+    echo "[arms] shared gate cache: $TADS_GATE_CACHE"
+  else
+    echo "[arms] WARNING: TADS_GATE_CACHE=$TADS_GATE_CACHE does not exist." >&2
+    echo "[arms]          Each TAG arm will recompute the gate separately." >&2
+    echo "[arms]          Run: bash scripts/precompute_gate.sh <config>" >&2
+  fi
+fi
+
+echo "[arms] scale=$SCALE seed=$SEED gpus=$N_GPU"
+if [ "$SCALE" = "7b" ]; then
+  echo "[arms] episode_bs=${TADS_EPISODE_BS_7B:-8} grad_accum=${TADS_GRAD_ACCUM_7B:-16} (1 arm/GPU)"
+else
+  echo "[arms] episode_bs=${TADS_EPISODE_BS:-2}"
+fi
 echo "[arms] logs -> $LOGDIR"
+
+if [ ${#ARMS[@]} -gt "$N_GPU" ]; then
+  echo "[arms] note: ${#ARMS[@]} arms on $N_GPU GPUs — they will share cards." >&2
+  echo "[arms]       At 7B that will OOM; run them in waves instead." >&2
+fi
 
 pids=()
 names=()

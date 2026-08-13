@@ -777,6 +777,9 @@ def main() -> None:
                 "allow_late_gate": bool(tag_cfg.get("allow_late_gate", False)),
                 "store_token_losses": bool(tag_cfg.get("store_token_losses", False)),
                 "static": bool(tag_cfg.get("static", False)),
+                # Shared, precomputed gate cache (scripts/precompute_gate.py).
+                # Empty = per-run cache in the run dir.
+                "gate_cache_file": (tag_cfg.get("gate_cache_file") or None),
             },
         }
         logger.info(

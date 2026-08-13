@@ -281,6 +281,11 @@ def _prepare_tag(
 
     output_dir = cfg["output_dir"]
     params = tag_ctx.get("params", {}) or {}
+    # A SHARED gate cache (scripts/precompute_gate.py) lets every arm and
+    # seed reuse one computation, since G depends only on (pool, base
+    # checkpoint, gate config). Absent that, the cache is per-run.
+    shared_cache = str(params.get("gate_cache_file") or "").strip() or None
+    cache_path = Path(shared_cache) if shared_cache else None
     scale = _resolve_gate_scale(params)
     gcfg = _build_gate_config(params, scale)
     completeness = tag_ctx["completeness"]
@@ -295,6 +300,7 @@ def _prepare_tag(
         "allow_late_gate": bool(params.get("allow_late_gate", False)),
         "store_token_losses": bool(params.get("store_token_losses", False)),
         "components": None,
+        "cache_path": cache_path,
         "token_true": None,
         "n_true": None,
         "token_cf": None,
@@ -302,7 +308,25 @@ def _prepare_tag(
         "scale_used": scale,
     }
 
-    cache = gatelib.load_gate_cache(output_dir)
+    cache = gatelib.load_gate_cache(output_dir, path=cache_path)
+    if cache is not None:
+        # A shared cache is reachable by runs it was never meant for, so the
+        # producer records what it is valid FOR and we check it here. Shape
+        # alone would not catch a cache from a different backbone.
+        want_id = gatelib.cache_identity(
+            model_path=cfg.get("model_path"),
+            pool_files=cfg.get("data_files"),
+            n_pool=n_pool,
+        )
+        why = gatelib.check_cache_identity(cache, want_id)
+        if why is not None:
+            raise RuntimeError(
+                f"TAG gate cache at {cache_path or gatelib.cache_path_for(output_dir)} "
+                f"does not belong to this run — {why}. G is only valid for the "
+                f"(pool, base checkpoint) it was computed on. Point "
+                f"tads.tag.gate_cache_file at the right cache, or regenerate "
+                f"with scripts/precompute_gate.sh."
+            )
     if cache is not None and cache["gate"].numel() == n_pool:
         cached_cfg = cache.get("config") or {}
         if scale is None and cached_cfg.get("scale") is not None:
@@ -338,6 +362,8 @@ def _prepare_tag(
                     token_cf=cache.get("token_cf"),
                     n_cf=cache.get("n_cf"),
                     store_token_losses=True,
+                    identity=cache.get("identity"),
+                    path=cache_path,
                 )
             else:
                 logger.warning(
@@ -441,6 +467,12 @@ def _finalize_tag(tag, episode, *, cfg, epoch: int) -> Dict[str, Any]:
             token_cf=tag["token_cf"],
             n_cf=tag["n_cf"],
             store_token_losses=bool(tag.get("store_token_losses", False)),
+            identity=gatelib.cache_identity(
+                model_path=cfg.get("model_path"),
+                pool_files=cfg.get("data_files"),
+                n_pool=int(episode["gate"].numel()),
+            ),
+            path=tag.get("cache_path"),
         )
     gate_t = episode.get("gate")
     extras: Dict[str, Any] = {
@@ -898,7 +930,9 @@ def select_indices(
     _skip_selection_cache = False
     if tag_ctx is not None and _output_dir_raw is not None:
         from ..core import gate as gatelib
-        if not gatelib.cache_path_for(_output_dir_raw).exists():
+        _shared = str(((tag_ctx or {}).get("params") or {}).get("gate_cache_file") or "").strip()
+        _gc = Path(_shared) if _shared else gatelib.cache_path_for(_output_dir_raw)
+        if not _gc.exists():
             _skip_selection_cache = True
             logger.info(
                 "TAG: a cached selection for epoch %d exists but "

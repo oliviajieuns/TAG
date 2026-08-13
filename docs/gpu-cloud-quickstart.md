@@ -144,3 +144,99 @@ pass keeps a per-token vector per sample rather than a scalar.
 **Cache seems stale after editing tokenisation** — the HF `map` fingerprint
 has served stale tokenisations before. Set `TADS_FRESH_DATA_CACHE=1` for one
 run.
+
+---
+
+# 7B on a multi-GPU box
+
+```bash
+source scripts/gpu_cloud/env.sh
+bash   scripts/gpu_cloud/bootstrap.sh all7b      # +Qwen2.5-7B (~15 GB), 7B calibration
+export TADS_GATE_REF=$POOLS/clean_ref/delta_hat_7b.pt
+export TADS_EPISODE_BS_7B=32
+
+python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml
+
+bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml
+export TADS_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt
+
+SCALE=7b bash scripts/run_lowq_all_arms.sh 42
+```
+
+## Why one arm per GPU, not one arm across four
+
+Selection runs on **rank 0 only** — `tads/pipelines/selection.py` explains
+why (an NCCL barrier there deadlocked earlier versions: rank 0 sits inside a
+30–90 minute scoring pass while the other ranks wait in the collective and
+trip the watchdog). DDP therefore accelerates the SFT step but **not** the
+scoring pass, so a 4-GPU DDP run leaves three cards idle for most of a 7B
+epoch. Four concurrent single-GPU arms keep every card busy.
+
+Per-GPU memory is the same either way: DDP replicates the full model,
+gradients and optimizer state on every rank. What changes is `grad_accum`,
+so the effective batch stays 128:
+
+| layout | world_size | grad_accum | env |
+|---|---|---|---|
+| one arm per GPU (default) | 1 | 16 | — |
+| one arm across 4 DDP ranks | 4 | 4 | `TADS_GRAD_ACCUM_7B=4` |
+
+For the DDP layout:
+
+```bash
+export TADS_GRAD_ACCUM_7B=4
+torchrun --nproc_per_node=4 -m tads.train \
+    --config configs/experiments/lowq/tag_7b.yaml
+```
+
+7B full fine-tuning needs 8-bit AdamW (`use_8bit_optimizer: true`, inherited
+from `configs/modes/full_ft.yaml`) — fp32 optimizer state alone is ~56 GB and
+does not fit beside the weights on an 80 GB card.
+
+## The shared gate cache
+
+`G` is a function of (pool, base checkpoint, gate config) and nothing else —
+not the seed, not the arm, not the epoch. `scripts/precompute_gate.sh`
+computes it once, sharded across every GPU, and every arm and seed then reads
+the same file. On the paper's 8-arm × 3-seed grid that collapses 24 redundant
+gate computations into one; at 7B each of those is 1+K full pool forwards.
+
+The shards are independent processes pinned to one GPU each, not torchrun —
+no process group, no rendezvous, so one dead shard is re-runnable on its own
+(the merge step prints the exact command) and the job survives pre-emption.
+
+Because a shared cache is reachable by runs it was never meant for, the
+producer stamps it with the pool and backbone it was computed on and the
+consumer refuses a mismatch:
+
+```
+RuntimeError: TAG gate cache at ... does not belong to this run —
+model_path: cache='.../qwen2.5-0.5b' run='.../qwen2.5-7b'
+```
+
+Verify a run is actually using it — you want **zero** gate forwards at every
+epoch, including the first:
+
+```
+TAG gate: cache hit (config unchanged) — no forward pass.
+```
+
+## 7B-specific gotchas
+
+**The calibration does not transfer from 0.5B.** Δ̂ is a property of the
+backbone's likelihoods, so a 7B run needs `delta_hat_7b.pt`. The bootstrap's
+`calibrate7b` step produces it; pointing a 7B run at the 0.5B reference
+mis-scales every gate value.
+
+**Pick W at 0.5B, carry it to 7B.** The span sweep is cheap at 0.5B (free
+with `store_token_losses`) and expensive at 7B. The 7B arms ship with
+`store_token_losses: false` for that reason.
+
+**Base, not Instruct.** If `[tag-env] model` shows a `-Instruct` path, the
+backbone is already instruction-tuned — the paper's setup is SFT from a base
+checkpoint, and Δ̂'s distribution differs substantially. Either download the
+base weights or state the deviation.
+
+**Disk.** Qwen2.5-7B is ~15 GB, and full-FT checkpoints are ~28 GB each. Five
+arms × 3 seeds of saved final checkpoints is well over 400 GB; keep the
+workspace on a scratch volume and prune as you go.

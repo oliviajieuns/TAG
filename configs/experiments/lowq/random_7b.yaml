@@ -1,0 +1,6 @@
+# Lowq arm: random selection at 7B — the floor.
+defaults:
+  - configs/methods/random.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq/random_7b

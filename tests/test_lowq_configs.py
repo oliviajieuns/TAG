@@ -39,6 +39,15 @@ _ARMS = [
     "light_tag_static_05b",
 ]
 
+# The 7B grid has its own shared fragment (full-FT, 3 epochs) — plan §5.3.
+_ARMS_7B = [
+    "tag_7b",
+    "tag_static_7b",
+    "tads_legacy_7b",
+    "random_7b",
+    "full_polluted_7b",
+]
+
 
 def _load(name: str) -> dict:
     return load_config(str(_LOWQ_DIR / f"{name}.yaml"))
@@ -312,3 +321,57 @@ def test_gate_ref_with_a_different_span_config_is_rejected(tmp_path):
         _resolve_gate_scale(
             {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 32}
         )
+
+
+# --------------------------------------------------------------------------
+# 7B grid
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", _ARMS_7B)
+def test_7b_arms_share_training_pins(name, monkeypatch):
+    for v in ("TADS_EPISODE_BS_7B", "TADS_GRAD_ACCUM_7B"):
+        monkeypatch.delenv(v, raising=False)
+    cfg = _load(name)
+    assert cfg["train_epochs"] == 3, "plan §5.3 pre-registers 3 epochs at 7B"
+    assert cfg["training_mode"] == "full"
+    # Without 8-bit AdamW the fp32 optimizer state alone (~56 GB) does not
+    # fit beside 7B weights on an 80GB card.
+    assert cfg["use_8bit_optimizer"] is True
+    assert cfg["model_key"] == "qwen2.5-7b"
+    # effective batch = batch_size x grad_accum x world_size, held at 128
+    # with the default one-arm-per-GPU layout (world_size 1).
+    assert int(cfg["batch_size"]) * int(cfg["grad_accum"]) == 128
+
+
+@pytest.mark.parametrize("name", _ARMS_7B)
+def test_7b_ddp_override_keeps_the_effective_batch(name, monkeypatch):
+    """One arm across 4 DDP ranks must reach the same effective batch as one
+    arm per GPU, or the two layouts are not comparable."""
+    monkeypatch.setenv("TADS_GRAD_ACCUM_7B", "4")
+    cfg = _load(name)
+    assert int(cfg["batch_size"]) * int(cfg["grad_accum"]) * 4 == 128
+
+
+def test_7b_tag_arm_resolves_tag_score_mode():
+    cfg = _load("tag_7b")
+    assert cfg["method"] == "tads"
+    assert cfg["tads"]["score_mode"] == "tag"
+    assert cfg["tads"]["use_anchor"] is True
+    assert cfg["selection_ratio"] == 0.1
+
+
+def test_7b_tag_arms_accept_a_shared_gate_cache(monkeypatch):
+    """G depends only on (pool, base checkpoint, gate config), so every arm
+    and seed must be able to point at ONE precomputed cache."""
+    monkeypatch.setenv("TADS_GATE_CACHE", "/tmp/shared_gate.pt")
+    for name in ("tag_7b", "tag_static_7b"):
+        cfg = _load(name)
+        assert cfg["tads"]["tag"]["gate_cache_file"] == "/tmp/shared_gate.pt"
+
+
+def test_7b_legacy_arm_has_no_gate():
+    """TAG - legacy is the pair that isolates the gate, so legacy must carry
+    no tag block at all."""
+    cfg = _load("tads_legacy_7b")
+    assert cfg["tads"].get("score_mode", "tads") == "tads"
+    assert "tag" not in cfg["tads"]

@@ -379,3 +379,41 @@ def test_recompute_from_cache_refuses_forward_bound_changes():
     # These two are not.
     assert recompute_gate_from_cache(cache, _cfg(include_eos=True)) is None
     assert recompute_gate_from_cache(cache, _cfg(c_trunc=0.5)) is None
+
+
+def test_cache_identity_catches_a_wrong_pool_or_backbone():
+    """A SHARED gate cache is reachable by runs it was never computed for.
+    Shape alone would not catch a cache from a different backbone, and G is
+    only meaningful for the (pool, base checkpoint) it was measured on."""
+    from tads.core.gate import cache_identity, check_cache_identity
+
+    want = cache_identity(model_path="/m/qwen-7b", pool_files="/p/pool.json", n_pool=100)
+    assert check_cache_identity({"identity": dict(want)}, want) is None
+    assert "pool_files" in check_cache_identity(
+        {"identity": dict(want, pool_files="/p/other.json")}, want
+    )
+    assert "model_path" in check_cache_identity(
+        {"identity": dict(want, model_path="/m/qwen-05b")}, want
+    )
+    # Pre-identity caches were per-run and never cross-used: accept + warn.
+    assert check_cache_identity({}, want) is None
+
+
+def test_shared_cache_round_trips_through_an_explicit_path(tmp_path):
+    from tads.core.gate import (
+        cache_identity, load_gate_cache, save_gate_cache,
+    )
+
+    tok_true, n, tok_cf, n_cf = _three_samples()
+    cfg = _cfg()
+    res = compute_gate(tok_true, n, [tok_cf], [n_cf], torch.ones(3), cfg=cfg)
+    ident = cache_identity(model_path="/m", pool_files="/p", n_pool=3)
+    shared = tmp_path / "nested" / "shared_gate.pt"
+    save_gate_cache(None, result=res, cfg=cfg, epoch=1, identity=ident, path=shared)
+    assert shared.exists()
+    # The per-run location must NOT have been written.
+    assert not (tmp_path / "tag_gate_cache.pt").exists()
+    back = load_gate_cache(None, path=shared)
+    assert back is not None
+    assert back["identity"] == ident
+    assert torch.allclose(back["gate"], res["gate"])

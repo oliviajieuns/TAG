@@ -1,0 +1,14 @@
+# Lowq arm: TAG-STATIC control at 7B — the gated score computed once at
+# epoch 1, selection frozen for every later refresh. Isolates the
+# training-adaptive component from the gate itself.
+# Same env wiring as tag_7b.yaml.
+defaults:
+  - configs/methods/tag.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq/tag_static_7b
+tads:
+  tag:
+    gate_cache_file: ${oc.env:TADS_GATE_CACHE,}
+    store_token_losses: false
+    static: true
