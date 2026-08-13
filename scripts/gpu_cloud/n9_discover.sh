@@ -73,6 +73,7 @@ fi
 say ""
 say "INSTRUCTION CORPUS (Alpaca schema: instruction / input / output)"
 CORPUS=""
+CANDIDATES=()
 for r in $DATA_ROOTS; do
   [ -d "$r" ] || continue
   while IFS= read -r f; do
@@ -84,29 +85,60 @@ assert isinstance(recs, list) and len(recs) > 100
 r = recs[0]
 assert "instruction" in r and "output" in r
 PY
-    then CORPUS="$f"; break; fi
+    then CANDIDATES+=("$f"); fi
   # -size +100k, not +1M: a real Alpaca dump is tens of MB, but a subset or a
   # jsonl-converted variant can be much smaller and is still valid input.
   done < <(find "$r" -maxdepth 6 -name '*alpaca*.json' -size +100k 2>/dev/null | head -20)
-  [ -n "$CORPUS" ] && break
 done
+# Prefer Alpaca-GPT4 when several corpora exist: it is what base.yaml and the
+# prior TADS numbers use, so silently picking another would break
+# comparability without anyone noticing.
+for c in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
+  case "$c" in *gpt4*|*GPT4*) CORPUS="$c"; break ;; esac
+done
+if [ -z "$CORPUS" ] && [ ${#CANDIDATES[@]} -gt 0 ]; then CORPUS="${CANDIDATES[0]}"; fi
+
+# An HF-cached corpus is not a .json on disk, but it is just as usable
+# offline — and Alpaca-GPT4 is usually only present in that form.
+HF_ALPACA_GPT4=""
+for r in $HF_ROOTS; do
+  [ -d "$r/datasets" ] || continue
+  # '?' matches the one char that differs between the alpaca-gpt4 and
+  # alpaca_gpt4 mirrors.
+  if [ -n "$(find "$r/datasets" -maxdepth 1 -type d -iname '*alpaca?gpt4*' 2>/dev/null | head -1)" ]; then
+    HF_ALPACA_GPT4="$r"; break
+  fi
+done
+
 if [ -n "$CORPUS" ]; then
   N="$(python -c "import json,sys;print(len(json.load(open(sys.argv[1]))))" "$CORPUS" 2>/dev/null)"
   kv "corpus" "$CORPUS"
   kv "records" "$N"
   add_export ALPACA_RAW_JSON "$CORPUS"
   case "$CORPUS" in
+    *gpt4*|*GPT4*) : ;;
+    *)
+      say "     ^ this is NOT alpaca-GPT4, which is what base.yaml and the"
+      say "       prior TADS numbers use — results will not be comparable."
+      if [ -n "$HF_ALPACA_GPT4" ]; then
+        say "       BUT alpaca-gpt4 IS cached at $HF_ALPACA_GPT4/datasets."
+        say "       Materialise it (offline, no download) and prefer it:"
+        say "         bash scripts/gpu_cloud/bootstrap.sh data"
+        say "         bash scripts/gpu_cloud/n9_discover.sh --write   # re-detect"
+      fi
+    ;;
+  esac
+  case "$CORPUS" in
     *cleaned*)
-      say "     ^ alpaca-CLEANED, not alpaca-GPT4. Different corpus from the"
-      say "       repo's baseline (base.yaml cites Alpaca-GPT4 / Peng 2023),"
-      say "       so numbers are not comparable to prior TADS runs. For THIS"
-      say "       experiment it is arguably the better base: the corruption"
-      say "       manifest assumes the starting pool is clean, and this one"
-      say "       is explicitly cleaned. Pre-register whichever you use."
+      say "       (alpaca-cleaned is a defensible base for THIS experiment —"
+      say "        the corruption manifest assumes a clean starting pool and"
+      say "        this one explicitly is — but pre-register the choice.)"
     ;;
   esac
 else
   kv "corpus" "MISSING -> bash scripts/gpu_cloud/bootstrap.sh data"
+  [ -n "$HF_ALPACA_GPT4" ] && \
+    say "     (alpaca-gpt4 is cached at $HF_ALPACA_GPT4 — that step will use it offline)"
 fi
 
 # ------------------------------------------------------------- HF cache
@@ -119,10 +151,12 @@ done
 if [ -n "$HFHOME" ]; then
   kv "HF_HOME" "$HFHOME"
   add_export HF_HOME "$HFHOME"
-  n="$(find "$HFHOME/datasets" -maxdepth 1 -name '*___*' 2>/dev/null | wc -l)"
+  # -type d and no .lock: the cache dir is littered with lock FILES whose
+  # names also contain '___', which would otherwise dominate the listing.
+  n="$(find "$HFHOME/datasets" -maxdepth 1 -type d -name '*___*' 2>/dev/null | wc -l)"
   kv "cached datasets" "$n"
-  find "$HFHOME/datasets" -maxdepth 1 -name '*___*' 2>/dev/null | head -12 \
-    | sed 's|.*/|       - |'
+  find "$HFHOME/datasets" -maxdepth 1 -type d -name '*___*' 2>/dev/null \
+    | sed 's|.*/|       - |' | sort | head -15
 else
   kv "HF_HOME" "MISSING (only needed for eval benchmarks)"
 fi

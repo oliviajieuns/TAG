@@ -53,28 +53,71 @@ step_model() {
 }
 
 step_data() {
-  if [ -f "$ALPACA_RAW_JSON" ]; then
-    log "raw corpus already at $ALPACA_RAW_JSON — skipping"
+  # Always materialise Alpaca-GPT4 to a FIXED workspace path, independent of
+  # whatever ALPACA_RAW_JSON currently points at: discovery may have found a
+  # different corpus (alpaca-cleaned), and silently keeping that one would
+  # break comparability with base.yaml and the prior TADS numbers.
+  local out="$TAG_WORKSPACE/datasets/alpaca_gpt4.json"
+  if [ -f "$out" ]; then
+    log "Alpaca-GPT4 already at $out — skipping"
+    log "  export ALPACA_RAW_JSON=$out"
     return
   fi
-  log "downloading Alpaca-GPT4 -> $ALPACA_RAW_JSON"
-  mkdir -p "$(dirname "$ALPACA_RAW_JSON")"
-  # vicgalle/alpaca-gpt4 ships the standard instruction/input/output columns.
-  # The liangxin mirror uses a non-standard `conversations` schema that the
-  # Alpaca loader does not read.
-  HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0 python - "$ALPACA_RAW_JSON" <<'PY'
+  mkdir -p "$(dirname "$out")"
+
+  # Offline first: on a cluster the dataset is usually already in HF_HOME, and
+  # the compute nodes often have no egress at all.
+  if python - "$out" <<'DSPY'
+import os, sys
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+import json
+from datasets import load_dataset
+out = sys.argv[1]
+for repo in ("vicgalle/alpaca-gpt4", "liangxin/Alpaca_GPT4"):
+    try:
+        ds = load_dataset(repo)["train"]
+    except Exception:
+        continue
+    cols = set(ds.column_names)
+    if not {"instruction", "output"} <= cols:
+        # liangxin ships a `conversations` schema the Alpaca loader cannot read.
+        print(f"[skip] {repo}: columns {sorted(cols)}", file=sys.stderr)
+        continue
+    recs = [{"instruction": r["instruction"], "input": r.get("input") or "",
+             "output": r["output"]} for r in ds]
+    with open(out, "w") as f:
+        json.dump(recs, f, ensure_ascii=False)
+    print(f"[done] {repo}: {len(recs)} records -> {out} (from cache, offline)")
+    sys.exit(0)
+sys.exit(1)
+DSPY
+  then
+    log "Alpaca-GPT4 materialised from the local HF cache — no download"
+  else
+    log "not in the HF cache; downloading Alpaca-GPT4"
+    HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0 python - "$out" <<'DLPY'
 import json, sys
 from datasets import load_dataset
 out = sys.argv[1]
 ds = load_dataset("vicgalle/alpaca-gpt4")["train"]
-recs = [
-    {"instruction": r["instruction"], "input": r.get("input") or "", "output": r["output"]}
-    for r in ds
-]
+recs = [{"instruction": r["instruction"], "input": r.get("input") or "",
+         "output": r["output"]} for r in ds]
 with open(out, "w") as f:
     json.dump(recs, f, ensure_ascii=False)
 print(f"[done] {len(recs)} records -> {out}")
-PY
+DLPY
+  fi
+  log "Alpaca-GPT4 ready at $out"
+  if [ "${ALPACA_RAW_JSON:-}" != "$out" ]; then
+    log ""
+    log "  ALPACA_RAW_JSON currently points at:"
+    log "    ${ALPACA_RAW_JSON:-<unset>}"
+    log "  To use Alpaca-GPT4 (what base.yaml and prior TADS numbers use):"
+    log "    export ALPACA_RAW_JSON=$out"
+    log "    bash scripts/gpu_cloud/n9_discover.sh --write   # or re-detect"
+    log ""
+  fi
 }
 
 step_pools() {
