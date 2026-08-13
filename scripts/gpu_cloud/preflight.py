@@ -277,6 +277,64 @@ def make_manifest_check(cfg_path):
     return _fn
 
 
+def make_seq_len_check(cfg_path):
+    """How much of the pool does ``max_seq_len`` cut off, and what it costs.
+
+    Budget truncation is not neutral for TAG, for two compounding reasons:
+
+    1. ``c_i``. Tokenisation appends EOS to every response, and the
+       completeness check reads the LABEL's last token. When the budget cuts
+       the response, that EOS is what gets dropped — so a perfectly clean but
+       long response is marked incomplete and takes ``c_trunc`` (0.2 by
+       default), a 5x cut to its gate.
+    2. It lands on long responses only, which are already the ones penalised
+       by the order-statistic drift of Delta^min (docs/tag-paper-deltas.md
+       B2). The two effects push the same samples down.
+
+    So a high truncation rate turns the gate into a length filter through a
+    second, independent route. Measured here on the raw text, cheaply, before
+    any of it costs GPU time.
+    """
+    def _fn():
+        cfg = _load_cfg(cfg_path)
+        pool_path = Path(str(cfg.get("data_files")))
+        if not pool_path.exists():
+            return _WARN, "pool missing; run the pools step first"
+        max_len = int(cfg["max_seq_len"])
+        from tads.modeling.loader import load_tokenizer
+        tok = load_tokenizer(str(cfg["model_path"]))
+        recs = json.load(open(pool_path))
+        # A sample of 2000 is plenty for a rate and keeps this a few seconds.
+        step = max(1, len(recs) // 2000)
+        sample = recs[::step]
+        n_trunc = 0
+        for r in sample:
+            # Approximate the real budget: prompt tokens + response tokens + EOS.
+            n_p = len(tok(str(r.get("instruction", "")) + str(r.get("input", "")),
+                          add_special_tokens=False)["input_ids"])
+            n_r = len(tok(str(r.get("output", "")), add_special_tokens=False)["input_ids"])
+            # +8 is slack for the chat template's role/marker tokens.
+            if n_p + n_r + 1 + 8 > max_len:
+                n_trunc += 1
+        rate = n_trunc / max(1, len(sample))
+        c_trunc = float(((cfg.get("tads") or {}).get("tag") or {}).get("c_trunc", 0.2))
+        detail = (
+            f"max_seq_len={max_len}: ~{100 * rate:.1f}% of the pool is "
+            f"budget-truncated (sampled {len(sample)})"
+        )
+        if rate > 0.15:
+            return _WARN, detail + (
+                f" — those responses lose their appended EOS, so the "
+                f"completeness check marks them incomplete and they take "
+                f"c_trunc={c_trunc} (a {1 / c_trunc:.0f}x gate cut) despite "
+                f"being clean. It hits long responses only, compounding the "
+                f"Delta^min length drift. Either raise max_seq_len, or report "
+                f"this rate alongside the length-bias table."
+            )
+        return _OK, detail
+    return _fn
+
+
 def make_corpus_consistency_check(cfg_path):
     """The candidate pool and the CLEAN reference pool must share a corpus.
 
@@ -468,6 +526,8 @@ def main() -> None:
     check("pool / counterfactual alignment", make_pool_check(cfg_path))
     check("corruption manifest", make_manifest_check(cfg_path))
     check("pool / clean-reference same corpus", make_corpus_consistency_check(cfg_path))
+    if not args.skip_model:
+        check("max_seq_len vs pool length", make_seq_len_check(cfg_path))
     check("gate calibration reference", make_gate_ref_check(cfg_path))
     check("previous run caches", make_stale_cache_check(cfg_path))
 
