@@ -184,7 +184,53 @@ T1a/T1b→misaligned(cross-view correspondence), T6→imbalanced(분석 축),
 
 ## 2. 점수 설계 (MVF v3) [구현 완료]
 
-### 2.0 초록 수식 ↔ 구현 대조 (v3.1 신규 — 제출 전 해소 필수)
+### 2.0′ [해소됨 2026-08-13] carrier 논쟁 → B1 채택, 그리고 그 이상
+
+**§2.0의 불일치 B는 새 intro(Eq. 1)가 확정하며 종결됐다.** 새 원고는
+
+```
+s_i^(t) = G_i · R_i^(t) · (1 + λ·ã_i^(t))      (Eq. 1)
+```
+
+즉 **legacy 점수를 그대로 두고 게이트만 앞에 곱한다**. carrier는
+`R = w·L + (1−w)·H`(entropy 포함, legacy 그대로)이고, alignment도 legacy의
+min-max다. 따라서 §2.0의 선택지 중 **B1도 B2도 아닌 제3안** — "carrier를
+건드리지 않고 MVF의 D′ 대신 legacy R을 쓴다" — 이 채택됐다. MVF v3(D′,
+γ, d_floor, rank01 alignment)는 **비교 arm으로 보존**되고 제안 방법이
+아니다.
+
+구현: `score_mode: tag` (`tads/core/gate.py`, `configs/methods/tag.yaml`).
+G ≡ 1이면 legacy 랭킹과 비트 단위로 동일하므로 게이트가 깨끗한 ablation이
+된다. `mvf`와 `tag`는 상호 배타.
+
+**게이트 자체는 §2.1의 Q에서 실질적으로 교체됐다** (raw ΔL → 비율 기반
+span 통계):
+
+| | MVF v3 (§2.1) | TAG (Eqs. 2-6) |
+|---|---|---|
+| 통계 | `ΔL = L(y\|x⁻) − L(y\|x)` [nats] | `Δ̄ = 1 − L(y\|x)/L(y\|x⁻)` [비율] |
+| 국소 오염 | 평균에 희석됨 | span 최소값이 포착 (`Δ^min`) |
+| 완전성 | 게이트 밖 곱셈 인자 | 게이트 **안** (`G = c·(…)₊`) |
+| 보정 대상 | ΔL | **Δ̂ = min(Δ̄, Δ^min)** — 다른 양이므로 ref 파일 호환 안 됨 |
+
+→ **`reliability_ref_file`과 `gate_ref_file`은 교환 불가.** 후자는
+`scripts/calibrate_reliability.py --mode tag`로 생성한다(로더가 키로 거부).
+
+**남은 초록 부채 2건은 그대로 유효** (§0′): `\STATUS{}` 치환, 그리고
+"33% cost reduction vs Reward+PPO"의 audit §2.1 위반 — 새 intro의
+contribution 4번이 이 문장을 "prior unified-protocol evidence"로
+약화시켰지만, **CIKM 숫자를 인용한다는 사실 자체는 변하지 않았다.**
+재측정 또는 삭제, D5까지 결정.
+
+**신규 부채(구현에서 발견):** 수식을 실행 가능하게 만드는 과정에서 정의
+안 된 케이스 4건과 과장된 주장 2건이 드러났다 —
+[`tag-paper-deltas.md`](tag-paper-deltas.md). 그중 §B2(Δ^min의
+길이 편향, W가 1차 하이퍼파라미터)는 **Phase A에 W sweep을 추가해야
+한다**는 실험 계획 변경을 강제한다(캐시된 token loss로 forward 없이 무료).
+
+---
+
+### 2.0 [이력] 초록 수식 ↔ 구현 대조 (v3.1 — B는 §2.0′에서 해소)
 
 초록이 제시하는 융합식과 `score_mode: mvf`가 실제로 계산하는 식:
 
@@ -320,7 +366,26 @@ log S = γ·log(Qc+ε) + log(D'+ε) + log(1+λ_t·Ã)
 비교 신호(전부 `scripts/score_pool.py`에 구현됨): `entropy`, `loss`, `R`,
 `legacy_score`, `Q`(v3), `Q_rank`(v1), `gate`, `D`, `mvf_score`(v3),
 `mvf_v2`(역전 ablation), `additive`(보상적 대조), **`ppl`, `ifd`**
-(`--uncond-loss`, `scripts/compute_uncond_loss.py` 1회 forward로 둘 다).
+(`--uncond-loss`, `scripts/compute_uncond_loss.py` 1회 forward로 둘 다),
+그리고 **TAG 행: `delta_bar`, `delta_min`, `delta_hat`, `G`, `tag_score`**
+(token-level counterfactual forward, pool당 +1회).
+
+- **`delta_bar` vs `delta_min`이 곧 span ablation이다.** 국소 오염
+  유형(T5 wrong-answer, T7 fluent-wrong)에서 `delta_min`이 `delta_bar`를
+  못 이기면 Eqs. 4-5는 제 몫을 못 하는 것이므로 원고에서 span 구조를
+  방어할 수 없다. 이 두 행의 유형별 분해를 Gate A′ 판정에 포함한다.
+- **W sweep (신규, 필수)**: `span_tokens ∈ {8, 16, 32, 64}` × `tau`.
+  `store_token_losses: true`(0.5B arm 기본값)면 캐시된 token loss에서
+  재유도되므로 **forward 없이 무료**. 근거는
+  [`tag-paper-deltas.md`](tag-paper-deltas.md) §B2 — Δ^min은 span 개수
+  M ∝ n/W에 대한 최소값이라 clean 샘플도 응답이 길수록 낮아지고(모사:
+  W=16에서 clean 오탐률 32토큰 1.2% → 1024토큰 32.8%), per-span 잡음은
+  1/√W로 줄어 두 효과가 상충한다. W는 세부사항이 아니라 1차
+  하이퍼파라미터다.
+- **length-bias 진단 (신규, 필수)**: `report["tag"]["length_bias"]` —
+  응답 길이 분위별 clean 오탐률과 ρ(G, length). "게이트가 사실은 길이
+  필터"라는 반박은 T3(truncated)가 짧다는 사실 때문에 특히 위험하므로
+  선제 측정한다.
 
 - **PPL/IFD 행이 필수인 이유 (실험 리뷰어):** "PPL 필터로 충분하다"는
   공격을 가정으로 반박하지 않고 측정으로 반박(또는 유형별로 인정)한다.
@@ -333,9 +398,19 @@ log S = γ·log(Qc+ε) + log(D'+ε) + log(1+λ_t·Ã)
 - **γ sweep {0.5, 1, 2, 3}** (이론 리뷰어: γ* 조건 검증 겸용), λ ∈ {0, 0.5, 1},
   s 보정 민감도 κ ∈ {0.5, 2} (§7 robustness corollary의 실증 짝).
 - clean pool 유형별 Q 분포 진단 유지 (v2).
-- **Gate A' (판정 기준 갱신):** composite-20에서 `mvf_score`가
-  `entropy/loss/R` **그리고 `ppl`/`ifd`** 대비 Dirty@K·AUPRC 우위 (T7
-  포함 시 ppl은 T7에서 실패해야 정상), `Q ≥ Q_rank`, `mvf_score ≥ additive`.
+- **Gate A′ (v3.1 갱신 — 제안 방법이 `tag_score`로 바뀌었으므로 판정
+  대상도 바뀐다):** composite-20에서
+  1. `tag_score`가 `entropy/loss/R/legacy_score` **그리고 `ppl`/`ifd`**
+     대비 Dirty@K·AUPRC 우위 (T7 포함 시 ppl은 T7에서 실패해야 정상);
+  2. **`delta_min` ≥ `delta_bar`** — 국소 오염(T5/T7) 유형별 rejection
+     에서. 실패 시 span 구조(Eqs. 4-5)가 기여하지 않는다는 뜻이므로
+     원고에서 span을 빼고 `Δ̄`만 쓰는 단순 버전으로 후퇴한다(서사 손실
+     크므로 W sweep 소진 후 판단);
+  3. length-bias: clean 오탐률의 최장/최단 분위 비가 3× 미만. 초과 시
+     W를 조정하거나 한계로 명시 보고(§B2).
+  4. 참고 행으로 `mvf_score`도 계속 계산 — TAG가 MVF를 이기는지가
+     "게이트만 추가"가 "carrier 교체"보다 낫다는 직접 증거다.
+
   실패 시 2일 재설계 1회, 재실패 시 중단.
 
 ---
@@ -349,9 +424,11 @@ log S = γ·log(Qc+ε) + log(D'+ε) + log(1+λ_t·Ã)
 | 1 | Random | 바닥 |
 | 2 | Full-polluted | 무선별 reference |
 | 3 | Oracle-clean | 천장 reference (`make_oracle_pool.py`, ratio 0.125) |
-| 4 | TADS-legacy | 회귀 테스트로 고정 |
-| 5 | TADS-MVF v3 | 제안 |
-| 6 | TADS-MVF-static | `mvf.static: true` (구현 완료) — adaptive 분리 control |
+| 4 | TADS-legacy | 회귀 테스트로 고정. **TAG의 직접 ablation** (G ≡ 1이면 비트 동일) |
+| 5 | **TAG** | **제안** (`light_tag_05b.yaml`, `score_mode: tag`) |
+| 6 | **TAG-static** | `tag.static: true` — adaptive 분리 control (primary pair) |
+| 5b | TADS-MVF v3 | 이전 설계, 비교 arm으로 강등. TAG vs MVF = "게이트만 추가" vs "carrier 교체" |
+| 6b | TADS-MVF-static | MVF 쪽 static control (여유 시) |
 | 7 | **IFD top-K** (신규) | static 외부 baseline #1 — uncond loss로 필터한 pool + full 학습. 가장 싸고 가장 요구될 baseline |
 | 8 | AlpaGasus 또는 PPL top-K | 외부 judge 가능 여부 D3까지 확인, 불가 시 PPL로 대체 명시 |
 
@@ -364,15 +441,18 @@ log S = γ·log(Qc+ε) + log(D'+ε) + log(1+λ_t·Ã)
 
 ### 5.2 통계 (실험 리뷰어 major 반영 — v2에서 강화)
 
-- **primary endpoint 사전 등록 (이 문서가 그 기록):** 0.5B composite-20,
-  **TADS-MVF vs TADS-MVF-static**, 9-bench macro, seed-paired.
+- **primary endpoint 사전 등록 (v3.1 갱신 — 제안 방법이 TAG로 바뀌었다):**
+  0.5B composite-20, **TAG vs TAG-static**, 9-bench macro, seed-paired.
   (가장 강한 주장인 "adaptive가 static을 이긴다"를 primary로.)
+  - **부차 pre-registered pair: TAG vs TADS-legacy** — 이것이 게이트
+    자체의 효과를 격리하는 유일한 비교다(두 arm의 차이가 정확히 G 하나).
+    새 원고의 contribution 1이 걸린 pair이므로 3개 pair 안에 포함한다.
 - **primary pair는 처음부터 5 seeds** — 조건부 확장(optional stopping) 금지.
   나머지 arm 3 seeds.
-- 사전 등록된 3개 pair(MVF−static, MVF−legacy, MVF−Random)에
+- 사전 등록된 3개 pair(TAG−static, TAG−legacy, TAG−Random)에
   **Holm–Bonferroni**; 그 외 전부 exploratory 표기, 우월 서술 금지.
 - t-CI와 함께 **정확 sign-flip permutation p** (make_table_v2 구현 완료).
-- **co-headline 지표: oracle-gap recovery** `R = (macro_MVF −
+- **co-headline 지표: oracle-gap recovery** `R = (macro_TAG −
   macro_Random)/(macro_Oracle − macro_Random)` seed-paired CI와 함께 —
   "dirty 회피가 downstream 가치로 이어졌는가"에 대한 직접 방어.
   dirty-fraction 곡선 단독 헤드라인 금지 (detection ≠ utility 공격 봉쇄).
