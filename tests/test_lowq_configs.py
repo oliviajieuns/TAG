@@ -50,14 +50,31 @@ def _load(name: str) -> dict:
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("name", _ARMS)
-def test_shared_training_pins_win_over_method_fragments(name):
+def test_shared_training_pins_win_over_method_fragments(name, monkeypatch):
+    monkeypatch.delenv("TADS_EPISODE_BS", raising=False)
     cfg = _load(name)
     # The 7B method fragments carry episode_batch_size: 16 — the shared
-    # light fragment's 2 must win in every arm.
-    assert cfg["episode_batch_size"] == 2
+    # light fragment's default must win in every arm.
+    #
+    # int(): episode_batch_size comes through ${oc.env:TADS_EPISODE_BS,2}, and
+    # the env interpolation is a string substitution, so the resolved value is
+    # the STRING "2" when the var is unset. Every consumer wraps it in int()
+    # (grep episode_batch_size), and this assertion pins that contract — the
+    # same class of trap as the TADS_RELIABILITY_SCALE empty string.
+    assert int(cfg["episode_batch_size"]) == 2
     assert cfg["train_epochs"] == 5
     assert cfg["batch_size"] == 4
     assert cfg["grad_accum"] == 2
+
+
+@pytest.mark.parametrize("name", _ARMS)
+def test_episode_batch_size_env_override_applies_to_every_arm(name, monkeypatch):
+    """The H100 speed knob must move ALL arms together — an arm that missed it
+    would differ from its siblings in float reduction order, and the diff
+    would be unattributable (plan §5.2)."""
+    monkeypatch.setenv("TADS_EPISODE_BS", "64")
+    cfg = _load(name)
+    assert int(cfg["episode_batch_size"]) == 64
 
 
 # --------------------------------------------------------------------------

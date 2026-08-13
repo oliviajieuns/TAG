@@ -16,13 +16,52 @@ _TAG_ENV_SRC="${BASH_SOURCE[0]:-$0}"
 export TAG_REPO_ROOT="$(cd "$(dirname "$_TAG_ENV_SRC")/../.." && pwd)"
 
 # Everything the run needs lives here: weights, datasets, pools, outputs.
-export TAG_WORKSPACE="${TAG_WORKSPACE:-$TAG_REPO_ROOT/workspace}"
+# On a cluster with a per-user group volume, prefer that over the repo dir —
+# $HOME is usually small and the repo may sit on an overlay fs.
+_tag_pick_workspace() {
+  if [ -n "${TAG_WORKSPACE:-}" ]; then echo "$TAG_WORKSPACE"; return; fi
+  local u="${USER:-$(id -un 2>/dev/null)}"
+  for cand in "/group-volume/$u/tag-workspace" "/mnt/data/tag-workspace"; do
+    local parent
+    parent="$(dirname "$cand")"
+    if [ -d "$parent" ] && [ -w "$parent" ]; then echo "$cand"; return; fi
+  done
+  echo "$TAG_REPO_ROOT/workspace"
+}
+export TAG_WORKSPACE="$(_tag_pick_workspace)"
 
-export MODEL_PATH_QWEN25_05B="${MODEL_PATH_QWEN25_05B:-$TAG_WORKSPACE/models/qwen2.5-0.5b}"
+# Reuse assets the machine already has rather than re-downloading ~1 GB.
+# First existing candidate wins; the workspace path is the download target.
+_tag_first_existing() {
+  # usage: _tag_first_existing <marker-file-or-empty> <candidate>...
+  local marker="$1"; shift
+  for c in "$@"; do
+    if [ -n "$marker" ]; then
+      [ -f "$c/$marker" ] && { echo "$c"; return; }
+    else
+      [ -f "$c" ] && { echo "$c"; return; }
+    fi
+  done
+  echo ""
+}
+
+_TAG_M05B="$(_tag_first_existing config.json \
+  "${MODEL_PATH_QWEN25_05B:-/nonexistent}" \
+  "$TAG_WORKSPACE/models/qwen2.5-0.5b" \
+  /group-volume/nait-models/qwen2.5-0.5b \
+  /group-volume/models/Qwen2.5-0.5B \
+  /group-volume/models/Qwen2.5-0.5B-Instruct)"
+export MODEL_PATH_QWEN25_05B="${_TAG_M05B:-$TAG_WORKSPACE/models/qwen2.5-0.5b}"
 export MODEL_PATH_QWEN25_7B="${MODEL_PATH_QWEN25_7B:-$TAG_WORKSPACE/models/qwen2.5-7b}"
 
 export POOLS="${POOLS:-$TAG_WORKSPACE/pools}"
-export ALPACA_RAW_JSON="${ALPACA_RAW_JSON:-$TAG_WORKSPACE/datasets/alpaca_gpt4.json}"
+
+_TAG_RAW="$(_tag_first_existing "" \
+  "${ALPACA_RAW_JSON:-/nonexistent}" \
+  "$TAG_WORKSPACE/datasets/alpaca_gpt4.json" \
+  "/group-volume/${USER:-nobody}/datasets/alpaca_gpt4.json" \
+  /group-volume/IT-datasets/alpaca_gpt4/data/train.json)"
+export ALPACA_RAW_JSON="${_TAG_RAW:-$TAG_WORKSPACE/datasets/alpaca_gpt4.json}"
 
 # The candidate pool the training run actually selects from. bootstrap.sh
 # generates it; until then it does not exist and preflight will say so.
@@ -51,11 +90,17 @@ export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 
 mkdir -p "$TAG_WORKSPACE"/{models,datasets,pools,runs,cache,hf_home}
 
+_tag_mark() { [ -e "$1" ] && echo "found" || echo "MISSING (bootstrap will create)"; }
+
 if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] workspace : $TAG_WORKSPACE"
-  echo "[tag-env] model     : $MODEL_PATH_QWEN25_05B"
-  echo "[tag-env] pool      : $ALPACA_DATA_FILES"
-  echo "[tag-env] gate ref  : $TADS_GATE_REF"
+  echo "[tag-env] model     : $MODEL_PATH_QWEN25_05B  [$(_tag_mark "$MODEL_PATH_QWEN25_05B/config.json")]"
+  echo "[tag-env] raw corpus: $ALPACA_RAW_JSON  [$(_tag_mark "$ALPACA_RAW_JSON")]"
+  echo "[tag-env] pool      : $ALPACA_DATA_FILES  [$(_tag_mark "$ALPACA_DATA_FILES")]"
+  echo "[tag-env] gate ref  : $TADS_GATE_REF  [$(_tag_mark "$TADS_GATE_REF")]"
   echo "[tag-env] outputs   : $OUTPUT_ROOT"
-  echo "[tag-env] next      : python scripts/gpu_cloud/preflight.py"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    echo "[tag-env] gpus      : $(nvidia-smi --query-gpu=name --format=csv,noheader | tr '\n' ',' | sed 's/,$//')"
+  fi
+  echo "[tag-env] next      : bash scripts/gpu_cloud/bootstrap.sh && python scripts/gpu_cloud/preflight.py"
 fi

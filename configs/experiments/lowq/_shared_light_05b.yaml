@@ -25,7 +25,19 @@ grad_accum: 2
 # files list the METHOD FIRST and this fragment LAST so this value wins
 # (adversarial review 2026-08: the reverse order silently resolved to 16,
 # ~8x activation memory on the light GPU class).
-episode_batch_size: 2
+# Forward-only scoring batch. This is NOT a training hyperparameter: it
+# changes wall-clock, not which subset is selected (per-sample losses are
+# masked, so batch composition is semantically neutral). It is still pinned
+# HERE rather than per-arm, because arms that differ in it would differ in
+# float reduction order and the diff would be unattributable.
+#
+# 2 is sized for a small-VRAM GPU. On an H100/A100 80GB with the 0.5B model
+# that leaves the card ~idle and the pool forwards dominate the run, so set
+#     export TADS_EPISODE_BS=64
+# ONCE in the shell that launches EVERY arm — never for a subset of them.
+# Each run records the resolved value in its cfg.yaml snapshot, so a
+# mismatch between arms is auditable after the fact.
+episode_batch_size: ${oc.env:TADS_EPISODE_BS,2}
 
 lora:
   r: 8
