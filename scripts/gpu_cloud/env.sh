@@ -28,7 +28,28 @@ _tag_pick_workspace() {
   done
   echo "$TAG_REPO_ROOT/workspace"
 }
+# Whether the caller pinned it, BEFORE _tag_pick_workspace fills it in.
+if [ -n "${TAG_WORKSPACE:-}" ]; then _TAG_WS_PINNED=1; else _TAG_WS_PINNED=""; fi
 export TAG_WORKSPACE="$(_tag_pick_workspace)"
+
+# A workspace sitting beside the repo (../workspace) is a layout the earlier
+# n9 bootstrap produced, and _tag_pick_workspace does NOT find it — it would
+# silently choose /group-volume/$USER/tag-workspace instead and report every
+# pool as missing, inviting a rebuild of assets that already exist. Adopt it
+# when it is clearly the one in use, but never over an explicit choice.
+if [ -z "$_TAG_WS_PINNED" ] && [ ! -d "$TAG_WORKSPACE/pools" ]; then
+  for _cand in "$TAG_REPO_ROOT/../workspace" "$TAG_REPO_ROOT/workspace"; do
+    if [ -d "$_cand/pools" ]; then
+      TAG_WORKSPACE="$(cd "$_cand" && pwd)"
+      export TAG_WORKSPACE
+      echo "[tag-env] adopting the existing workspace beside the repo:" >&2
+      echo "[tag-env]   $TAG_WORKSPACE" >&2
+      echo "[tag-env] (export TAG_WORKSPACE=... before sourcing to override)" >&2
+      break
+    fi
+  done
+  unset _cand
+fi
 
 # Reuse assets the machine already has rather than re-downloading ~1 GB.
 # First existing candidate wins; the workspace path is the download target.
@@ -129,4 +150,23 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
     echo "[tag-env] gpus      : $(nvidia-smi --query-gpu=name --format=csv,noheader | tr '\n' ',' | sed 's/,$//')"
   fi
   echo "[tag-env] next      : bash scripts/gpu_cloud/bootstrap.sh && python scripts/gpu_cloud/preflight.py"
+
+  # If the shell's cwd belongs to a DIFFERENT git repo than the one this
+  # env.sh came from, every relative command the runbook gives ("git pull",
+  # "bash scripts/...") lands somewhere else. That has already happened once:
+  # the TAG clone sat one level in, and `git pull origin main` run from its
+  # parent updated an unrelated repo while reporting success.
+  if command -v git >/dev/null 2>&1; then
+    _tag_here="$(git -C . rev-parse --show-toplevel 2>/dev/null || true)"
+    _tag_repo="$(git -C "$TAG_REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "$_tag_repo" ] && [ "$_tag_here" != "$_tag_repo" ]; then
+      echo "" >&2
+      echo "[tag-env] WARNING: your shell is NOT inside the TAG checkout." >&2
+      echo "[tag-env]   cwd git root : ${_tag_here:-<not a git repo>}" >&2
+      echo "[tag-env]   TAG git root : $_tag_repo" >&2
+      echo "[tag-env] 'git pull' and 'bash scripts/...' from here will hit the" >&2
+      echo "[tag-env] wrong tree. Run:  cd $_tag_repo" >&2
+    fi
+    unset _tag_here _tag_repo
+  fi
 fi
