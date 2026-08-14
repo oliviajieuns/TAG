@@ -152,7 +152,10 @@ run.
 ```bash
 source scripts/gpu_cloud/env.sh
 bash   scripts/gpu_cloud/bootstrap.sh all7b      # +Qwen2.5-7B (~15 GB), 7B calibration
-export TADS_GATE_REF=$POOLS/clean_ref/delta_hat_7b.pt
+# env.sh already exported TADS_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b.pt.
+# The 7B arms read TADS_GATE_REF_7B, NOT TADS_GATE_REF — the latter is the
+# 0.5B reference, and a single shared variable made picking the wrong
+# backbone's calibration silent.
 export TADS_EPISODE_BS_7B=32
 
 python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml

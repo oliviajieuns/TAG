@@ -166,9 +166,23 @@ step_calibrate_7b() {
   # Delta_hat is a property of THIS backbone's likelihoods, so a 0.5B
   # reference does not transfer — 7B needs its own calibration.
   local out="$POOLS/clean_ref/delta_hat_7b.pt"
+  # Skip only if the artifact is COMPLETE. References written before the
+  # token-loss payload existed look fine on disk but make the span-width
+  # sweep impossible, and silently skipping them means discovering that
+  # after the next 28-minute pass rather than before it.
   if [ -f "$out" ]; then
-    log "7B gate reference already at $out — skipping"
-    return
+    if python - "$out" <<'CHK'
+import sys, torch
+p = torch.load(sys.argv[1], map_location="cpu", weights_only=False)
+sys.exit(0 if "token_true" in p and "token_cf" in p else 1)
+CHK
+    then
+      log "7B gate reference already at $out (with token losses) — skipping"
+      return
+    fi
+    log "7B gate reference at $out predates the token-loss payload;"
+    log "  recomputing so scripts/sweep_gate_config.py can re-derive Δ̂."
+    mv "$out" "$out.notokens.bak"
   fi
   log "calibrating the 7B gate scale on the clean pool"
   TADS_GATE_REF="" python scripts/calibrate_reliability.py --mode tag \
@@ -176,7 +190,10 @@ step_calibrate_7b() {
     --pool "$POOLS/clean_ref/pool.json" \
     --counterfactual "$POOLS/clean_ref/counterfactual.json" \
     --out "$out"
-  log "7B gate reference -> $out   (export TADS_GATE_REF=$out)"
+  # NOT TADS_GATE_REF — that one is the 0.5B reference. env.sh already
+  # defaults TADS_GATE_REF_7B to this path; the echo is just a reminder of
+  # which variable the 7B arms actually read.
+  log "7B gate reference -> $out   (read via TADS_GATE_REF_7B)"
 }
 
 step_calibrate() {
@@ -217,7 +234,7 @@ fi
 if [ "$STEP" = "all7b" ]; then
   echo ""
   echo "Next (7B):"
-  echo "  export TADS_GATE_REF=$POOLS/clean_ref/delta_hat_7b.pt"
+  echo "  # env.sh already set TADS_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b.pt"
   echo "  export TADS_EPISODE_BS_7B=32"
   echo "  python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml"
   echo "  bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml"
