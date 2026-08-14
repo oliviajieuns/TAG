@@ -46,6 +46,21 @@ if [ -f "$OUT" ]; then
   exit 0
 fi
 
+# Resolve the calibration first: a missing gate reference used to surface
+# only at the merge, after every shard had already run.
+if ! python - "$CFG" <<'PRECHK'
+import sys
+sys.path.insert(0, ".")
+from tads.core.utils import load_config
+from tads.pipelines.selection import _resolve_gate_scale
+cfg = load_config(sys.argv[1])
+_resolve_gate_scale((cfg.get("tads") or {}).get("tag") or {})
+PRECHK
+then
+  echo "[gate] calibration reference unusable — not launching shards." >&2
+  exit 1
+fi
+
 echo "[gate] config : $CFG"
 echo "[gate] out    : $OUT"
 echo "[gate] shards : $N (one per GPU)"

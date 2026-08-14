@@ -329,7 +329,7 @@ def test_gate_ref_with_a_different_span_config_is_rejected(tmp_path):
 
 @pytest.mark.parametrize("name", _ARMS_7B)
 def test_7b_arms_share_training_pins(name, monkeypatch):
-    for v in ("TADS_EPISODE_BS_7B", "TADS_GRAD_ACCUM_7B"):
+    for v in ("TADS_EPISODE_BS_7B", "TADS_GRAD_ACCUM_7B", "TADS_BATCH_7B"):
         monkeypatch.delenv(v, raising=False)
     cfg = _load(name)
     assert cfg["train_epochs"] == 3, "plan §5.3 pre-registers 3 epochs at 7B"
@@ -341,13 +341,17 @@ def test_7b_arms_share_training_pins(name, monkeypatch):
     # effective batch = batch_size x grad_accum x world_size, held at 128
     # with the default one-arm-per-GPU layout (world_size 1).
     assert int(cfg["batch_size"]) * int(cfg["grad_accum"]) == 128
+    # Qwen2.5's 151643-token vocab makes the fp32 logits tensor ~4.7x a
+    # Llama-2 one, and full_ft.yaml's 8 OOMs on an 80GB H100 mid-epoch.
+    assert int(cfg["batch_size"]) <= 4
 
 
 @pytest.mark.parametrize("name", _ARMS_7B)
 def test_7b_ddp_override_keeps_the_effective_batch(name, monkeypatch):
     """One arm across 4 DDP ranks must reach the same effective batch as one
     arm per GPU, or the two layouts are not comparable."""
-    monkeypatch.setenv("TADS_GRAD_ACCUM_7B", "4")
+    monkeypatch.delenv("TADS_BATCH_7B", raising=False)
+    monkeypatch.setenv("TADS_GRAD_ACCUM_7B", "8")
     cfg = _load(name)
     assert int(cfg["batch_size"]) * int(cfg["grad_accum"]) * 4 == 128
 
@@ -407,3 +411,14 @@ def test_case_variant_resolution_still_works(tmp_path):
 
     (tmp_path / "MyModel").mkdir()
     assert _resolve_local_path(str(tmp_path / "mymodel")) == str(tmp_path / "MyModel")
+
+
+def test_7b_gate_ref_is_backbone_specific(monkeypatch):
+    """One shared TADS_GATE_REF for a per-backbone artifact meant a 7B run
+    silently picked up the 0.5B reference — Delta_hat is a property of a
+    particular model's likelihoods, so that mis-scales every gate value."""
+    monkeypatch.setenv("TADS_GATE_REF", "/ref/delta_hat_05b.pt")
+    monkeypatch.setenv("TADS_GATE_REF_7B", "/ref/delta_hat_7b.pt")
+    for name in ("tag_7b", "tag_static_7b"):
+        assert _load(name)["tads"]["tag"]["gate_ref_file"] == "/ref/delta_hat_7b.pt"
+    assert _load("light_tag_05b")["tads"]["tag"]["gate_ref_file"] == "/ref/delta_hat_05b.pt"

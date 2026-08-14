@@ -32,10 +32,18 @@ train_epochs: 3
 # one per GPU, keeps every card busy. DDP replicates the full model, grads
 # and optimizer per rank anyway, so per-GPU memory is identical either way.
 #
-# effective batch = batch_size(8) x grad_accum x world_size, held at 128:
-#   one arm per GPU  (world_size 1) -> grad_accum 16   <- default
-#   one arm on 4 DDP (world_size 4) -> grad_accum 4    -> export TADS_GRAD_ACCUM_7B=4
-grad_accum: ${oc.env:TADS_GRAD_ACCUM_7B,16}
+# full_ft.yaml's batch_size: 8 was tuned for Llama-2-7B, whose vocab is 32k.
+# Qwen2.5's is 151643 — 4.7x — and the loss materialises a
+# batch x seq x vocab logits tensor in fp32: at 8 x 512 that is ~9 GB for one
+# allocation, on top of ~47 GB of weights, grads and 8-bit optimizer state.
+# Measured: it OOMs on an 80 GB H100 mid-epoch. 4 is the largest that fits
+# with headroom; halve again if a longer max_seq_len is ever used.
+batch_size: ${oc.env:TADS_BATCH_7B,4}
+#
+# effective batch = batch_size(4) x grad_accum x world_size, held at 128:
+#   one arm per GPU  (world_size 1) -> grad_accum 32   <- default
+#   one arm on 4 DDP (world_size 4) -> grad_accum 8    -> export TADS_GRAD_ACCUM_7B=8
+grad_accum: ${oc.env:TADS_GRAD_ACCUM_7B,32}
 
 # Forward-only scoring batch. 7B activations are ~14x the 0.5B ones, so the
 # default is lower than the 0.5B arm's H100 setting. Raise it once, in the

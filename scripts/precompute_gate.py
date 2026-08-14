@@ -135,6 +135,30 @@ def _load_everything(cfg, *, want_model: bool):
     return tokenizer, pool, cf_datasets, model, tag_cfg
 
 
+def preflight_scale(cfg) -> None:
+    """Resolve the calibration BEFORE spending any forward passes.
+
+    The scale is only needed at merge time, so the first version resolved it
+    there — after every shard had run. A missing or wrong-backbone reference
+    therefore cost the full 1+K pool forwards on every GPU before failing,
+    which is exactly the mistake this whole script exists to avoid paying
+    twice. Resolving it up front is free and turns an 18-minute failure into
+    an instant one.
+    """
+    from tads.pipelines.selection import _resolve_gate_scale
+
+    tag_cfg = (cfg.get("tads") or {}).get("tag") or {}
+    scale = _resolve_gate_scale(tag_cfg)   # raises with the fix if absent
+    if scale is None:
+        logger.warning(
+            "no gate_scale and no gate_ref_file: the gate will self-calibrate "
+            "IN-POOL, which makes G depend on how dirty its neighbours are. "
+            "Diagnostics only — not for a reported run.",
+        )
+    else:
+        logger.info("calibration resolves to s=%.6g", scale)
+
+
 def run_shard(args, cfg) -> None:
     import torch
     from torch.utils.data import Subset
@@ -321,6 +345,9 @@ def main() -> None:
     )
     from tads.core.utils import load_config
     cfg = load_config(args.config)
+
+    # Both paths need the calibration to exist; check before any GPU work.
+    preflight_scale(cfg)
 
     if args.merge:
         run_merge(args, cfg)
