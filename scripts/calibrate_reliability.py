@@ -79,6 +79,10 @@ def main() -> None:
     p.add_argument("--target-pct", type=float, default=0.10)
     p.add_argument("--target-q", type=float, default=0.8)
     p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--no-token-losses", action="store_true",
+                   help="tag mode: omit the per-token NLLs from the artifact. "
+                        "Saves disk, but makes the W/tau sweep cost a full "
+                        "re-forward per sweep point.")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -171,11 +175,12 @@ def main() -> None:
         s = gatelib.calibrate_gate_scale(
             stat, target_pct=args.target_pct, target_q=args.target_q,
         )
-        torch.save(
-            {
+        payload = {
                 "delta_hat": stat.cpu(),
                 "delta_bar": comp["delta_bar"].cpu(),
                 "delta_min": comp["delta_min"].cpu(),
+                "n_spans": comp["n_spans"].cpu(),
+                "n_common": comp["n_common"].cpu(),
                 "scale": s,
                 "target_pct": args.target_pct,
                 "target_q": args.target_q,
@@ -183,9 +188,18 @@ def main() -> None:
                 "model_path": str(cfg["model_path"]),
                 "pool": str(args.pool),
                 "counterfactual": str(args.counterfactual),
-            },
-            out,
-        )
+        }
+        if not args.no_token_losses:
+            # Keeping the per-token NLLs (fp16) makes the span-width sweep
+            # FREE: Delta_hat can be re-derived for any W / tau / tail_mode
+            # with no forward pass. Two 14-minute pool passes per sweep point
+            # is otherwise the difference between choosing W on evidence and
+            # guessing it. Costs roughly 2 x n x T_max bytes.
+            payload["token_true"] = tok["orig"].to(torch.float16)
+            payload["n_true"] = n_tok["orig"]
+            payload["token_cf"] = [tok["cf"].to(torch.float16)]
+            payload["n_cf"] = [n_tok["cf"]]
+        torch.save(payload, out)
         frac_pos = float((stat > 0).float().mean().item())
         logger.info(
             "Saved clean-reference Δ̂ (n=%d, %.1f%% positive; Δ̄ mean %.4f, "
