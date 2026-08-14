@@ -98,6 +98,13 @@ _TAG_M7B="$(_tag_first_existing config.json \
   /group-volume/models/Qwen2.5-7B-Instruct)"
 export MODEL_PATH_QWEN25_7B="${_TAG_M7B:-$TAG_WORKSPACE/models/qwen2.5-7b}"
 
+_TAG_ML2="$(_tag_first_existing config.json \
+  "${MODEL_PATH_LLAMA2_7B:-/nonexistent}" \
+  "$TAG_WORKSPACE/models/llama2-7b" \
+  /group-volume/nait-models/Llama-2-7b-hf \
+  /group-volume/models/Llama-2-7b-hf)"
+export MODEL_PATH_LLAMA2_7B="${_TAG_ML2:-$TAG_WORKSPACE/models/llama2-7b}"
+
 export POOLS="${POOLS:-$TAG_WORKSPACE/pools}"
 
 _TAG_RAW="$(_tag_first_existing "" \
@@ -140,6 +147,33 @@ export TAG_GATE_CACHE_PREFIX="${TAG_GATE_CACHE_PREFIX:-$POOLS/composite20/tag_ga
 export TAG_CLEAN_POOL="${TAG_CLEAN_POOL:-$POOLS/clean_ref/pool.json}"
 export TAG_CLEAN_CF="${TAG_CLEAN_CF:-$POOLS/clean_ref/counterfactual.json}"
 export TAG_GATE_CACHE_CLEAN="${TAG_GATE_CACHE_CLEAN:-$POOLS/clean_ref/tag_gate_qwen2.5-7b_prefix.pt}"
+
+# ---- Table 2 row: LLaMA-2-7B + Alpaca-GPT4 at rho=10% -----------------------
+# A DIFFERENT experiment from the lowq grid above, and the difference is easy
+# to lose: ALPACA_DATA_FILES points at the corrupted composite20 pool, so a
+# Table 2 row that inherited it would train on corrupted data and report a
+# number nobody could explain. main_7b/llama2/tag_10.yaml therefore pins its
+# pool to TAG_MAIN_POOL, and scripts/check_row_pair.py refuses a pool whose
+# path looks corrupted or that differs from the legacy row's.
+#
+# The pool carries its own counterfactual, emitted alongside it so the two are
+# index-aligned by construction:
+#   python scripts/make_corrupted_pool.py --input "$ALPACA_GPT4_JSON" \
+#       --out-dir $POOLS/alpaca_gpt4 --emit-counterfactual --seed 42
+export ALPACA_GPT4_JSON="${ALPACA_GPT4_JSON:-$(_tag_first_existing "" \
+  "$TAG_WORKSPACE/datasets/alpaca_gpt4.json" \
+  "/group-volume/${USER:-nobody}/datasets/alpaca_gpt4.json" \
+  /group-volume/datasets/alpaca_gpt4/data/train.json \
+  /group-volume/IT-datasets/alpaca_gpt4/data/train.json)}"
+export TAG_MAIN_POOL="${TAG_MAIN_POOL:-$POOLS/alpaca_gpt4/pool.json}"
+export TAG_MAIN_CF="${TAG_MAIN_CF:-$POOLS/alpaca_gpt4/counterfactual.json}"
+# Gate calibration is BACKBONE-specific and, for this row, should not be fit on
+# the pool it gates: pool == reference makes the floor rate exactly
+# target_zero_rate by construction rather than measured. Fit it on a different
+# clean corpus (alpaca-cleaned is on this box) and report the floor rate the
+# gate actually lands at.
+export TAG_GATE_REF_LLAMA2="${TAG_GATE_REF_LLAMA2:-$POOLS/clean_ref/delta_hat_llama2_prefix.pt}"
+export TAG_GATE_CACHE_LLAMA2="${TAG_GATE_CACHE_LLAMA2:-$POOLS/alpaca_gpt4/tag_gate_llama2-7b_prefix.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub
 # fallback is how you end up training on a different pool than you think.
@@ -238,6 +272,7 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] workspace : $TAG_WORKSPACE"
   echo "[tag-env] model 0.5b: $MODEL_PATH_QWEN25_05B  [$(_tag_mark "$MODEL_PATH_QWEN25_05B/config.json")]"
   echo "[tag-env] model 7b  : $MODEL_PATH_QWEN25_7B  [$(_tag_mark "$MODEL_PATH_QWEN25_7B/config.json")]"
+  echo "[tag-env] llama2-7b : $MODEL_PATH_LLAMA2_7B  [$(_tag_mark "$MODEL_PATH_LLAMA2_7B/config.json")]"
   case "$MODEL_PATH_QWEN25_7B" in
     *Instruct*|*instruct*)
       echo "[tag-env] NOTE: the 7B checkpoint is an INSTRUCT model, not a base"
@@ -247,7 +282,8 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
       ;;
   esac
   echo "[tag-env] raw corpus: $ALPACA_RAW_JSON  [$(_tag_mark "$ALPACA_RAW_JSON")]"
-  echo "[tag-env] pool      : $ALPACA_DATA_FILES  [$(_tag_mark "$ALPACA_DATA_FILES")]"
+  echo "[tag-env] lowq pool : $ALPACA_DATA_FILES  [$(_tag_mark "$ALPACA_DATA_FILES")]"
+  echo "[tag-env] table2 pool: $TAG_MAIN_POOL  [$(_tag_mark "$TAG_MAIN_POOL")]"
   echo "[tag-env] gate ref 0.5b: $TAG_GATE_REF  [$(_tag_mark "$TAG_GATE_REF")]"
   echo "[tag-env] gate ref 7b  : $TAG_GATE_REF_7B  [$(_tag_mark "$TAG_GATE_REF_7B")]"
   echo "[tag-env] outputs   : $OUTPUT_ROOT"

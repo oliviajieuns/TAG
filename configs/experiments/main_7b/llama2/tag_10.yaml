@@ -1,0 +1,62 @@
+# Table 2 row: TAG at 10% on LLaMA-2-7B + Alpaca-GPT4.
+#
+# This config exists to differ from main_7b/llama2/legacy_10.yaml — the TADS
+# row — by EXACTLY the reliability gate. Everything the two share is shared by
+# inheriting the same files in the same order and repeating nothing:
+#
+#     s_i = G_i . R_i . (1 + lambda . a~_i)        (TAG, paper Eq. 1)
+#     s_i =       R_i . (1 + lambda . a~_i)        (TADS, paper Eq. 10)
+#
+# so the difference between the two rows is attributable to G and to nothing
+# else. scripts/check_row_pair.py checks that mechanically — run it before
+# launching, and again before putting the numbers in the paper.
+#
+# The three optimizer overrides at the bottom are NOT tuning for TAG. They are
+# copied verbatim from legacy_10.yaml, which set them for the TADS row; if the
+# gated arm ran on the base defaults instead, the row pair would differ by the
+# optimizer as well as by G. When legacy_10.yaml changes them, this file has to
+# change with it — check_row_pair.py fails loudly if they drift apart.
+defaults:
+  - configs/base.yaml
+  - configs/methods/tag.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: main_7b/llama2/tag_10
+selection_ratio: 0.1
+train_epochs: 3
+
+# The pool is pinned, not inherited. base.yaml reads ALPACA_DATA_FILES, and
+# scripts/gpu_cloud/env.sh points that at the CORRUPTED composite20 pool for
+# the lowq grid — so launching this row from a lowq shell would silently train
+# Table 2 on corrupted data and produce a number nobody could explain. It reads
+# its own variable, and check_row_pair.py refuses a pool whose path looks
+# corrupted or that differs from the legacy row's.
+data_files: ${oc.env:TAG_MAIN_POOL,}
+
+selection:
+  tag:
+    # Index-aligned counterfactual for THIS pool. A counterfactual built for
+    # another corpus would pair each response with an unrelated instruction by
+    # accident rather than by design, which is the one thing Eq. 2 cannot
+    # tolerate.
+    counterfactual_data_files: ${oc.env:TAG_MAIN_CF,}
+    # Empty: the TADS row has no dedup constraint, so threading one in here
+    # would make the pair differ by more than G.
+    dedup_clusters_file: ""
+    # The measured-best support statistic (docs/tag-paper-deltas.md A6): the
+    # contrast restricted to the response opening. The span minimum of Eq. 5
+    # is off — measured AP 0.334 against a 0.304 base on the corrupted pool,
+    # and because Eq. 6 takes a minimum it drags the prefix statistic down.
+    prefix_tokens: 32
+    tail_mode: none
+    # BACKBONE-specific. Delta_hat is a property of a particular model's
+    # likelihoods; the Qwen reference does not transfer to LLaMA-2.
+    gate_ref_file: ${oc.env:TAG_GATE_REF_LLAMA2,}
+    gate_cache_file: ${oc.env:TAG_GATE_CACHE_LLAMA2,}
+    store_token_losses: true
+
+# --- copied verbatim from legacy_10.yaml; see the note at the top ---
+use_8bit_optimizer: false
+warmup_ratio: 0.06
+gradient_clip: 0.5
