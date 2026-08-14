@@ -69,6 +69,10 @@ def main() -> None:
                         "recorded in the cache identity)")
     p.add_argument("--ks", default="0.1",
                    help="comma-separated selection ratios for dirty@K")
+    p.add_argument("--clean-ref", default=None,
+                   help="clean-reference .pt — enables the distribution-shift "
+                        "check, which compares the pool's CLEAN records "
+                        "against the pool s and mu(M) were calibrated on")
     args = p.parse_args()
 
     import torch
@@ -235,6 +239,55 @@ def main() -> None:
         print("            clean's: a type that only separates in 'mean G' but")
         print("            not in 'G/c' is caught by the heuristic, not Eqs. 2-6.")
 
+    d_bar = cache.get("delta_bar")
+    d_min = cache.get("delta_min")
+    d_bar = d_bar.float().view(-1) if d_bar is not None else None
+    d_min = d_min.float().view(-1) if d_min is not None else None
+
+    # ---- is the calibration even describing this pool? ------------------
+    # s and mu(M) are quantiles of the CLEAN REFERENCE's Delta_hat. They only
+    # mean anything on the candidate pool if the two pools' clean records are
+    # drawn from the same distribution. If they are not, every gate value is
+    # mis-scaled while every rank-based diagnostic above still looks fine —
+    # which is exactly the kind of error that survives review. preflight
+    # cannot check this when the manifests predate corpus recording, so it is
+    # checked here, against the statistic itself rather than against a
+    # provenance string.
+    if args.clean_ref and d_bar is not None:
+        ref = torch.load(args.clean_ref, map_location="cpu", weights_only=False)
+        rb = ref.get("delta_bar")
+        if rb is None:
+            print("(--clean-ref has no delta_bar; skipping the shift check)\n")
+        else:
+            rb = rb.float().view(-1)
+            pb = d_bar[~dirty]  # the pool's CLEAN records only
+            print("Calibration validity — pool's CLEAN records vs the reference")
+            print(f"{'':<12} {'n':>7} {'mean':>9} {'P10':>9} {'P50':>9} {'P90':>9}")
+            for nm, v in (("reference", rb), ("pool clean", pb)):
+                print(f"{nm:<12} {v.numel():>7} {float(v.mean()):>9.4f} "
+                      f"{float(torch.quantile(v, 0.10)):>9.4f} "
+                      f"{float(torch.quantile(v, 0.50)):>9.4f} "
+                      f"{float(torch.quantile(v, 0.90)):>9.4f}")
+            shift = float(pb.mean() - rb.mean())
+            spread = float(rb.std())
+            print(f"  mean shift = {shift:+.4f}  ({abs(shift)/max(spread,1e-9):.2f}"
+                  f" reference SDs)")
+            if abs(shift) > 0.5 * spread:
+                print()
+                print("  ** The two pools' CLEAN records do not match. s and mu(M)")
+                print("     were fit on the reference, so on this pool the gate is")
+                print("     calibrated to the wrong distribution: the intended")
+                print("     target_zero_rate does not hold and G's absolute values")
+                print("     are not interpretable. Rank-based numbers above are")
+                print("     unaffected; the gate the ARMS use is.")
+                print("     Check both pools came from the same corpus and the same")
+                print("     counterfactual construction:")
+                print(f"       reference pool: {ref.get('pool')}")
+                print(f"       reference cf  : {ref.get('counterfactual')}")
+                ident = cache.get("identity") or {}
+                print(f"       gate pool     : {ident.get('pool_files')}")
+            print()
+
     # ---- span ablation: does Delta^min earn its place over Delta_bar? ----
     # This IS the paper's justification for Eqs. 4-5. The stated argument is
     # that a localized corruption (a wrong final answer in an otherwise
@@ -242,12 +295,8 @@ def main() -> None:
     # That is a testable claim and the cache already holds both statistics,
     # so it gets measured rather than assumed. Per corruption type, AP of
     # each statistic as a detector of THAT type against clean only.
-    d_bar = cache.get("delta_bar")
-    d_min = cache.get("delta_min")
     if d_bar is None or d_min is None:
         return
-    d_bar = d_bar.float().view(-1)
-    d_min = d_min.float().view(-1)
     clean_idx = by_type.get("clean") or []
     if not clean_idx:
         return
