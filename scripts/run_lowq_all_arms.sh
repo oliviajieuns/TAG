@@ -41,6 +41,28 @@ if [ -z "${TAG_WORKSPACE:-}" ]; then
   exit 2
 fi
 
+# Kill every child on Ctrl-C / SIGTERM. Without this a 7B arm that is
+# interrupted — or one that hangs tearing down its CUDA context after an OOM,
+# which is the common case — is left holding tens of GB on its GPU with no
+# obvious owner, and the next launch OOMs for reasons that look unrelated.
+_pids_all=()
+_cleanup() {
+  trap '' TERM INT
+  echo "" >&2
+  echo "[cleanup] stopping ${#_pids_all[@]} child process(es)..." >&2
+  for _p in ${_pids_all[@]+"${_pids_all[@]}"}; do
+    kill "$_p" 2>/dev/null || true
+  done
+  # Give CUDA a moment to release, then insist.
+  sleep 5
+  for _p in ${_pids_all[@]+"${_pids_all[@]}"}; do
+    kill -9 "$_p" 2>/dev/null || true
+  done
+  echo "[cleanup] done; check nvidia-smi before relaunching." >&2
+  exit 130
+}
+trap _cleanup TERM INT
+
 N_GPU="$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l)"
 [ "$N_GPU" -eq 0 ] && { echo "[error] no GPUs visible" >&2; exit 2; }
 
@@ -91,12 +113,13 @@ for arm in "${ARMS[@]}"; do
       --override "seed=${SEED}" \
       > "$log" 2>&1 &
   pids+=($!)
+  _pids_all+=($!)
   names+=("$arm")
   i=$((i+1))
 done
 
 echo "[arms] ${#pids[@]} run(s) launched; waiting..."
-fail=0
+n_fail=0
 for idx in "${!pids[@]}"; do
   if wait "${pids[$idx]}"; then
     echo "[arms] OK    ${names[$idx]}"
@@ -104,11 +127,17 @@ for idx in "${!pids[@]}"; do
     echo "[arms] FAILED ${names[$idx]} — see $LOGDIR/${names[$idx]}.log" >&2
     # Surface the actual error rather than making the user open the log.
     tail -n 15 "$LOGDIR/${names[$idx]}.log" | sed 's/^/         | /' >&2
-    fail=1
+    n_fail=$((n_fail+1))
   fi
 done
 
 echo ""
-echo "[arms] seed $SEED done (fail=$fail)"
+echo "[arms] seed $SEED done — ${n_fail}/${#pids[@]} arm(s) failed"
 echo "       run dirs: $OUTPUT_ROOT/lowq/*/runs/*seed${SEED}"
-exit $fail
+if [ "$n_fail" -gt 0 ]; then
+  echo "[arms] NOTE: a failed arm can leave a process holding GPU memory while" >&2
+  echo "[arms]       its CUDA context tears down. Check nvidia-smi before" >&2
+  echo "[arms]       relaunching; kill leftovers with:" >&2
+  echo "[arms]         pkill -u \$USER -f 'tads\\.train'" >&2
+fi
+exit $([ "$n_fail" -gt 0 ] && echo 1 || echo 0)

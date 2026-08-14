@@ -68,12 +68,35 @@ echo "[gate] shards : $N (one per GPU)"
 LOGDIR="$TAG_WORKSPACE/logs/gate"
 mkdir -p "$LOGDIR"
 
+# Kill every child on Ctrl-C / SIGTERM. Without this a 7B arm that is
+# interrupted — or one that hangs tearing down its CUDA context after an OOM,
+# which is the common case — is left holding tens of GB on its GPU with no
+# obvious owner, and the next launch OOMs for reasons that look unrelated.
+_pids_all=()
+_cleanup() {
+  trap '' TERM INT
+  echo "" >&2
+  echo "[cleanup] stopping ${#_pids_all[@]} child process(es)..." >&2
+  for _p in ${_pids_all[@]+"${_pids_all[@]}"}; do
+    kill "$_p" 2>/dev/null || true
+  done
+  # Give CUDA a moment to release, then insist.
+  sleep 5
+  for _p in ${_pids_all[@]+"${_pids_all[@]}"}; do
+    kill -9 "$_p" 2>/dev/null || true
+  done
+  echo "[cleanup] done; check nvidia-smi before relaunching." >&2
+  exit 130
+}
+trap _cleanup TERM INT
+
 pids=()
 for i in $(seq 0 $((N - 1))); do
   CUDA_VISIBLE_DEVICES="$i" python scripts/precompute_gate.py \
     --config "$CFG" --out "$OUT" --shard "$i" --num-shards "$N" \
     > "$LOGDIR/shard$i.log" 2>&1 &
   pids+=($!)
+  _pids_all+=($!)
   echo "[gate] gpu$i -> shard $i  ($LOGDIR/shard$i.log)"
 done
 
