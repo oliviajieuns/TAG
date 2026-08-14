@@ -70,17 +70,31 @@ LOGDIR="$TAG_WORKSPACE/logs/arms_${SCALE}_seed${SEED}"
 mkdir -p "$LOGDIR"
 
 # A shared gate cache turns N redundant gate computations into zero: every
-# TAG arm here reads the same file. Without it each arm recomputes the gate
-# on its own GPU, which at 7B is 1+K full pool forwards per arm.
-if [ -n "${TAG_GATE_CACHE:-}" ]; then
-  if [ -f "$TAG_GATE_CACHE" ]; then
-    echo "[arms] shared gate cache: $TAG_GATE_CACHE"
+# TAG arm reads a file that was computed once. Without it each arm recomputes
+# the gate on its own GPU, which at 7B is 1+K full pool forwards per arm.
+#
+# Which variable holds that file is PER ARM — the prefix and ablation arms
+# each have their own G and so their own cache — so checking only
+# TAG_GATE_CACHE stayed silent for exactly the arms most likely to be
+# mis-wired. Read the variable name out of each config being launched.
+for arm in "${ARMS[@]}"; do
+  cfg="configs/experiments/lowq/${arm}.yaml"
+  [ -f "$cfg" ] || continue
+  var="$(sed -n 's/.*gate_cache_file:[[:space:]]*\${oc\.env:\([A-Z_0-9]*\).*/\1/p' "$cfg" | head -1)"
+  [ -n "$var" ] || continue
+  path="${!var:-}"
+  if [ -z "$path" ]; then
+    echo "[arms] WARNING: $arm reads \$$var, which is unset — it will compute" >&2
+    echo "[arms]          the gate itself (1+K pool forwards). source env.sh?" >&2
+  elif [ -f "$path" ]; then
+    echo "[arms] gate cache: $arm <- \$$var = $path"
   else
-    echo "[arms] WARNING: TAG_GATE_CACHE=$TAG_GATE_CACHE does not exist." >&2
-    echo "[arms]          Each TAG arm will recompute the gate separately." >&2
-    echo "[arms]          Run: bash scripts/precompute_gate.sh <config>" >&2
+    echo "[arms] WARNING: $arm reads \$$var = $path — that file does not exist." >&2
+    echo "[arms]          It will recompute the gate. Run:" >&2
+    echo "[arms]            bash scripts/precompute_gate.sh $cfg \$$var" >&2
   fi
-fi
+done
+unset arm cfg var path
 
 echo "[arms] scale=$SCALE seed=$SEED gpus=$N_GPU"
 if [ "$SCALE" = "7b" ]; then
