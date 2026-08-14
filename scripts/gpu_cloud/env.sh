@@ -167,38 +167,53 @@ export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-$TAG_WORKSPACE/eval-results}"
 # TAG_BENCH_ROOTS prepends more roots without editing this file.
 _TAG_BENCH_ROOTS="${TAG_BENCH_ROOTS:-} $TAG_WORKSPACE/datasets /group-volume/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/${USER:-nobody}/datasets"
 
-_tag_bench_dir() {  # usage: _tag_bench_dir VARNAME subdir [subdir...]
-  local var="$1"; shift
+_tag_has() {  # _tag_has <dir> <glob>[|<glob>...] — does the dir hold the goods?
+  local d="$1" rest="$2" g
+  [ -d "$d" ] || return 1
+  # Split on | by hand. Unquoted word-splitting would ALSO pathname-expand the
+  # patterns against the current directory before compgen ever sees them.
+  while [ -n "$rest" ]; do
+    g="${rest%%|*}"
+    if [ "$g" = "$rest" ]; then rest=""; else rest="${rest#*|}"; fi
+    compgen -G "$d/$g" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
+_tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob subdir [subdir...]
+  local var="$1" marker="$2"; shift 2
   local cur="${!var:-}"
-  # An explicit export wins — but only if it exists, so a stale value copied
-  # between machines does not shadow a corpus that IS here.
-  [ -n "$cur" ] && [ -d "$cur" ] && { echo "$cur"; return; }
+  # An explicit export wins — but only if it holds the files the evaluator
+  # opens. discovered_env.sh sets MMLU_DATA_DIR to the mmlu/ parent on this
+  # cluster while the parquet shards are in mmlu/all, and honouring that
+  # blindly produced "No test-*.parquet found" an hour into eval. A path that
+  # does not check out falls through to the probe below.
+  _tag_has "$cur" "$marker" && { echo "$cur"; return; }
   # Spelling is the OUTER loop: the more specific one (mmlu/all) must beat a
-  # bare mmlu found under an earlier root, or MMLU resolves to a directory
-  # whose parquet files are one level down and the evaluator finds nothing.
+  # bare mmlu found under an earlier root.
   local root sub
   for sub in "$@"; do
     for root in $_TAG_BENCH_ROOTS; do
-      # Non-empty, not merely present: an empty directory left behind by an
-      # interrupted download would otherwise shadow the real corpus.
-      if [ -d "$root/$sub" ] && [ -n "$(ls -A "$root/$sub" 2>/dev/null)" ]; then
-        echo "$root/$sub"; return
-      fi
+      _tag_has "$root/$sub" "$marker" && { echo "$root/$sub"; return; }
     done
   done
-  # Nothing found: report the preferred spelling under the download target so
-  # the message names a path the download scripts will actually create.
+  # Nothing usable. Keep an explicit export if there was one — the operator
+  # meant something by it and check_eval_data.py will say what is wrong —
+  # otherwise name the path the download scripts create.
   echo "${cur:-$TAG_WORKSPACE/datasets/$1}"
 }
-export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR mmlu/all mmlu)"
-export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR mmlu_pro mmlu-pro)"
-export GSM8K_DATA_DIR="$(_tag_bench_dir GSM8K_DATA_DIR gsm8k)"
-export SVAMP_DATA_DIR="$(_tag_bench_dir SVAMP_DATA_DIR svamp SVAMP)"
-export HUMANEVAL_DATA_DIR="$(_tag_bench_dir HUMANEVAL_DATA_DIR human-eval humaneval human_eval)"
-export MBPP_DATA_DIR="$(_tag_bench_dir MBPP_DATA_DIR mbpp)"
-export TYDIQA_DATA_DIR="$(_tag_bench_dir TYDIQA_DATA_DIR tydiqa tydi_qa)"
-export XQUAD_DATA_DIR="$(_tag_bench_dir XQUAD_DATA_DIR xquad)"
-export BBH_DATA_DIR="$(_tag_bench_dir BBH_DATA_DIR bbh BIG-Bench-Hard bbh/bbh)"
+
+# The marker globs mirror the loaders in tag/evals/*.py; scripts/check_eval_data.py
+# holds the full expectation and explains any mismatch.
+export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR 'test-*.parquet' mmlu/all mmlu)"
+export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR 'test-*.parquet' mmlu_pro mmlu-pro)"
+export GSM8K_DATA_DIR="$(_tag_bench_dir GSM8K_DATA_DIR 'main/test*.parquet' gsm8k)"
+export SVAMP_DATA_DIR="$(_tag_bench_dir SVAMP_DATA_DIR 'test*.parquet' svamp SVAMP)"
+export HUMANEVAL_DATA_DIR="$(_tag_bench_dir HUMANEVAL_DATA_DIR 'HumanEval.jsonl.gz' human-eval humaneval human_eval)"
+export MBPP_DATA_DIR="$(_tag_bench_dir MBPP_DATA_DIR 'sanitized/test-*.parquet' mbpp)"
+export TYDIQA_DATA_DIR="$(_tag_bench_dir TYDIQA_DATA_DIR 'validation*.parquet|validation*.json*|data/validation*.parquet' tydiqa tydi_qa)"
+export XQUAD_DATA_DIR="$(_tag_bench_dir XQUAD_DATA_DIR 'xquad.*.json' xquad)"
+export BBH_DATA_DIR="$(_tag_bench_dir BBH_DATA_DIR '*.json|*/*.json' bbh BIG-Bench-Hard)"
 
 # Forward-only batch size for the pool scoring passes. The config default
 # (_shared_7b.yaml: ${oc.env:TAG_EPISODE_BS_7B,8}) is sized for a small GPU,
@@ -245,7 +260,9 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
                humaneval:HUMANEVAL_DATA_DIR tydiqa:TYDIQA_DATA_DIR \
                xquad:XQUAD_DATA_DIR; do
     _b="${_pair%%:*}"; _v="${_pair##*:}"
-    if [ -d "${!_v}" ]; then _tag_have="$_tag_have $_b"
+    # Same content test the resolution used: a directory that exists but
+    # holds no usable split is missing as far as eval is concerned.
+    if [ -n "${!_v}" ] && [ -d "${!_v}" ]; then _tag_have="$_tag_have $_b"
     else _tag_missing="$_tag_missing $_b"; fi
   done
   echo "[tag-env] benchmarks:${_tag_have:- none} found"
@@ -257,6 +274,7 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
     echo "[tag-env]   run: bash scripts/gpu_cloud/n9_discover.sh --write"
     echo "[tag-env]   Otherwise fetch it with scripts/download_<bench>.sh."
   fi
+  echo "[tag-env]   verify before a run: python scripts/check_eval_data.py"
   # The resolution above picks between several spellings per benchmark, and
   # picking the wrong one fails deep inside eval rather than here.
   if [ -n "${TAG_ENV_VERBOSE:-}" ]; then

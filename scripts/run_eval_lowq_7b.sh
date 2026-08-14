@@ -40,27 +40,11 @@ if [ -z "${OUTPUT_ROOT:-}" ] || [ -z "${EVAL_RESULTS_ROOT:-}" ]; then
   exit 2
 fi
 
-# Refuse to start rather than fail one benchmark deep into a 7B eval.
-_missing=""
-IFS=',' read -r -a _benches <<< "$BENCHMARKS"
-for b in "${_benches[@]}"; do
-  case "$b" in
-    mmlu)      d="$MMLU_DATA_DIR" ;;
-    gsm8k)     d="$GSM8K_DATA_DIR" ;;
-    humaneval) d="$HUMANEVAL_DATA_DIR" ;;
-    tydiqa)    d="$TYDIQA_DATA_DIR" ;;
-    bbh)       d="$BBH_DATA_DIR" ;;
-    mbpp)      d="$MBPP_DATA_DIR" ;;
-    svamp)     d="$SVAMP_DATA_DIR" ;;
-    xquad)     d="$XQUAD_DATA_DIR" ;;
-    mmlu_pro)  d="$MMLU_PRO_DATA_DIR" ;;
-    *)         d="" ;;
-  esac
-  [ -n "$d" ] && [ ! -d "$d" ] && _missing="$_missing $b($d)"
-done
-if [ -n "$_missing" ]; then
-  echo "[eval] benchmark data missing:$_missing" >&2
-  echo "[eval] fetch it (scripts/download_*.sh) or drop it from BENCHMARKS." >&2
+# Refuse to start rather than fail one benchmark deep into a 7B eval. The
+# check is on the FILES each evaluator opens, not on the directory existing —
+# MMLU's shards live under all/ on some mirrors and directly in the dir on
+# others, and pointing at the wrong one only surfaces an hour in.
+if ! python scripts/check_eval_data.py --benchmarks "$BENCHMARKS"; then
   exit 2
 fi
 
