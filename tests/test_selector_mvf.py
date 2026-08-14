@@ -217,3 +217,76 @@ def test_mvf_stale_cache_size_raises(tiny_model):
                 "eta": 0.5, "gamma": 1.0, "eps": 0.01,
             },
         )
+
+
+class _VarLenPool(torch.utils.data.Dataset):
+    """Right-padded records of different real lengths — the shape the crop
+    and the length-sorted batching exist for. A fixed-length fixture would
+    pass either way."""
+
+    def __init__(self, n=13, T=24, vocab=96, seed=0):
+        g = torch.Generator().manual_seed(seed)
+        self.input_ids = torch.zeros(n, T, dtype=torch.long)
+        self.attention_mask = torch.zeros(n, T, dtype=torch.long)
+        self.labels = torch.full((n, T), -100, dtype=torch.long)
+        for i in range(n):
+            L = 6 + (i * 5) % (T - 6)
+            p = max(2, L // 3)
+            ids = torch.randint(0, vocab, (L,), generator=g)
+            self.input_ids[i, :L] = ids
+            self.attention_mask[i, :L] = 1
+            self.labels[i, p:L] = ids[p:]
+
+    def __len__(self):
+        return self.input_ids.size(0)
+
+    def __getitem__(self, i):
+        return {
+            "input_ids": self.input_ids[i],
+            "attention_mask": self.attention_mask[i],
+            "labels": self.labels[i],
+        }
+
+
+def test_length_sorted_scoring_returns_dataset_order(tiny_model):
+    """The pool pass runs batches longest-first; every per-sample vector it
+    returns must still be indexed by RECORD, not by the order it happened to
+    be scored in. A permutation here would silently select the wrong rows."""
+    ds = _VarLenPool()
+    seq = collect_episode(
+        model=tiny_model, dataset=ds, selection_ratio=0.5,
+        trajectory_anchor=None, lam=0.0, use_anchor=False,
+        batch_size=4, device="cpu", seed=0, epoch=1, sort_by_length=False,
+    )
+    srt = collect_episode(
+        model=tiny_model, dataset=ds, selection_ratio=0.5,
+        trajectory_anchor=None, lam=0.0, use_anchor=False,
+        batch_size=4, device="cpu", seed=0, epoch=1, sort_by_length=True,
+    )
+    assert torch.allclose(srt["r_loss"], seq["r_loss"], atol=1e-5, rtol=0)
+    assert torch.allclose(srt["r_entropy"], seq["r_entropy"], atol=1e-5, rtol=0)
+    assert torch.allclose(srt["score"], seq["score"], atol=1e-5, rtol=0)
+    assert srt["selected_indices"] == seq["selected_indices"]
+
+
+def test_length_sorted_scoring_preserves_the_anchor_alignment(tiny_model):
+    """Alignment is a masked sequence-mean of hidden states, so it is the
+    quantity most exposed to both the crop (dropped columns) and the
+    reordering (wrong record). Pin it with the anchor actually on."""
+    from tag.core.trajectory_anchor import TrajectoryAnchor
+
+    ds = _VarLenPool(seed=3)
+    anchor = TrajectoryAnchor(layer_idx=-1, pca_batch_size=4, device="cpu")
+    torch.manual_seed(0)
+    anchor.update(tiny_model, ds)
+    if not anchor.is_fitted:
+        pytest.skip("anchor did not fit on the tiny stand-in")
+    kw = dict(
+        model=tiny_model, dataset=ds, selection_ratio=0.5,
+        trajectory_anchor=anchor, lam=0.5, use_anchor=True,
+        batch_size=4, device="cpu", seed=0, epoch=1,
+    )
+    seq = collect_episode(**kw, sort_by_length=False)
+    srt = collect_episode(**kw, sort_by_length=True)
+    assert torch.allclose(srt["alignment"], seq["alignment"], atol=1e-5, rtol=0)
+    assert srt["selected_indices"] == seq["selected_indices"]

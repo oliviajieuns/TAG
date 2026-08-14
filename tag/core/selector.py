@@ -61,6 +61,7 @@ from typing import Any, Dict, List, Optional
 import torch
 from torch.utils.data import DataLoader
 
+from . import forward as fwd
 from .dedup import constrained_topk
 from .reward import compute_rewards
 from .scorer import (
@@ -114,6 +115,7 @@ def collect_episode(
     empty_cache_interval: int = 10,
     mvf: Optional[Dict[str, Any]] = None,
     tag: Optional[Dict[str, Any]] = None,
+    sort_by_length: bool = True,
 ) -> Dict[str, Any]:
     """Run one episode over the candidate pool and return selection results.
 
@@ -168,12 +170,31 @@ def collect_episode(
     all_r_entropy: List[torch.Tensor] = []
     all_alignment_raw: List[torch.Tensor] = []
 
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False,
-        num_workers=0, pin_memory=True, drop_last=False,
-    )
-    total_batches = len(loader)
     total_samples = len(dataset)
+    # Records are padded to max_seq_len, and this pass reads hidden states
+    # for EVERY layer plus a full-vocabulary softmax — both scale with the
+    # sequence length that is actually fed in. Grouping similar lengths into
+    # a batch lets the per-batch crop below remove most of the padding.
+    # Batch membership is pure parallelism (each row's reward depends only on
+    # that row), so this is scheduling, not a change of result; the outputs
+    # are written back into dataset order via ``emit_order``.
+    plan = (
+        fwd.length_sorted_batches(dataset, batch_size)
+        if sort_by_length and total_samples > batch_size
+        else None
+    )
+    if plan is None:
+        loader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=False,
+            num_workers=0, pin_memory=True, drop_last=False,
+        )
+        emit_order = list(range(total_samples))
+    else:
+        _batches, emit_order = plan
+        loader = DataLoader(
+            dataset, batch_sampler=_batches, num_workers=0, pin_memory=True,
+        )
+    total_batches = len(loader)
     t0 = time.time()
 
     if mvf is not None and tag is not None:
@@ -227,15 +248,24 @@ def collect_episode(
         attention_mask = batch["attention_mask"].to(device, non_blocking=True)
         labels = batch["labels"].to(device, non_blocking=True)
 
+        B_local = input_ids.size(0)
+        input_ids, attention_mask, labels, _t_eff = fwd.crop_padded_batch(
+            input_ids, attention_mask, labels,
+        )
+
+        # NO labels= here. Nothing reads out.loss, but HF computes it — and
+        # its loss_function upcasts the whole (B, T, V) logit tensor to fp32
+        # first, which at Qwen's 151643-entry vocabulary is ~10 GB per batch
+        # at bs=32 and a full-vocabulary cross-entropy over every position,
+        # thrown away on the next line. compute_rewards below derives the
+        # per-sample loss from the response positions itself.
         out = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            labels=labels,
             output_hidden_states=True,
         )
 
         decoder_hidden = out.hidden_states[1:]
-        B_local = input_ids.size(0)
 
         if apply_anchor:
             # Paper Eq.6: align_i = (1/L) Σ_l <h̄_l(x_i), v_l>,
@@ -317,8 +347,22 @@ def collect_episode(
     if not all_r_loss:
         raise RuntimeError("collect_episode produced no samples.")
 
-    all_r_loss_t = torch.cat(all_r_loss, dim=0)
-    all_r_entropy_t = torch.cat(all_r_entropy, dim=0)
+    # Batches ran in length-sorted order; put every per-sample vector back
+    # where its record lives before anything downstream indexes by record id.
+    _order_t = (
+        None if plan is None
+        else torch.as_tensor(emit_order, dtype=torch.long)
+    )
+
+    def _to_dataset_order(x: torch.Tensor) -> torch.Tensor:
+        if _order_t is None:
+            return x
+        y = torch.empty_like(x)
+        y[_order_t] = x
+        return y
+
+    all_r_loss_t = _to_dataset_order(torch.cat(all_r_loss, dim=0))
+    all_r_entropy_t = _to_dataset_order(torch.cat(all_r_entropy, dim=0))
 
     # ---- Pool-level composite reward (paper Eqs. 3-4) ----
     R, r_weight_value = pool_reward(all_r_loss_t, all_r_entropy_t)
@@ -333,7 +377,9 @@ def collect_episode(
     # reading and no outlier pinning.
     alignment_raw = None
     if apply_anchor:
-        alignment_raw = torch.cat(all_alignment_raw, dim=0).view(-1)
+        alignment_raw = _to_dataset_order(
+            torch.cat(all_alignment_raw, dim=0).view(-1)
+        )
         alignment, _alignment_collapsed = normalize_alignment(alignment_raw)
         if _alignment_collapsed:
             logger.error(

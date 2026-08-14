@@ -37,12 +37,20 @@ def compute_rewards(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Per-sample (r_loss, r_entropy) plus the adaptive weight r_weight.
 
-    Memory: processes the batch one sample at a time so peak GPU memory holds
-    only a single ``(T, V)`` fp32 softmax + log-prob pair (≈ ``2·T·V·4`` bytes)
-    instead of three full ``(B, T, V)`` fp32 tensors at once. For Qwen2.5
-    (V=151k) at episode_batch_size=16 this drops the entropy peak from ~15 GB
-    to ~1 GB; for Llama2 (V=32k) from ~3 GB to ~256 MB. The slowdown is
-    negligible because the inner ops are still vectorised over (T, V).
+    Memory: processes the batch one sample at a time, and within a sample
+    only the RESPONSE positions, so peak GPU memory holds three fp32
+    ``(k, V)`` tensors for that sample's ``k`` response tokens rather than
+    three full ``(B, T, V)`` ones. For Qwen2.5 (V=151k) at
+    episode_batch_size=16 that is a few hundred MB instead of ~15 GB.
+
+    Both quantities are read off ONE ``log_softmax``. The earlier version
+    called ``cross_entropy`` and ``log_softmax`` separately — two softmaxes
+    over the same ``(T-1, V)`` block — and computed both at every position,
+    including the ~40 % of the sequence that is prompt and the padding
+    beyond it, only to multiply the result by a 0/1 mask afterwards. On the
+    7B pool pass that was most of the wall clock. Restricting to the
+    positions the mask keeps is exact: the discarded terms were multiplied
+    by zero.
 
     Note on ``r_weight`` scope: when this function is called with a single
     mini-batch, the variance is computed *within* that batch and is degenerate
@@ -55,33 +63,34 @@ def compute_rewards(
 
     shift_logits = logits[:, :-1, :]                          # (B, T-1, V), bf16/fp16
     shift_labels = labels[:, 1:]                              # (B, T-1)
-    resp_mask = (shift_labels != -100).float()                # (B, T-1)
-    n_resp = resp_mask.sum(dim=-1).clamp(min=1)               # (B,)
+    resp_mask = shift_labels != -100                          # (B, T-1) bool
+    n_resp = resp_mask.sum(dim=-1).clamp(min=1).float()       # (B,)
 
-    r_loss = torch.empty(B, device=device, dtype=torch.float32)
-    r_entropy = torch.empty(B, device=device, dtype=torch.float32)
+    r_loss = torch.zeros(B, device=device, dtype=torch.float32)
+    r_entropy = torch.zeros(B, device=device, dtype=torch.float32)
 
     for i in range(B):
-        sl = shift_logits[i]                                  # (T-1, V)
-        ll = shift_labels[i].clamp(min=0)                     # (T-1,)
-        rm = resp_mask[i]                                     # (T-1,)
-        nr = n_resp[i]
-
-        # CE over response tokens only. Cast to fp32 BEFORE the CE — the
-        # comment previously claimed fp32 but no cast happened, so
-        # loss_orig carried bf16 rounding (~0.4% rel.) while the
-        # counterfactual pass (reliability.compute_pool_loss) is fp32.
-        # ΔL = loss_cf − loss_orig is zero-ANCHORED at the rezero kink,
-        # exactly where that dtype asymmetry moves samples across Q = 0.
-        ce_i = F.cross_entropy(sl.float(), ll, reduction="none")  # (T-1,) fp32
-        r_loss[i] = (ce_i * rm).sum() / nr
-
-        # Entropy via log_softmax: H = -Σ p log p = -Σ exp(lp) * lp.
-        # log_softmax allocates a single (T-1, V) fp32 tensor; ent_tok is (T-1,).
-        lp = F.log_softmax(sl.float(), dim=-1)                # (T-1, V) fp32
-        ent_tok = -(lp.exp() * lp).sum(dim=-1)                # (T-1,) fp32
-        r_entropy[i] = (ent_tok * rm).sum() / nr
-        del sl, ce_i, lp, ent_tok
+        rm = resp_mask[i]
+        if not bool(rm.any()):
+            continue                                          # stays 0.0
+        # Cast to fp32 BEFORE the softmax — an earlier version's comment
+        # claimed fp32 but no cast happened, so loss carried bf16 rounding
+        # (~0.4% rel.) while the counterfactual pass
+        # (reliability.compute_pool_loss) is fp32. ΔL = loss_cf − loss_orig
+        # is zero-ANCHORED at the rezero kink, exactly where that dtype
+        # asymmetry moves samples across Q = 0.
+        sl = shift_logits[i][rm].float()                      # (k, V) fp32
+        tgt = shift_labels[i][rm]                             # (k,)
+        lp = F.log_softmax(sl, dim=-1)                        # (k, V) fp32
+        del sl
+        # CE = -log p(target): the same value cross_entropy returns, read
+        # off the log-probabilities already computed for the entropy.
+        ce_i = -lp.gather(1, tgt.unsqueeze(1)).squeeze(1)      # (k,) fp32
+        # H = -Σ p log p = -Σ exp(lp) * lp
+        ent_i = -(lp.exp() * lp).sum(dim=-1)                   # (k,) fp32
+        r_loss[i] = ce_i.sum() / n_resp[i]
+        r_entropy[i] = ent_i.sum() / n_resp[i]
+        del lp, ce_i, ent_i
 
     if r_loss.numel() > 1:
         var_loss = r_loss.var()
