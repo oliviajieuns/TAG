@@ -34,7 +34,7 @@ passes to minimise the divergence.
 
 Usage (GPU server):
     python scripts/compute_uncond_loss.py \
-        --config configs/experiments/lowq/light_tads_mvf_05b.yaml \
+        --config configs/experiments/lowq/light_mvf_05b.yaml \
         --out pools/composite20/uncond_loss_05b.pt
 
 The output tensor is index-aligned with ALPACA_DATA_FILES. Pass it to
@@ -74,7 +74,7 @@ def build_response_only_dataset(tokenizer, *, cache_dir, max_seq_len, data_files
 
     from datasets import Dataset
 
-    from tads.data.sft_prompts import tokenize_alpaca
+    from tag.data.sft_prompts import tokenize_alpaca
 
     with open(data_files, encoding="utf-8") as f:
         records = json.load(f)
@@ -146,9 +146,9 @@ def main() -> None:
 
     import torch
 
-    from tads.core.reliability import compute_pool_loss
-    from tads.core.utils import load_config
-    from tads.modeling.loader import load_model, load_tokenizer
+    from tag.core.reliability import compute_pool_loss
+    from tag.core.utils import load_config
+    from tag.modeling.loader import load_model, load_tokenizer
 
     cfg = load_config(args.config)
     data_files = args.data_files or os.environ.get("ALPACA_DATA_FILES") or cfg.get("data_files")

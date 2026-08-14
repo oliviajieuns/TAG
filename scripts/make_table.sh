@@ -120,15 +120,15 @@ METHODS = [
     ("05",  "SelectIT",                        "selectit_10"),
     ("07",  "NAIT (All)",                      "nait_10"),
     ("08",  "Composite-reward only (λ=0)",     "data_agent_10"),
-    ("09",  "TADS (λ=1)",                      "tads_10"),
+    ("09",  "Legacy (λ=1)",                      "legacy_10"),
 ]
 
 # Method aliases: light/<method>_05b/ configs run the same selection
 # strategy as the paper-faithful main_*/<method>_{10,100}/ configs
 # (selection_ratio + train_epochs equivalent), so they collapse onto the
-# same row instead of producing a separate "tads_05b" row.
+# same row instead of producing a separate "legacy_05b" row.
 METHOD_ALIASES = {
-    "tads_05b":       "tads_10",
+    "legacy_05b":       "legacy_10",
     "random_05b":     "random_10",
     "data_agent_05b": "data_agent_10",
     "full_05b":       "full_100",
@@ -172,8 +172,8 @@ def _all_json_files(root: Path):
 def _segments_from_candidates(candidates):
     """Expand candidate strings into individual segments by splitting on
     /, _, -. Returns the union of the originals + each segment. Used so a
-    string like 'main_7b/llama2/tads_10' matches the model 'llama2' AND
-    the method 'tads_10'."""
+    string like 'main_7b/llama2/legacy_10' matches the model 'llama2' AND
+    the method 'legacy_10'."""
     out = list(candidates)
     for c in candidates:
         for sep in ("/", "_", "-"):
@@ -306,9 +306,9 @@ def _identify_model(jp: Path, payload):
 def _identify_method(jp: Path, payload):
     """Return one of METHODS[*].mdir if the file looks like a result for
     that method, else None. Match sources (first match wins):
-      (1) payload['experiment'], e.g. "llama2_tads_10" → tads_10
-      (2) filename prefix, e.g. "llama2_tads_10-mmlu.json" → tads_10
-      (3) any parent dir name, e.g. ".../tads_10/runs/.../*.json" → tads_10
+      (1) payload['experiment'], e.g. "llama2_legacy_10" → legacy_10
+      (2) filename prefix, e.g. "llama2_legacy_10-mmlu.json" → legacy_10
+      (3) any parent dir name, e.g. ".../legacy_10/runs/.../*.json" → legacy_10
     """
     candidates = []
     if isinstance(payload, dict):
@@ -582,7 +582,7 @@ if not all_results:
         "[make_table] no model results matched any of: "
         + ", ".join(m[0] for m in MODELS) + "\n"
         "[make_table] file paths or experiment labels must contain a model-name "
-        "segment (e.g. .../main_7b/llama2/tads_10/...).\n"
+        "segment (e.g. .../main_7b/llama2/legacy_10/...).\n"
     )
     sys.exit(1)
 

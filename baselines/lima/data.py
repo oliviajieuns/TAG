@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 
 from datasets import Dataset, load_dataset
 
-from tads.data.sft_prompts import tokenize_alpaca
+from tag.data.sft_prompts import tokenize_alpaca
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def _load_local_lima_records(spec: str) -> list:
     """Load via the shared helper — supports JSON-list / JSONL / Parquet
     (audit fix: previously json/jsonl only, parquet mirrors raised
     ValueError even when the file was present on disk)."""
-    from tads.core.data_io import read_records_glob
+    from tag.core.data_io import read_records_glob
     return read_records_glob(spec)
 
 
@@ -124,7 +124,7 @@ def build_lima_dataset(
 
     Args:
         tokenizer / cache_dir / max_seq_len / prompt_style / num_proc: same
-            semantics as `tads.data.alpaca.build_alpaca_dataset`.
+            semantics as `tag.data.alpaca.build_alpaca_dataset`.
         data_files: optional local file or glob (.json / .jsonl). If absent,
             falls back to HF hub `GAIR/lima` (gated).
     """

@@ -1,7 +1,7 @@
 # TAG: proposed amendments to the paper's equations and wording
 
 **Status:** ACTIVE. Written 2026-08-13 while implementing Eqs. 1-6 in
-`tads/core/gate.py`. Every item below was found by making the equations
+`tag/core/gate.py`. Every item below was found by making the equations
 executable — either the maths is undefined on a case the data actually
 produces, or the code had to make a choice the paper does not specify, or
 the claim as written is stronger than what the code can deliver.
@@ -187,7 +187,7 @@ stays non-compensatory. Only the origin moves.
 calibration rather than asserted:
 
 1. the clean zero-weight rate *is* \(\alpha\) — a dial the experimenter sets
-   (`tads.tag.target_zero_rate`, 0.05) instead of an emergent 60%; and
+   (`selection.tag.target_zero_rate`, 0.05) instead of an emergent 60%; and
 2. it is \(\alpha\) in **every** length bin, which is what removes the
    confound that item B2 raises.
 

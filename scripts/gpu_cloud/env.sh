@@ -94,18 +94,18 @@ export ALPACA_RAW_JSON="${_TAG_RAW:-$TAG_WORKSPACE/datasets/alpaca_gpt4.json}"
 # The candidate pool the training run actually selects from. bootstrap.sh
 # generates it; until then it does not exist and preflight will say so.
 export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-$POOLS/composite20/pool.json}"
-export TADS_CF_FILES="${TADS_CF_FILES:-$POOLS/composite20/counterfactual.json}"
-export TADS_DEDUP_FILE="${TADS_DEDUP_FILE:-$POOLS/composite20/dedup_clusters.json}"
+export TAG_CF_FILES="${TAG_CF_FILES:-$POOLS/composite20/counterfactual.json}"
+export TAG_DEDUP_FILE="${TAG_DEDUP_FILE:-$POOLS/composite20/dedup_clusters.json}"
 # The gate reference is BACKBONE-SPECIFIC: Delta_hat is a property of a
 # particular model's likelihoods, so a 0.5B reference mis-scales a 7B gate.
 # One shared variable made that mistake silent and easy, so each backbone
 # gets its own and the arm configs read the matching one.
-export TADS_GATE_REF="${TADS_GATE_REF:-$POOLS/clean_ref/delta_hat_05b.pt}"
-export TADS_GATE_REF_7B="${TADS_GATE_REF_7B:-$POOLS/clean_ref/delta_hat_7b.pt}"
+export TAG_GATE_REF="${TAG_GATE_REF:-$POOLS/clean_ref/delta_hat_05b.pt}"
+export TAG_GATE_REF_7B="${TAG_GATE_REF_7B:-$POOLS/clean_ref/delta_hat_7b.pt}"
 # The Eq. 5' ablation arm (tag_nonull_7b) needs a reference fit WITHOUT the
 # null correction, and its own gate cache, because G differs.
-export TADS_GATE_REF_7B_NONULL="${TADS_GATE_REF_7B_NONULL:-$POOLS/clean_ref/delta_hat_7b_nonull.pt}"
-export TADS_GATE_CACHE_NONULL="${TADS_GATE_CACHE_NONULL:-$POOLS/composite20/tag_gate_qwen2.5-7b_nonull.pt}"
+export TAG_GATE_REF_7B_NONULL="${TAG_GATE_REF_7B_NONULL:-$POOLS/clean_ref/delta_hat_7b_nonull.pt}"
+export TAG_GATE_CACHE_NONULL="${TAG_GATE_CACHE_NONULL:-$POOLS/composite20/tag_gate_qwen2.5-7b_nonull.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub
 # fallback is how you end up training on a different pool than you think.
@@ -143,8 +143,8 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   esac
   echo "[tag-env] raw corpus: $ALPACA_RAW_JSON  [$(_tag_mark "$ALPACA_RAW_JSON")]"
   echo "[tag-env] pool      : $ALPACA_DATA_FILES  [$(_tag_mark "$ALPACA_DATA_FILES")]"
-  echo "[tag-env] gate ref 0.5b: $TADS_GATE_REF  [$(_tag_mark "$TADS_GATE_REF")]"
-  echo "[tag-env] gate ref 7b  : $TADS_GATE_REF_7B  [$(_tag_mark "$TADS_GATE_REF_7B")]"
+  echo "[tag-env] gate ref 0.5b: $TAG_GATE_REF  [$(_tag_mark "$TAG_GATE_REF")]"
+  echo "[tag-env] gate ref 7b  : $TAG_GATE_REF_7B  [$(_tag_mark "$TAG_GATE_REF_7B")]"
   echo "[tag-env] outputs   : $OUTPUT_ROOT"
   if command -v nvidia-smi >/dev/null 2>&1; then
     echo "[tag-env] gpus      : $(nvidia-smi --query-gpu=name --format=csv,noheader | tr '\n' ',' | sed 's/,$//')"

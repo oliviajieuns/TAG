@@ -63,8 +63,8 @@ def main() -> None:
     p.add_argument("--sample", type=int, default=4000)
     args = p.parse_args()
 
-    from tads.core.utils import load_config
-    from tads.modeling.loader import load_tokenizer
+    from tag.core.utils import load_config
+    from tag.modeling.loader import load_tokenizer
 
     cfg = load_config(args.config)
     _require_env(cfg, args)
@@ -96,7 +96,7 @@ def main() -> None:
     print()
     print(f"{'max_seq_len':>12} {'truncated':>10}   {'gate cost':<50}")
     candidates = [args.max_seq_len] if args.max_seq_len else [512, 768, 1024, 1536, 2048]
-    c_trunc = float(((cfg.get("tads") or {}).get("tag") or {}).get("c_trunc", 0.2))
+    c_trunc = float(((cfg.get("selection") or {}).get("tag") or {}).get("c_trunc", 0.2))
     for m in candidates:
         n = sum(1 for t in tot if t > m)
         rate = n / len(tot)

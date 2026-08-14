@@ -8,7 +8,7 @@
 #   Language Models via Uncertainty-Aware Self-Reflection." arXiv:2402.16705
 #
 # Eval output convention:
-#   Training checkpoints → ${OUTPUT_ROOT}/...                  (shared with TADS)
+#   Training checkpoints → ${OUTPUT_ROOT}/...                  (shared with the selection family)
 #   Eval results         → ${SELECTIT_EVAL_RESULTS_ROOT}/...   (separate root)
 method: selectit
 selection_ratio: 0.1

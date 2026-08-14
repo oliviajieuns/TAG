@@ -11,7 +11,7 @@
 #
 # After completion:
 #   <target_dir>/
-#     train.jsonl    # exactly the file tads.train (and every baseline) consumes
+#     train.jsonl    # exactly the file tag.train (and every baseline) consumes
 #
 # The script handles two column conventions automatically:
 #   (a) flat (instruction, output) — V1 70k canonical
@@ -120,4 +120,4 @@ echo "Evol-Instruct ready at $OUT"
 echo ""
 echo "Next:"
 echo "  export EVOL_INSTRUCT_DATA_FILES=$OUT"
-echo "  python -m tads.train --config configs/experiments/evol_7b/llama2/tads_10.yaml"
+echo "  python -m tag.train --config configs/experiments/evol_7b/llama2/legacy_10.yaml"

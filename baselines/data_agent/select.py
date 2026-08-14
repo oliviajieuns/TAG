@@ -8,7 +8,7 @@ For one episode (= one selection epoch in the LLM SFT context):
     3. Action a_i, log_prob_i, value_i ← actor.get_action(s_i)
        (action is a Beta(α, β) sample in [0, 1] — stochastic, not the mean).
     4. Per-sample L_i (mean CE loss over response tokens) and H_i (mean
-       predictive entropy over response tokens) via tads.core.reward.compute_rewards.
+       predictive entropy over response tokens) via tag.core.reward.compute_rewards.
     5. Paper-faithful normalised reward (Eq.5-6, reference repo):
             R_diff = (L_i - L_min) / (L_max - L_min + ε)
             R_conf = H_i / (H_max + ε)
@@ -18,11 +18,11 @@ For one episode (= one selection epoch in the LLM SFT context):
        output different a_i for the same candidates.
     7. Selection: top-K indices ranked by a_i (NOT R_i, NOT R_i·a_i).
 
-The reward formula intentionally differs from TADS' Eq.2-3 — TADS uses raw
-(unnormalised) L, H and pool-variance w; Data Agent paper min-max normalises
-each component first and then takes the same variance ratio. We follow the
-paper here even though it diverges from TADS, because this file IS the
-paper-faithful baseline.
+The reward formula intentionally differs from the legacy score's Eq.2-3 —
+that uses raw (unnormalised) L, H and pool-variance w; Data Agent paper
+min-max normalises each component first and then takes the same variance
+ratio. We follow the paper here even though it diverges from the legacy
+score, because this file IS the paper-faithful baseline.
 """
 from __future__ import annotations
 
@@ -33,9 +33,9 @@ from typing import Any, Dict, List, Optional
 import torch
 from torch.utils.data import DataLoader
 
-from tads.core.reward import compute_rewards
-from tads.core.timing import PhaseTimer
-from tads.core.utils import cuda_mem_str
+from tag.core.reward import compute_rewards
+from tag.core.timing import PhaseTimer
+from tag.core.utils import cuda_mem_str
 
 from .agent import PPOAgent
 
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 def _unwrap(model):
-    """Strip DDP / PEFT wrappers — same as tads.core.selector._unwrap."""
+    """Strip DDP / PEFT wrappers — same as tag.core.selector._unwrap."""
     m = model
     while hasattr(m, "module"):
         m = m.module

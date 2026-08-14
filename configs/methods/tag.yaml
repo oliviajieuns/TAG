@@ -38,28 +38,28 @@
 # What is distinctive is that the floor is ATTAINABLE — an ordinary sigmoid
 # gate only approaches 0. That is what makes the fusion non-compensatory, and
 # also why an estimation error at the floor cannot be recovered.
-method: tads
+method: selection
 episode_batch_size: 16
-tads:
+selection:
   lam: 1.0
   use_anchor: true
-  score_mode: tag          # "tads" (legacy Eq.10) | "mvf" | "tag"
+  score_mode: tag          # "legacy" (legacy Eq.10) | "mvf" | "tag"
   tag:
     # Index-aligned counterfactual pool(s): same records, instruction+input
     # replaced by a length-bucket-matched unrelated pair. A single path, a
     # YAML list, or a COMMA-SEPARATED string (K > 1 enables the
     # dispersion-discounted multi-counterfactual gate):
-    #   export TADS_CF_FILES=p/counterfactual_1.json,p/counterfactual_2.json
+    #   export TAG_CF_FILES=p/counterfactual_1.json,p/counterfactual_2.json
     # Generate together with the pool:
     #   python scripts/make_corrupted_pool.py ... --emit-counterfactual \
     #       --num-counterfactuals K
-    counterfactual_data_files: ${oc.env:TADS_CF_FILES,}
+    counterfactual_data_files: ${oc.env:TAG_CF_FILES,}
     # Near-duplicate cluster ids (one int per record, -1 = unique).
     # Generate with --emit-dedup-clusters. Empty = no dedup constraint.
     # NOTE: the legacy score path never deduplicated; TAG threads this
     # through explicitly so duplicated instructions cannot be selected
     # repeatedly just because they pass the gate.
-    dedup_clusters_file: ${oc.env:TADS_DEDUP_FILE,}
+    dedup_clusters_file: ${oc.env:TAG_DEDUP_FILE,}
 
     # ---- span aggregation (Eqs. 4-5) ----
     span_tokens: 16        # W: fixed response-token window per span
@@ -92,7 +92,7 @@ tads:
     # ---- gate (Eq. 6) ----
     # Completeness assigned to responses that read as cut off. This is a
     # five-fold demotion decided by a string heuristic
-    # (tads.data.sft_prompts.text_is_complete), so measure the heuristic's
+    # (tag.data.sft_prompts.text_is_complete), so measure the heuristic's
     # false-positive rate on YOUR pool before trusting it:
     #   python scripts/audit_completeness.py --pool <pool>.json --ablate
     c_trunc: 0.2
@@ -124,8 +124,8 @@ tads:
     # gate looks for). With null_correction: false, leaving both empty falls
     # back to in-pool self-calibration of s with a loud warning —
     # diagnostics only, never for reported runs.
-    gate_scale: ${oc.env:TADS_GATE_SCALE,}
-    gate_ref_file: ${oc.env:TADS_GATE_REF,}
+    gate_scale: ${oc.env:TAG_GATE_SCALE,}
+    gate_ref_file: ${oc.env:TAG_GATE_REF,}
     calibration_target_pct: 0.10
     calibration_target_q: 0.8
     # K > 1 only: discount the mean gate by (1 − 2·std_k)₊ so unstable

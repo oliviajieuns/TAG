@@ -118,17 +118,17 @@ def check_disk():
 # ---------------------------------------------------------------------------
 
 def _load_cfg(path):
-    from tads.core.utils import load_config
+    from tag.core.utils import load_config
     return load_config(str(path))
 
 
 def make_config_check(cfg_path):
     def _fn():
         cfg = _load_cfg(cfg_path)
-        mode = str((cfg.get("tads") or {}).get("score_mode", "tads"))
+        mode = str((cfg.get("selection") or {}).get("score_mode", "legacy"))
         if mode != "tag":
             return _FAIL, f"{cfg_path} resolves score_mode={mode!r}, expected 'tag'"
-        tag = (cfg.get("tads") or {}).get("tag") or {}
+        tag = (cfg.get("selection") or {}).get("tag") or {}
         return _OK, (
             f"score_mode=tag, W={tag.get('span_tokens')}, tau={tag.get('tau')}"
             f"({tag.get('tau_mode')}), tail={tag.get('tail_mode')}, "
@@ -148,7 +148,7 @@ def make_model_check(cfg_path):
         # The loader uses local_files_only=True, so the tokenizer must be
         # complete on disk; a partial snapshot fails here rather than after
         # the pool has been tokenised.
-        from tads.modeling.loader import load_tokenizer
+        from tag.modeling.loader import load_tokenizer
         tok = load_tokenizer(str(p))
         if tok.eos_token_id is None:
             return _FAIL, f"tokenizer at {p} has no eos_token_id"
@@ -186,11 +186,11 @@ def make_pool_check(cfg_path):
                 f"pool not found: {pool_path} — bash scripts/gpu_cloud/bootstrap.sh pools"
             )
         pool = json.load(open(pool_path))
-        tag = (cfg.get("tads") or {}).get("tag") or {}
+        tag = (cfg.get("selection") or {}).get("tag") or {}
         cf_spec = str(tag.get("counterfactual_data_files") or "")
         cf_files = [s.strip() for s in cf_spec.split(",") if s.strip()]
         if not cf_files:
-            return _FAIL, "tads.tag.counterfactual_data_files is empty (TADS_CF_FILES)"
+            return _FAIL, "selection.tag.counterfactual_data_files is empty (TAG_CF_FILES)"
         problems = []
         for f in cf_files:
             if not Path(f).exists():
@@ -301,7 +301,7 @@ def make_seq_len_check(cfg_path):
         if not pool_path.exists():
             return _WARN, "pool missing; run the pools step first"
         max_len = int(cfg["max_seq_len"])
-        from tads.modeling.loader import load_tokenizer
+        from tag.modeling.loader import load_tokenizer
         tok = load_tokenizer(str(cfg["model_path"]))
         recs = json.load(open(pool_path))
         # A sample of 2000 is plenty for a rate and keeps this a few seconds.
@@ -317,7 +317,7 @@ def make_seq_len_check(cfg_path):
             if n_p + n_r + 1 + 8 > max_len:
                 n_trunc += 1
         rate = n_trunc / max(1, len(sample))
-        c_trunc = float(((cfg.get("tads") or {}).get("tag") or {}).get("c_trunc", 0.2))
+        c_trunc = float(((cfg.get("selection") or {}).get("tag") or {}).get("c_trunc", 0.2))
         detail = (
             f"max_seq_len={max_len}: ~{100 * rate:.1f}% of the pool is "
             f"budget-truncated (sampled {len(sample)})"
@@ -350,7 +350,7 @@ def make_corpus_consistency_check(cfg_path):
         cfg = _load_cfg(cfg_path)
         pool_path = Path(str(cfg.get("data_files")))
         pool_man = pool_path.parent / "corruption_manifest.json"
-        tag = (cfg.get("tads") or {}).get("tag") or {}
+        tag = (cfg.get("selection") or {}).get("tag") or {}
         ref = str(tag.get("gate_ref_file") or "").strip()
         if not ref:
             return _OK, "no gate_ref_file configured; nothing to cross-check"
@@ -395,7 +395,7 @@ def make_gate_ref_check(cfg_path):
     def _fn():
         import torch
         cfg = _load_cfg(cfg_path)
-        tag = (cfg.get("tads") or {}).get("tag") or {}
+        tag = (cfg.get("selection") or {}).get("tag") or {}
         scale = str(tag.get("gate_scale") or "").strip()
         ref = str(tag.get("gate_ref_file") or "").strip()
         want_null = bool(tag.get("null_correction", True))

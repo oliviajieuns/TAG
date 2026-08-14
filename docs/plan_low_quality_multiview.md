@@ -171,7 +171,7 @@ T1a/T1b→misaligned(cross-view correspondence), T6→imbalanced(분석 축),
 2. **Completeness 버그** — `text_complete` 컬럼을 토크나이즈 단계에서 생성
    (`sft_prompts.text_is_complete`: 종결부호/닫힌 코드펜스/숫자 종결), EOS
    토큰 체크는 max_seq_len 절단 감지로 축소. T3 회귀 테스트 포함.
-   기존 토크나이즈 캐시는 `TADS_FRESH_DATA_CACHE=1`로 재생성 필요.
+   기존 토크나이즈 캐시는 `TAG_FRESH_DATA_CACHE=1`로 재생성 필요.
 3. **Legacy 회귀 테스트** — `tests/test_selector_regression.py`: 논문 수식
    재유도 대조로 legacy 경로 고정 (min-max 정규화 유지 포함).
 4. **rank01 midrank** — tie를 pool 인덱스로 깨던 v1 동작이 데이터 순서를
@@ -199,7 +199,7 @@ min-max다. 따라서 §2.0의 선택지 중 **B1도 B2도 아닌 제3안** — 
 γ, d_floor, rank01 alignment)는 **비교 arm으로 보존**되고 제안 방법이
 아니다.
 
-구현: `score_mode: tag` (`tads/core/gate.py`, `configs/methods/tag.yaml`).
+구현: `score_mode: tag` (`tag/core/gate.py`, `configs/methods/tag.yaml`).
 G ≡ 1이면 legacy 랭킹과 비트 단위로 동일하므로 게이트가 깨끗한 ablation이
 된다. `mvf`와 `tag`는 상호 배타.
 
@@ -424,11 +424,11 @@ log S = γ·log(Qc+ε) + log(D'+ε) + log(1+λ_t·Ã)
 | 1 | Random | 바닥 |
 | 2 | Full-polluted | 무선별 reference |
 | 3 | Oracle-clean | 천장 reference (`make_oracle_pool.py`, ratio 0.125) |
-| 4 | TADS-legacy | 회귀 테스트로 고정. **TAG의 직접 ablation** (G ≡ 1이면 비트 동일) |
+| 4 | Legacy | 회귀 테스트로 고정. **TAG의 직접 ablation** (G ≡ 1이면 비트 동일) |
 | 5 | **TAG** | **제안** (`light_tag_05b.yaml`, `score_mode: tag`) |
 | 6 | **TAG-static** | `tag.static: true` — adaptive 분리 control (primary pair) |
-| 5b | TADS-MVF v3 | 이전 설계, 비교 arm으로 강등. TAG vs MVF = "게이트만 추가" vs "carrier 교체" |
-| 6b | TADS-MVF-static | MVF 쪽 static control (여유 시) |
+| 5b | MVF v3 | 이전 설계, 비교 arm으로 강등. TAG vs MVF = "게이트만 추가" vs "carrier 교체" |
+| 6b | MVF-static | MVF 쪽 static control (여유 시) |
 | 7 | **IFD top-K** (신규) | static 외부 baseline #1 — uncond loss로 필터한 pool + full 학습. 가장 싸고 가장 요구될 baseline |
 | 8 | AlpaGasus 또는 PPL top-K | 외부 judge 가능 여부 D3까지 확인, 불가 시 PPL로 대체 명시 |
 
@@ -444,7 +444,7 @@ log S = γ·log(Qc+ε) + log(D'+ε) + log(1+λ_t·Ã)
 - **primary endpoint 사전 등록 (v3.1 갱신 — 제안 방법이 TAG로 바뀌었다):**
   0.5B composite-20, **TAG vs TAG-static**, 9-bench macro, seed-paired.
   (가장 강한 주장인 "adaptive가 static을 이긴다"를 primary로.)
-  - **부차 pre-registered pair: TAG vs TADS-legacy** — 이것이 게이트
+  - **부차 pre-registered pair: TAG vs Legacy** — 이것이 게이트
     자체의 효과를 격리하는 유일한 비교다(두 arm의 차이가 정확히 G 하나).
     새 원고의 contribution 1이 걸린 pair이므로 3개 pair 안에 포함한다.
 - **primary pair는 처음부터 5 seeds** — 조건부 확장(optional stopping) 금지.
@@ -463,7 +463,7 @@ log S = γ·log(Qc+ε) + log(D'+ε) + log(1+λ_t·Ã)
 
 - 0.5B: 9벤치(기존 8 + IFEval) 전부. 7B: BBH 제외 8벤치(사유: 셀당 ~15h;
   0.5B BBH 행을 같은 표에 병기해 무해함을 보임). mmlu_pro 미포함(사전 결정).
-- IFEval 구현 ~1d (`tads/evals` registry).
+- IFEval 구현 ~1d (`tag/evals` registry).
 - **7B flagship 결정 필요 (D3, 사용자):** 권고 = **Qwen2.5-7B**
   (`configs/experiments/main_7b/qwen25/` 존재, 비용 동일, 2026년 심사에서
   LLaMA-2의 "3년 묵은 백본" 감점 회피). LLaMA-2-7B 유지 시 사유를 원고에
@@ -494,7 +494,7 @@ partial-view e2e → knockout e2e → dedup-off → source-skewed → SelectIT.
 ## 6. Phase C — 실데이터 검증 (승격: 제2 헤드라인 pool)
 
 - **원본 Alpaca 52K를 제2 실험 pool로 승격** (실험 리뷰어 제안): {Random,
-  TADS-legacy, TADS-MVF} × 3 seeds, 0.5B — 실제 노이즈 pool에서의 e2e가
+  Legacy, MVF} × 3 seeds, 0.5B — 실제 노이즈 pool에서의 e2e가
   synthetic-only 공격의 최선 방어. (§5.4 예산 외 +9 runs — Gate B 시점
   여유로 판단, 부족하면 forward-only 스코어링 + 수동 라벨만.)
 - 수동 라벨 300–500 (점수 분위 층화 추출, 라벨 정의·단일/이중 평가자 공개
@@ -550,7 +550,7 @@ partial-view e2e → knockout e2e → dedup-off → source-skewed → SelectIT.
 - **약칭 사용 규칙:** TAG는 초록·intro·결과 표에서 method 이름으로만 쓰고,
   method 본문의 수식 서술은 기호(G, R, ã)로 한다. arm 표기는 코드와 1:1로
   — `TAG` = `score_mode: mvf`, `TAG-static` = `mvf.static: true`,
-  `TADS-legacy` = `score_mode: tads`(게이트 없음). 표 캡션에 이 대응을 각주로.
+  `Legacy` = `score_mode: legacy`(게이트 없음). 표 캡션에 이 대응을 각주로.
 - **Abstract:** §0′에 확정 문구 등록 완료. 구조는 training-adaptive 전제
   1문장 → 저품질 pool에서 difficulty–uncertainty가 오염을 **선호**한다는
   실패 서술 → 세 뷰(획득 스케줄 차이 포함) → 융합식 + weight-with-attainable-floor →
@@ -591,7 +591,7 @@ partial-view e2e → knockout e2e → dedup-off → source-skewed → SelectIT.
 | 일자 | 작업 | 게이트 |
 |---|---|---|
 | D1–2 (8/11–12) | ✅ 적대적 검증 워크플로, §1 P0 + §2 v3 + §3 오염 + 표 v2 + arm config 구현·테스트 | |
-| D3 (8/13) | GPU 가용량 실측, AlpaGasus API 확인, 7B 백본 확정, elsarticle 시험 컴파일, clean-ref ΔL 계산(`scripts/calibrate_reliability.py` → 보정 s), pool 재생성(T1b/T7 targets), T7 생성. **주의:** tokenize 코드 변경으로 HF map fingerprint가 무효화됨 — 서버 첫 실행에서 전 pool 재토크나이즈(~2분/pool)가 정상이며, 만약 재토크나이즈가 일어나지 않으면(stale cache) `text_complete` 컬럼이 없어 completeness가 token-only로 후퇴함(경고 로그 확인, 필요시 `TADS_FRESH_DATA_CACHE=1`) | |
+| D3 (8/13) | GPU 가용량 실측, AlpaGasus API 확인, 7B 백본 확정, elsarticle 시험 컴파일, clean-ref ΔL 계산(`scripts/calibrate_reliability.py` → 보정 s), pool 재생성(T1b/T7 targets), T7 생성. **주의:** tokenize 코드 변경으로 HF map fingerprint가 무효화됨 — 서버 첫 실행에서 전 pool 재토크나이즈(~2분/pool)가 정상이며, 만약 재토크나이즈가 일어나지 않으면(stale cache) `text_complete` 컬럼이 없어 completeness가 token-only로 후퇴함(경고 로그 확인, 필요시 `TAG_FRESH_DATA_CACHE=1`) | |
 | D4 (8/14) | Phase A 실행 (0.5B+7B forward-only, 전 신호) | |
 | D5 (8/15) | Phase A 분석. **+ §0′ 검증 부채 결정 3건 마감**: carrier 문구 B1/B2(§2.0), 33% cost 재측정 vs 삭제, `\STATUS{}` 치환 계획 | **Gate A′** (§4). 실패 → D7 재시도 1회 |
 | D5–11 | Phase B: 0.5B 그리드(§5.4), 7B core. 병렬: 이론(§7 1·2·4), 원고 초고, IFEval, 참고문헌 커트 | |

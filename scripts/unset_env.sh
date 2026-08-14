@@ -17,14 +17,14 @@ unset TORCHELASTIC_RUN_ID TORCHELASTIC_RESTART_COUNT TORCHELASTIC_MAX_RESTARTS
 unset TORCHELASTIC_USE_AGENT_STORE TORCHELASTIC_ERROR_FILE
 
 # --- DDP / NCCL debug knobs ---
-unset TADS_DDP_BACKEND
-unset TADS_DDP_FIND_UNUSED
-unset TADS_DDP_BROADCAST_BUFFERS
-unset TADS_DDP_STATIC_GRAPH
-unset TADS_NCCL_REINIT
-unset TADS_DL_NUM_WORKERS
-unset TADS_ENABLE_NO_SYNC
-unset TADS_ENABLE_COREDUMPS
+unset TAG_DDP_BACKEND
+unset TAG_DDP_FIND_UNUSED
+unset TAG_DDP_BROADCAST_BUFFERS
+unset TAG_DDP_STATIC_GRAPH
+unset TAG_NCCL_REINIT
+unset TAG_DL_NUM_WORKERS
+unset TAG_ENABLE_NO_SYNC
+unset TAG_ENABLE_COREDUMPS
 
 unset TORCH_DISTRIBUTED_DEBUG
 unset TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC
@@ -35,7 +35,7 @@ unset NCCL_DEBUG
 unset NCCL_DEBUG_SUBSYS
 unset NCCL_SOCKET_IFNAME
 
-# --- TADS data / model paths (re-source setup_env.sh to restore defaults) ---
+# --- TAG data / model paths (re-source setup_env.sh to restore defaults) ---
 unset MODEL_PATH_LLAMA2_7B MODEL_PATH_QWEN25_7B
 unset MODEL_PATH_MISTRAL_7B MODEL_PATH_DEEPSEEK_7B
 unset ALPACA_DATA_FILES ALPACA_DATASET_NAME
@@ -51,6 +51,6 @@ unset TOKENIZERS_PARALLELISM TRANSFORMERS_NO_ADVISORY_WARNINGS
 # --- pytorch / cuda runtime ---
 unset PYTORCH_CUDA_ALLOC_CONF
 
-echo "[unset_env] cleared TADS / NCCL / torchrun / HF env vars."
+echo "[unset_env] cleared TAG / NCCL / torchrun / HF env vars."
 echo "[unset_env] re-source setup_env.sh to restore defaults:"
 echo "             source scripts/setup_env.sh"

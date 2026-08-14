@@ -103,12 +103,12 @@ def read_tsv_sections(path: Path) -> Dict[str, List[Dict[str, str]]]:
 def build_2x3x3_manifest(tmp_path: Path) -> Path:
     """2 methods × 3 seeds × 3 benches with hand-computable macros.
 
-    tads_10 per-seed macros: 60, 62, 64  → mean 62, SD 2
-    random_10 = tads − 10 everywhere     → mean 52, SD 2
-    paired diff tads − random per seed   → +10, +10, +10
+    legacy_10 per-seed macros: 60, 62, 64  → mean 62, SD 2
+    random_10 = legacy − 10 everywhere     → mean 52, SD 2
+    paired diff legacy − random per seed   → +10, +10, +10
     """
     entries = []
-    for method, delta in (("tads_10", 0.0), ("random_10", -0.10)):
+    for method, delta in (("legacy_10", 0.0), ("random_10", -0.10)):
         for seed, bump in ((1, 0.0), (2, 0.02), (3, 0.04)):
             run = tmp_path / "runs_store" / method / f"seed{seed}"
             write_run(
@@ -147,7 +147,7 @@ def test_manifest_happy_path_macros_and_pairs(tmp_path: Path, capsys):
         [
             "--manifest", str(manifest),
             "--benches", BENCHES3,
-            "--pairs", "tads_10:random_10",
+            "--pairs", "legacy_10:random_10",
             "--tsv", str(tsv),
         ]
     )
@@ -161,23 +161,23 @@ def test_manifest_happy_path_macros_and_pairs(tmp_path: Path, capsys):
     assert len(per_run) == 6                    # 2 methods × 3 seeds, no more
     agg = {r["method"]: r for r in sections["aggregate"]}
 
-    tads = agg["tads_10"]
-    assert tads["n_seeds"] == "3"
-    assert float(tads["macro_mean"]) == pytest.approx(62.0, abs=1e-6)
-    assert float(tads["macro_sd"]) == pytest.approx(2.0, abs=1e-6)
+    legacy = agg["legacy_10"]
+    assert legacy["n_seeds"] == "3"
+    assert float(legacy["macro_mean"]) == pytest.approx(62.0, abs=1e-6)
+    assert float(legacy["macro_sd"]) == pytest.approx(2.0, abs=1e-6)
     # 95% CI: 62 ± t(0.975, df=2) · 2/√3, with t = 4.302652729911275.
     half = 4.302652729911275 * 2.0 / math.sqrt(3.0)
-    assert float(tads["ci_lo"]) == pytest.approx(62.0 - half, abs=1e-3)
-    assert float(tads["ci_hi"]) == pytest.approx(62.0 + half, abs=1e-3)
+    assert float(legacy["ci_lo"]) == pytest.approx(62.0 - half, abs=1e-3)
+    assert float(legacy["ci_hi"]) == pytest.approx(62.0 + half, abs=1e-3)
 
     rand = agg["random_10"]
     assert float(rand["macro_mean"]) == pytest.approx(52.0, abs=1e-6)
     assert float(rand["macro_sd"]) == pytest.approx(2.0, abs=1e-6)
 
     (pair,) = sections["pairs"]
-    assert pair["pair"] == "tads_10:random_10"
+    assert pair["pair"] == "legacy_10:random_10"
     assert pair["n_seeds"] == "3" and pair["seeds"] == "1,2,3"
-    # A:B reports A − B; tads is uniformly +10 above random → positive sign.
+    # A:B reports A − B; legacy is uniformly +10 above random → positive sign.
     assert float(pair["mean_diff"]) == pytest.approx(10.0, abs=1e-6)
     assert float(pair["ci_lo"]) == pytest.approx(10.0, abs=1e-6)  # SD of diffs = 0
     # All-positive n=3 diffs: two-sided exact sign-flip p = 2/8 = 0.25.
@@ -198,12 +198,12 @@ def test_t_ppf_matches_reference():
 # --------------------------------------------------------------------------
 
 def test_conflicting_accuracy_in_one_run_aborts(tmp_path: Path):
-    run = tmp_path / "store" / "tads_10" / "seed1"
+    run = tmp_path / "store" / "legacy_10" / "seed1"
     # Per-bench file says 0.50 mmlu; summary claims 0.60 → the run dir does
     # not describe one self-consistent eval, so the whole table must die.
     write_run(
         run,
-        "llama2_tads_10",
+        "llama2_legacy_10",
         {"mmlu": 0.50, "bbh": 0.60, "gsm8k": 0.70},
         seed=1,
         summary_accs={"mmlu": 0.60, "bbh": 0.60, "gsm8k": 0.70},
@@ -211,7 +211,7 @@ def test_conflicting_accuracy_in_one_run_aborts(tmp_path: Path):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         json.dumps(
-            [{"set": "main_7b", "model": "llama2", "method": "tads_10",
+            [{"set": "main_7b", "model": "llama2", "method": "legacy_10",
               "seed": 1, "run_dir": str(run)}]
         ),
         encoding="utf-8",
@@ -227,11 +227,11 @@ def test_conflicting_accuracy_in_one_run_aborts(tmp_path: Path):
 
 def test_results_root_latest_txt_and_unsealed_ignored(tmp_path: Path, capsys):
     root = tmp_path / "eval_results"
-    cell = root / "llama2" / "tads_10"
+    cell = root / "llama2" / "legacy_10"
     # Sealed run pointed to by _latest.txt — the ONLY legitimate source.
     write_run(
         cell / "runs" / "20260101_000000",
-        "llama2_tads_10",
+        "llama2_legacy_10",
         {"mmlu": 0.50},
         seed=7,
         git_sha="deadbeef",
@@ -240,7 +240,7 @@ def test_results_root_latest_txt_and_unsealed_ignored(tmp_path: Path, capsys):
     # would have grabbed this 0.90; v2 must never even look at it.
     write_run(
         cell / "runs" / "20260202_000000",
-        "llama2_tads_10",
+        "llama2_legacy_10",
         {"mmlu": 0.90},
         seed=7,
         sealed=False,
@@ -258,7 +258,7 @@ def test_results_root_latest_txt_and_unsealed_ignored(tmp_path: Path, capsys):
 
     sections = read_tsv_sections(tsv)
     (row,) = sections["per_run"]  # exactly ONE row for the cell
-    assert row["model"] == "llama2" and row["method"] == "tads_10"
+    assert row["model"] == "llama2" and row["method"] == "legacy_10"
     assert row["seed"] == "7"                     # from cfg.json
     assert row["run_tag"] == "20260101_000000"    # the _latest.txt target
     assert row["git_sha"] == "deadbeef"
@@ -272,7 +272,7 @@ def test_results_root_latest_txt_and_unsealed_ignored(tmp_path: Path, capsys):
 def test_results_root_seed_fallback_from_path_segment(tmp_path: Path, capsys):
     """No cfg.json seed → a ``seed(\\d+)`` path segment must fill in."""
     root = tmp_path / "eval_results"
-    cell = root / "llama2" / "tads_10_seed42"
+    cell = root / "llama2" / "legacy_10_seed42"
     write_run(cell / "runs" / "20260101_000000", "l", {"mmlu": 0.5})
     (cell / "_latest.txt").write_text("20260101_000000", encoding="utf-8")
     tsv = tmp_path / "out.tsv"
@@ -325,9 +325,9 @@ def _missing_bench_manifest(tmp_path: Path) -> Path:
     manifest.write_text(
         json.dumps(
             [
-                {"set": "m", "model": "llama2", "method": "tads_10",
+                {"set": "m", "model": "llama2", "method": "legacy_10",
                  "seed": 1, "run_dir": str(r1)},
-                {"set": "m", "model": "llama2", "method": "tads_10",
+                {"set": "m", "model": "llama2", "method": "legacy_10",
                  "seed": 2, "run_dir": str(r2)},
             ]
         ),
@@ -383,7 +383,7 @@ def test_pairs_refuse_non_overlapping_seeds(tmp_path: Path):
     manifest.write_text(
         json.dumps(
             [
-                {"set": "m", "model": "llama2", "method": "tads_10",
+                {"set": "m", "model": "llama2", "method": "legacy_10",
                  "seed": 1, "run_dir": str(ra)},
                 {"set": "m", "model": "llama2", "method": "random_10",
                  "seed": 2, "run_dir": str(rb)},
@@ -394,7 +394,7 @@ def test_pairs_refuse_non_overlapping_seeds(tmp_path: Path):
     with pytest.raises(SystemExit) as ei:
         mtv2.main(
             ["--manifest", str(manifest), "--benches", "mmlu",
-             "--pairs", "tads_10:random_10"]
+             "--pairs", "legacy_10:random_10"]
         )
     assert ei.value.code == 2
 
@@ -405,7 +405,7 @@ def test_manifest_seed_contradicting_cfg_aborts(tmp_path: Path):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         json.dumps(
-            [{"set": "m", "model": "llama2", "method": "tads_10",
+            [{"set": "m", "model": "llama2", "method": "legacy_10",
               "seed": 1, "run_dir": str(run)}]
         ),
         encoding="utf-8",
@@ -423,9 +423,9 @@ def test_duplicate_cell_seed_rows_abort(tmp_path: Path):
     manifest.write_text(
         json.dumps(
             [
-                {"set": "m", "model": "llama2", "method": "tads_10",
+                {"set": "m", "model": "llama2", "method": "legacy_10",
                  "seed": 1, "run_dir": str(r1)},
-                {"set": "m", "model": "llama2", "method": "tads_10",
+                {"set": "m", "model": "llama2", "method": "legacy_10",
                  "seed": 1, "run_dir": str(r2)},
             ]
         ),
@@ -452,9 +452,9 @@ def test_two_unseeded_rows_same_cell_abort(tmp_path: Path):
     manifest = _manifest_for(
         tmp_path,
         [
-            {"set": "m", "model": "llama2", "method": "tads_10",
+            {"set": "m", "model": "llama2", "method": "legacy_10",
              "run_dir": str(r1)},
-            {"set": "m", "model": "llama2", "method": "tads_10",
+            {"set": "m", "model": "llama2", "method": "legacy_10",
              "run_dir": str(r2)},
         ],
     )
@@ -471,9 +471,9 @@ def test_unseeded_row_mixed_with_seeded_rows_aborts(tmp_path: Path):
     manifest = _manifest_for(
         tmp_path,
         [
-            {"set": "m", "model": "llama2", "method": "tads_10",
+            {"set": "m", "model": "llama2", "method": "legacy_10",
              "seed": 1, "run_dir": str(r1)},
-            {"set": "m", "model": "llama2", "method": "tads_10",
+            {"set": "m", "model": "llama2", "method": "legacy_10",
              "run_dir": str(r2)},
         ],
     )
@@ -488,7 +488,7 @@ def test_single_unseeded_row_aggregates_alone_with_marker(tmp_path: Path, capsys
     run = write_run(tmp_path / "r", "l", {"mmlu": 0.5})
     manifest = _manifest_for(
         tmp_path,
-        [{"set": "m", "model": "llama2", "method": "tads_10",
+        [{"set": "m", "model": "llama2", "method": "legacy_10",
           "run_dir": str(run)}],
     )
     tsv = tmp_path / "out.tsv"
@@ -512,9 +512,9 @@ def test_same_run_dir_under_two_pinned_seeds_aborts(tmp_path: Path):
     manifest = _manifest_for(
         tmp_path,
         [
-            {"set": "m", "model": "llama2", "method": "tads_10",
+            {"set": "m", "model": "llama2", "method": "legacy_10",
              "seed": 1, "run_dir": str(run)},
-            {"set": "m", "model": "llama2", "method": "tads_10",
+            {"set": "m", "model": "llama2", "method": "legacy_10",
              "seed": 2, "run_dir": str(run)},
         ],
     )
@@ -531,7 +531,7 @@ def test_same_run_dir_across_methods_aborts(tmp_path: Path):
     manifest = _manifest_for(
         tmp_path,
         [
-            {"set": "m", "model": "llama2", "method": "tads_10",
+            {"set": "m", "model": "llama2", "method": "legacy_10",
              "seed": 1, "run_dir": str(run)},
             {"set": "m", "model": "llama2", "method": "random_10",
              "seed": 1, "run_dir": str(run)},
@@ -549,7 +549,7 @@ def test_unsealed_run_in_manifest_aborts(tmp_path: Path):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         json.dumps(
-            [{"set": "m", "model": "llama2", "method": "tads_10",
+            [{"set": "m", "model": "llama2", "method": "legacy_10",
               "seed": 1, "run_dir": str(run)}]
         ),
         encoding="utf-8",

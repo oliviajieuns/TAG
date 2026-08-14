@@ -1,0 +1,22 @@
+defaults:
+  - configs/base.yaml
+  - configs/methods/legacy.yaml
+  - configs/models/qwen2.5-0.5b.yaml
+  - configs/modes/lora.yaml
+
+output_subdir: light/legacy_05b
+selection_ratio: 0.1
+train_epochs: 3
+batch_size: 4
+grad_accum: 2
+episode_batch_size: 2
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+
+anchor:
+  layer_idx: -1
+  max_samples_for_pca: 512
+  pca_batch_size: 4

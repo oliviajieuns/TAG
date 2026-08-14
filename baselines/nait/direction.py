@@ -11,11 +11,12 @@ were fitted on Δh variance, so projecting anything else (mean-pooled
 hidden state, last-token hidden state alone, etc.) onto v_l is not the
 inner product the NAIT paper defines and produces a different ranking.
 
-Note: TADS (tads/core/selector.py) intentionally departs from this — it
-extracts v_l from the same Δh PCA (tads/core/trajectory_anchor.py) but
-SCORES candidates by sequence-mean h̄_l projection (paper Eq.6). So the
-two methods share the anchor-extraction side and differ on the scoring
-side by design; that's the algorithmic distinction between TADS and NAIT.
+Note: TAG's legacy/tag selection score (tag/core/selector.py) intentionally
+departs from this — it extracts v_l from the same Δh PCA
+(tag/core/trajectory_anchor.py) but SCORES candidates by sequence-mean h̄_l
+projection (paper Eq.6). So the two methods share the anchor-extraction side
+and differ on the scoring side by design; that's the algorithmic distinction
+between TAG and NAIT.
 
 This module deduplicates the ``extract_delta_from_seed`` definitions in
 the original ``train_nait_v2.py`` (which had two identical copies).
@@ -29,7 +30,7 @@ from typing import Dict, List, Optional
 import torch
 from torch.utils.data import DataLoader
 
-from tads.data.sft_prompts import alpaca_input_part
+from tag.data.sft_prompts import alpaca_input_part
 
 logger = logging.getLogger(__name__)
 

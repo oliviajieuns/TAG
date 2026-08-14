@@ -65,8 +65,9 @@ export ALPACA_DATA_FILES="${ALPACA_DATA_FILES:-/group-volume/jieuns.shin/dataset
 # somewhere real without needing a manual export every session.
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/group-volume/jieuns.shin/tads-checkpoints}"
 export DATA_CACHE="${DATA_CACHE:-/group-volume/jieuns.shin/tads-checkpoints/cache}"
-# `tads-eval-results` holds eval results for the TADS-family methods
-# (random / full / data_agent / tads). Comparison baselines (NAIT, SelectIT,
+# `tads-eval-results` (name preserved: it is an existing cluster directory,
+# not renamed here) holds eval results for the trajectory-anchored-selection
+# family (random / full / data_agent / legacy). Comparison baselines (NAIT, SelectIT,
 # ...) write to sibling roots so each method's score history is separable
 # without per-run path mangling.
 export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-/group-volume/jieuns.shin/tads-eval-results}"
@@ -124,44 +125,44 @@ export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-16}"
 export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-16}"
 export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-16}"
 
-# --- TADS DDP / training knobs (opt-in, all default to safe values) ---
+# --- TAG DDP / training knobs (opt-in, all default to safe values) ---
 # Documented here so they're discoverable; uncomment to override.
 #
-# TADS_DDP_BACKEND        nccl|gloo  default nccl. Fall back to gloo only if
+# TAG_DDP_BACKEND        nccl|gloo  default nccl. Fall back to gloo only if
 #                                    NCCL is structurally broken on the host
 #                                    (much slower; CPU all-reduce).
-# TADS_DDP_FIND_UNUSED    0|1        default 1 (safe). Set 0 once you've
+# TAG_DDP_FIND_UNUSED    0|1        default 1 (safe). Set 0 once you've
 #                                    verified all params receive grads.
-# TADS_DDP_STATIC_GRAPH   0|1        default 0. Enables DDP static_graph
+# TAG_DDP_STATIC_GRAPH   0|1        default 0. Enables DDP static_graph
 #                                    optimisation; requires unchanging graph
 #                                    across iterations (no dynamic control flow).
-# TADS_DDP_BROADCAST_BUFFERS 0|1     default 0. Buffers (running stats etc.)
+# TAG_DDP_BROADCAST_BUFFERS 0|1     default 0. Buffers (running stats etc.)
 #                                    are not broadcast each step.
-# TADS_NCCL_REINIT        0|1        default 0. Destroy + reinit process group
+# TAG_NCCL_REINIT        0|1        default 0. Destroy + reinit process group
 #                                    after long idle phases (selection collect).
 #                                    The destroy call itself can hang if NCCL
 #                                    state is wedged — keep at 0 unless needed.
-# TADS_DL_NUM_WORKERS     int        default 0. DataLoader worker procs. 0 is
+# TAG_DL_NUM_WORKERS     int        default 0. DataLoader worker procs. 0 is
 #                                    safest for DDP on this cluster; >0 has
 #                                    occasionally surfaced shared-memory races.
-# TADS_ENABLE_NO_SYNC     0|1        default 0. Use DDP no_sync() context for
+# TAG_ENABLE_NO_SYNC     0|1        default 0. Use DDP no_sync() context for
 #                                    grad accumulation. Off by default because
 #                                    early tests in this codebase hit NCCL
 #                                    issues with it; re-enable when stable.
-# TADS_FRESH_DATA_CACHE   0|1        default 0. Force-re-tokenise Alpaca
+# TAG_FRESH_DATA_CACHE   0|1        default 0. Force-re-tokenise Alpaca
 #                                    instead of reusing the HF Dataset.map
 #                                    fingerprint cache. Costs ~1-2 min on
 #                                    52K examples; use when prompt_style /
 #                                    max_seq_len changed and stale token
 #                                    IDs are suspected.
-# TADS_ENABLE_COREDUMPS   0|1        default 0. Re-enables core dumps. The
+# TAG_ENABLE_COREDUMPS   0|1        default 0. Re-enables core dumps. The
 #                                    Python entry points call RLIMIT_CORE
 #                                    setrlimit at startup; set this to skip
 #                                    that (debugging only — see comments
 #                                    above about coredump file size).
 #
 # Example to flip backend for a single run:
-#   TADS_DDP_BACKEND=gloo torchrun --nproc_per_node=4 -m tads.train ...
+#   TAG_DDP_BACKEND=gloo torchrun --nproc_per_node=4 -m tag.train ...
 
 # -----------------------------------------------------------------------------
 # HuggingFace API token (for gated datasets like GAIR/lima)
@@ -176,15 +177,15 @@ export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-16}"
 #      ~/.zshrc) BEFORE sourcing this file. Same effect, slightly less safe
 #      (token visible to anyone reading your rc).
 #
-#   3) Create ~/.tads_secrets.sh with `export HF_TOKEN=hf_xxxx` and `chmod 600`
+#   3) Create ~/.tag_secrets.sh with `export HF_TOKEN=hf_xxxx` and `chmod 600`
 #      it. Lines below auto-source it if present. Convenient for scripts.
 #
 # SECURITY: do NOT hardcode a real token directly inside this file —
 # scripts/setup_env.sh is git-tracked, so a real token would leak the moment
 # anyone runs `git push`. The placeholder below stays empty.
-if [ -f "$HOME/.tads_secrets.sh" ]; then
+if [ -f "$HOME/.tag_secrets.sh" ]; then
     # shellcheck disable=SC1091
-    source "$HOME/.tads_secrets.sh"
+    source "$HOME/.tag_secrets.sh"
 fi
 export HF_TOKEN="${HF_TOKEN:-}"
 # `datasets` and `huggingface_hub` accept the alternate name too — keep both
@@ -211,10 +212,10 @@ mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$HF_HUB_CACHE" "$TRANSFORMERS_CACHE" 2
 # gradient buffers + CUDA-mapped VRAM regions). On a 4-GPU launch that
 # is ~960 GB total, easily destroying the 50 GB user-volume. Disable
 # coredumps by default; users who want them for debugging should opt in
-# by exporting TADS_ENABLE_COREDUMPS=1 BEFORE sourcing this file and
+# by exporting TAG_ENABLE_COREDUMPS=1 BEFORE sourcing this file and
 # also `cd $OUTPUT_ROOT/coredumps` (or any group-volume dir) before
 # launching, so the dump lands on the shared volume rather than user-volume.
-if [ "${TADS_ENABLE_COREDUMPS:-0}" = "1" ]; then
+if [ "${TAG_ENABLE_COREDUMPS:-0}" = "1" ]; then
     mkdir -p "${OUTPUT_ROOT}/coredumps" 2>/dev/null || true
     ulimit -c unlimited 2>/dev/null || true
     echo "[setup_env] coredumps ENABLED — make sure cwd is on group-volume" \
@@ -241,7 +242,7 @@ export TRANSFORMERS_NO_ADVISORY_WARNINGS="${TRANSFORMERS_NO_ADVISORY_WARNINGS:-1
 # session. If you `source scripts/setup_env.sh` and later want a single
 # online command without re-sourcing, prefix the command:
 #     HF_DATASETS_OFFLINE=0 HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 \
-#         python -m tads.eval ...
+#         python -m tag.eval ...
 # This is local to that subprocess and doesn't disturb the parent shell.
 export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
@@ -259,11 +260,11 @@ mkdir -p "$OUTPUT_ROOT" "$DATA_CACHE" \
 # -----------------------------------------------------------------------------
 # Existence checks (warn-only — never aborts the shell)
 # -----------------------------------------------------------------------------
-_tads_missing=0
-_tads_warn() {
+_tag_missing=0
+_tag_warn() {
     local var="$1" path="$2" desc="$3"
     if [ ! -e "$path" ]; then
-        if [ "$_tads_missing" = "0" ]; then
+        if [ "$_tag_missing" = "0" ]; then
             echo ""
             echo "------------------------------------------------------------------"
             echo "[setup_env] WARNINGS: the following paths do not exist locally."
@@ -274,37 +275,37 @@ _tads_warn() {
         printf "  [missing] %-25s %s\n" "$var" "$path"
         printf "            (%s)\n" "$desc"
         printf "            fix:  export %s=/your/path\n" "$var"
-        _tads_missing=$((_tads_missing + 1))
+        _tag_missing=$((_tag_missing + 1))
     fi
 }
 
 # Required for training (any one of the four models you actually plan to use)
-_tads_warn MODEL_PATH_LLAMA2_7B   "$MODEL_PATH_LLAMA2_7B"   "Llama-2-7B base checkpoint dir"
-_tads_warn MODEL_PATH_QWEN25_7B   "$MODEL_PATH_QWEN25_7B"   "Qwen2.5-7B checkpoint dir (base on most clusters; defaults to the Instruct checkpoint on n9 — see comment above)"
-_tads_warn MODEL_PATH_MISTRAL_7B  "$MODEL_PATH_MISTRAL_7B"  "Mistral-7B-v0.1 base checkpoint dir"
-_tads_warn MODEL_PATH_DEEPSEEK_7B "$MODEL_PATH_DEEPSEEK_7B" "DeepSeek-LLM-7B base checkpoint dir"
-_tads_warn ALPACA_DATA_FILES      "$ALPACA_DATA_FILES"      "Alpaca-GPT4 training file (parquet / json / jsonl / csv)"
+_tag_warn MODEL_PATH_LLAMA2_7B   "$MODEL_PATH_LLAMA2_7B"   "Llama-2-7B base checkpoint dir"
+_tag_warn MODEL_PATH_QWEN25_7B   "$MODEL_PATH_QWEN25_7B"   "Qwen2.5-7B checkpoint dir (base on most clusters; defaults to the Instruct checkpoint on n9 — see comment above)"
+_tag_warn MODEL_PATH_MISTRAL_7B  "$MODEL_PATH_MISTRAL_7B"  "Mistral-7B-v0.1 base checkpoint dir"
+_tag_warn MODEL_PATH_DEEPSEEK_7B "$MODEL_PATH_DEEPSEEK_7B" "DeepSeek-LLM-7B base checkpoint dir"
+_tag_warn ALPACA_DATA_FILES      "$ALPACA_DATA_FILES"      "Alpaca-GPT4 training file (parquet / json / jsonl / csv)"
 
 # Required for evaluation (only matter if you actually run that benchmark)
-_tads_warn MMLU_DATA_DIR          "$MMLU_DATA_DIR"          "MMLU 'all' parquet directory"
-_tads_warn MMLU_PRO_DATA_DIR      "$MMLU_PRO_DATA_DIR"      "MMLU-Pro dir (test-*.parquet + validation-*.parquet — run scripts/download_mmlu_pro.sh \$MMLU_PRO_DATA_DIR)"
-_tads_warn GSM8K_DATA_DIR         "$GSM8K_DATA_DIR"         "GSM8K root (contains main/test*.parquet)"
-_tads_warn SVAMP_DATA_DIR         "$SVAMP_DATA_DIR"         "SVAMP dir (test-*.parquet — run scripts/download_svamp.sh \$SVAMP_DATA_DIR)"
-_tads_warn HUMANEVAL_DATA_DIR     "$HUMANEVAL_DATA_DIR"     "HumanEval dir (contains HumanEval.jsonl.gz — run scripts/download_humaneval.sh \$HUMANEVAL_DATA_DIR to fetch; also needs 'pip install human-eval' for scoring)"
-_tads_warn MBPP_DATA_DIR          "$MBPP_DATA_DIR"          "MBPP dir (sanitized/test-*.parquet + sanitized/prompt-*.parquet — run scripts/download_mbpp.sh \$MBPP_DATA_DIR)"
-_tads_warn TYDIQA_DATA_DIR        "$TYDIQA_DATA_DIR"        "TyDiQA dir (HF parquet: validation-00000-of-00001.parquet + train-00000-of-00001.parquet — run scripts/download_tydiqa.sh \$TYDIQA_DATA_DIR to fetch)"
-_tads_warn XQUAD_DATA_DIR         "$XQUAD_DATA_DIR"         "XQuAD dir (xquad.<lang>.json files for 11 languages — run scripts/download_xquad.sh \$XQUAD_DATA_DIR)"
-_tads_warn BBH_DATA_DIR           "$BBH_DATA_DIR"           "BBH directory (contains <task>.json + optional cot-prompts/)"
-_tads_warn ALPAGASUS_FILTERED_FILE "$ALPAGASUS_FILTERED_FILE" "AlpaGasus pre-filtered JSON (chatgpt_9k.json) — run scripts/download_alpagasus.sh to fetch; only required for the AlpaGasus baseline"
-_tads_warn LIMA_DATA_FILES        "$LIMA_DATA_FILES"        "LIMA train.jsonl — run scripts/download_lima.sh (needs huggingface-cli login + dataset access agreement); only required for the LIMA baseline"
-_tads_warn EVOL_INSTRUCT_DATA_FILES "$EVOL_INSTRUCT_DATA_FILES" "Evol-Instruct train.jsonl — run scripts/download_evol_instruct.sh; only required for the Table 5 instruction-dataset transfer experiments"
+_tag_warn MMLU_DATA_DIR          "$MMLU_DATA_DIR"          "MMLU 'all' parquet directory"
+_tag_warn MMLU_PRO_DATA_DIR      "$MMLU_PRO_DATA_DIR"      "MMLU-Pro dir (test-*.parquet + validation-*.parquet — run scripts/download_mmlu_pro.sh \$MMLU_PRO_DATA_DIR)"
+_tag_warn GSM8K_DATA_DIR         "$GSM8K_DATA_DIR"         "GSM8K root (contains main/test*.parquet)"
+_tag_warn SVAMP_DATA_DIR         "$SVAMP_DATA_DIR"         "SVAMP dir (test-*.parquet — run scripts/download_svamp.sh \$SVAMP_DATA_DIR)"
+_tag_warn HUMANEVAL_DATA_DIR     "$HUMANEVAL_DATA_DIR"     "HumanEval dir (contains HumanEval.jsonl.gz — run scripts/download_humaneval.sh \$HUMANEVAL_DATA_DIR to fetch; also needs 'pip install human-eval' for scoring)"
+_tag_warn MBPP_DATA_DIR          "$MBPP_DATA_DIR"          "MBPP dir (sanitized/test-*.parquet + sanitized/prompt-*.parquet — run scripts/download_mbpp.sh \$MBPP_DATA_DIR)"
+_tag_warn TYDIQA_DATA_DIR        "$TYDIQA_DATA_DIR"        "TyDiQA dir (HF parquet: validation-00000-of-00001.parquet + train-00000-of-00001.parquet — run scripts/download_tydiqa.sh \$TYDIQA_DATA_DIR to fetch)"
+_tag_warn XQUAD_DATA_DIR         "$XQUAD_DATA_DIR"         "XQuAD dir (xquad.<lang>.json files for 11 languages — run scripts/download_xquad.sh \$XQUAD_DATA_DIR)"
+_tag_warn BBH_DATA_DIR           "$BBH_DATA_DIR"           "BBH directory (contains <task>.json + optional cot-prompts/)"
+_tag_warn ALPAGASUS_FILTERED_FILE "$ALPAGASUS_FILTERED_FILE" "AlpaGasus pre-filtered JSON (chatgpt_9k.json) — run scripts/download_alpagasus.sh to fetch; only required for the AlpaGasus baseline"
+_tag_warn LIMA_DATA_FILES        "$LIMA_DATA_FILES"        "LIMA train.jsonl — run scripts/download_lima.sh (needs huggingface-cli login + dataset access agreement); only required for the LIMA baseline"
+_tag_warn EVOL_INSTRUCT_DATA_FILES "$EVOL_INSTRUCT_DATA_FILES" "Evol-Instruct train.jsonl — run scripts/download_evol_instruct.sh; only required for the Table 5 instruction-dataset transfer experiments"
 
 # -----------------------------------------------------------------------------
 # Final summary
 # -----------------------------------------------------------------------------
-if [ "$_tads_missing" -gt 0 ]; then
+if [ "$_tag_missing" -gt 0 ]; then
     echo "------------------------------------------------------------------"
-    echo "[setup_env] $_tads_missing path(s) missing."
+    echo "[setup_env] $_tag_missing path(s) missing."
     echo "[setup_env] Env vars are still exported (with their default values)"
     echo "[setup_env] — fix the missing ones before running training/eval."
     echo "------------------------------------------------------------------"
@@ -312,9 +313,9 @@ else
     echo "[setup_env] All paths verified ✓"
 fi
 echo ""
-echo "TADS env loaded."
+echo "TAG env loaded."
 echo "  OUTPUT_ROOT                 = $OUTPUT_ROOT"
-echo "  EVAL_RESULTS_ROOT           = $EVAL_RESULTS_ROOT      (TADS family: random/full/data_agent/tads)"
+echo "  EVAL_RESULTS_ROOT           = $EVAL_RESULTS_ROOT      (selection family: random/full/data_agent/legacy)"
 echo "  NAIT_EVAL_RESULTS_ROOT      = $NAIT_EVAL_RESULTS_ROOT      (NAIT baseline)"
 echo "  SELECTIT_EVAL_RESULTS_ROOT  = $SELECTIT_EVAL_RESULTS_ROOT  (SelectIT baseline)"
 echo "  ALPAGASUS_FILTERED_FILE     = $ALPAGASUS_FILTERED_FILE  (AlpaGasus pre-filtered JSON)"
@@ -329,5 +330,5 @@ fi
 echo "  ALPACA_DATA_FILES           = $ALPACA_DATA_FILES"
 echo "  EVOL_INSTRUCT_DATA_FILES    = $EVOL_INSTRUCT_DATA_FILES  (Table 5 dataset-transfer experiments)"
 
-unset -f _tads_warn
-unset _tads_missing
+unset -f _tag_warn
+unset _tag_missing

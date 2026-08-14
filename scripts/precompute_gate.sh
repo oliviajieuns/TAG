@@ -7,7 +7,7 @@
 # Defaults to the 7B lowq arm and $POOLS/<pool>/tag_gate_<model_key>.pt.
 #
 # G depends only on (pool, base checkpoint, gate config), so this runs ONCE
-# and every arm and seed reuses it — export TADS_GATE_CACHE=<out> before
+# and every arm and seed reuses it — export TAG_GATE_CACHE=<out> before
 # launching training. On the paper's 8-arm x 3-seed grid that turns 24
 # redundant gate computations into one.
 #
@@ -29,7 +29,7 @@ fi
 if [ -z "$OUT" ]; then
   KEY="$(python - "$CFG" <<'PY'
 import sys
-from tads.core.utils import load_config
+from tag.core.utils import load_config
 c = load_config(sys.argv[1])
 print(str(c.get("model_key", "model")))
 PY
@@ -42,7 +42,7 @@ N="${NUM_SHARDS:-$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/nul
 
 if [ -f "$OUT" ]; then
   echo "[gate] $OUT already exists — delete it to recompute."
-  echo "[gate] export TADS_GATE_CACHE=$OUT"
+  echo "[gate] export TAG_GATE_CACHE=$OUT"
   exit 0
 fi
 
@@ -51,10 +51,10 @@ fi
 if ! python - "$CFG" <<'PRECHK'
 import sys
 sys.path.insert(0, ".")
-from tads.core.utils import load_config
-from tads.pipelines.selection import _resolve_gate_calibration
+from tag.core.utils import load_config
+from tag.pipelines.selection import _resolve_gate_calibration
 cfg = load_config(sys.argv[1])
-_resolve_gate_calibration((cfg.get("tads") or {}).get("tag") or {})
+_resolve_gate_calibration((cfg.get("selection") or {}).get("tag") or {})
 PRECHK
 then
   echo "[gate] calibration reference unusable — not launching shards." >&2

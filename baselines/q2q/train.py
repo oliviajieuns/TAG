@@ -45,20 +45,20 @@ except Exception:
 import torch
 from torch.utils.data import Subset
 
-from tads.core.data_io import read_records_glob
-from tads.core.schedulers import get_cosine_schedule_with_warmup
-from tads.core.timing import PhaseTimer
-from tads.core.utils import (
+from tag.core.data_io import read_records_glob
+from tag.core.schedulers import get_cosine_schedule_with_warmup
+from tag.core.timing import PhaseTimer
+from tag.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
     load_config,
     set_seed,
     setup_logger,
 )
-from tads.data.alpaca import build_alpaca_dataset
-from tads.data.sft_prompts import alpaca_input_part
-from tads.modeling.loader import load_model, load_tokenizer
-from tads.pipelines.sft import make_dataloader, sft_one_epoch
+from tag.data.alpaca import build_alpaca_dataset
+from tag.data.sft_prompts import alpaca_input_part
+from tag.modeling.loader import load_model, load_tokenizer
+from tag.pipelines.sft import make_dataloader, sft_one_epoch
 
 from .score import compute_ifd_scores, select_top_proportion_by_ifd
 
@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 
 def _atomic_json_dump(obj, path) -> None:
-    """tmp + fsync + rename — same pattern as tads.train and nait seed cache.
+    """tmp + fsync + rename — same pattern as tag.train and nait seed cache.
     Prevents a kill mid-`json.dump` from leaving a truncated cache file the
     resume path then chokes on."""
     p = Path(path)

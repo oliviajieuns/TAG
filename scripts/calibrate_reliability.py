@@ -8,7 +8,7 @@ expects — without it that chain had no emitter (adversarial review
 
     ΔL_i = L(y_i | x_i^-) - L(y_i | x_i)                       [nats]
 
-and saves ``{"delta": tensor}`` for ``tads.mvf.reliability_ref_file``.
+and saves ``{"delta": tensor}`` for ``selection.mvf.reliability_ref_file``.
 
 ``--mode tag`` (paper Eqs. 3-6) computes the TAG gate's own statistic
 
@@ -16,7 +16,7 @@ and saves ``{"delta": tensor}`` for ``tads.mvf.reliability_ref_file``.
 
 — which needs a TOKEN-LEVEL forward, because Δ^min_i is a span
 aggregate — and saves ``{"delta_hat": tensor, ...}`` for
-``tads.tag.gate_ref_file``.
+``selection.tag.gate_ref_file``.
 
 The two artifacts are NOT interchangeable: one is a difference in nats,
 the other a scale-free ratio in (-inf, 1]. Feeding an MVF reference to
@@ -38,17 +38,17 @@ Usage (GPU server, once per backbone):
         --pool pools/clean_ref/pool.json \
         --counterfactual pools/clean_ref/counterfactual.json \
         --out pools/clean_ref/delta_hat_05b.pt
-    export TADS_GATE_REF=pools/clean_ref/delta_hat_05b.pt
+    export TAG_GATE_REF=pools/clean_ref/delta_hat_05b.pt
 
     # MVF:
     python scripts/calibrate_reliability.py --mode mvf \
-        --config configs/experiments/lowq/light_tads_mvf_05b.yaml \
+        --config configs/experiments/lowq/light_mvf_05b.yaml \
         --pool pools/clean_ref/pool.json \
         --counterfactual pools/clean_ref/counterfactual.json \
         --out pools/clean_ref/delta_05b.pt
-    export TADS_RELIABILITY_REF=pools/clean_ref/delta_05b.pt
+    export TAG_RELIABILITY_REF=pools/clean_ref/delta_05b.pt
 
-Or pin the printed scale explicitly (TADS_GATE_SCALE / TADS_RELIABILITY_SCALE).
+Or pin the printed scale explicitly (TAG_GATE_SCALE / TAG_RELIABILITY_SCALE).
 """
 from __future__ import annotations
 
@@ -75,13 +75,13 @@ def main() -> None:
                         "{'delta_hat': ...} for tag)")
     p.add_argument("--mode", choices=("mvf", "tag"), default=None,
                    help="which statistic to emit. Default: inferred from the "
-                        "config (tads.score_mode), falling back to 'mvf'.")
+                        "config (selection.score_mode), falling back to 'mvf'.")
     p.add_argument("--target-pct", type=float, default=0.10)
     p.add_argument("--target-q", type=float, default=0.8)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--target-zero-rate", type=float, default=None,
                    help="tag mode: clean-reference zero-weight rate for the Eq. 5' "
-                        "null correction. Default: tads.tag.target_zero_rate from "
+                        "null correction. Default: selection.tag.target_zero_rate from "
                         "the config (0.05). Must be < --target-pct.")
     p.add_argument("--no-null-correction", action="store_true",
                    help="tag mode: fit s on the RAW Delta_hat, the literal "
@@ -97,15 +97,15 @@ def main() -> None:
 
     import torch
 
-    from tads.core.reliability import calibrate_reliability_scale, compute_pool_loss
-    from tads.core.utils import load_config
-    from tads.data.alpaca import build_alpaca_dataset
-    from tads.modeling.loader import load_model, load_tokenizer
+    from tag.core.reliability import calibrate_reliability_scale, compute_pool_loss
+    from tag.core.utils import load_config
+    from tag.data.alpaca import build_alpaca_dataset
+    from tag.modeling.loader import load_model, load_tokenizer
 
     cfg = load_config(args.config)
-    _tads_cfg = cfg.get("tads", {}) or {}
+    _selection_cfg = cfg.get("selection", {}) or {}
     mode = args.mode or (
-        "tag" if str(_tads_cfg.get("score_mode", "")) == "tag" else "mvf"
+        "tag" if str(_selection_cfg.get("score_mode", "")) == "tag" else "mvf"
     )
     logger.info("Calibration mode: %s", mode)
     tokenizer = load_tokenizer(cfg["model_path"])
@@ -150,9 +150,9 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if mode == "tag":
-        from tads.core import gate as gatelib
+        from tag.core import gate as gatelib
 
-        tag_cfg = _tads_cfg.get("tag", {}) or {}
+        tag_cfg = _selection_cfg.get("tag", {}) or {}
         target_zero_rate = (
             float(args.target_zero_rate)
             if args.target_zero_rate is not None
@@ -283,7 +283,7 @@ def main() -> None:
                 "clean zero-weight rate below is what the uncorrected Eq. 5 gives: "
                 "%.1f%%.", 100.0 * fit["zero_rate"],
             )
-        logger.info("  calibrated s = %.6f  →  export TADS_GATE_SCALE=%.6f", s, s)
+        logger.info("  calibrated s = %.6f  →  export TAG_GATE_SCALE=%.6f", s, s)
         logger.info(
             "Gate config used for calibration MUST match the training config "
             "(W=%d, tau=%.3f/%s, min_span=%d, tail=%s, include_eos=%s, "
@@ -324,7 +324,7 @@ def main() -> None:
         frac_pos = float((delta > 0).float().mean().item())
         logger.info(
             "Saved clean-reference ΔL (n=%d, %.1f%% positive) to %s | "
-            "calibrated s = %.6f  →  export TADS_RELIABILITY_SCALE=%.6f",
+            "calibrated s = %.6f  →  export TAG_RELIABILITY_SCALE=%.6f",
             delta.numel(), 100.0 * frac_pos, out, s, s,
         )
         stat_name = "ΔL"

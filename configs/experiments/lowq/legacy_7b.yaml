@@ -1,0 +1,8 @@
+# Lowq arm: legacy trajectory-anchored score at 7B, no gate (paper Eq. 10).
+# This is TAG's direct ablation — the two arms differ by exactly G, so the
+# TAG - legacy pair is the only comparison that isolates the gate.
+defaults:
+  - configs/methods/legacy.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq/legacy_7b

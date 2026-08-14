@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tads.core.reward import composite_reward, compute_rewards
+from tag.core.reward import composite_reward, compute_rewards
 
 
 @pytest.mark.parametrize("B,T,V", [(4, 16, 32)])

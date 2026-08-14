@@ -13,8 +13,8 @@ import pytest
 import torch
 import transformers
 
-from tads.core.scorer import gated_selection_key, tads_score, tag_score
-from tads.core.selector import collect_episode
+from tag.core.scorer import gated_selection_key, legacy_score, tag_score
+from tag.core.selector import collect_episode
 
 
 class _TinyDataset(torch.utils.data.Dataset):
@@ -228,7 +228,7 @@ def test_tag_score_equals_gate_times_legacy_score():
     R = torch.tensor([1.0, 2.0, 3.0])
     a = torch.tensor([0.0, 0.5, 1.0])
     g = torch.tensor([1.0, 0.5, 0.0])
-    assert torch.allclose(tag_score(g, R, a, 1.0), g * tads_score(R, a, 1.0))
+    assert torch.allclose(tag_score(g, R, a, 1.0), g * legacy_score(R, a, 1.0))
 
 
 def test_tag_score_without_anchor_is_gate_times_reward():

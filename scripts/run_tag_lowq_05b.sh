@@ -53,9 +53,9 @@ CFG_TAG="${CFG_TAG:-configs/experiments/lowq/light_tag_05b.yaml}"
 # The gate reference and the pool wiring must be exported for EVERY stage:
 # the configs read them through ${oc.env:...}.
 export ALPACA_DATA_FILES="$POOL_DIR/pool.json"
-export TADS_CF_FILES="$POOL_DIR/counterfactual.json"
-export TADS_DEDUP_FILE="$POOL_DIR/dedup_clusters.json"
-export TADS_GATE_REF="${TADS_GATE_REF:-$CLEAN_DIR/delta_hat_05b.pt}"
+export TAG_CF_FILES="$POOL_DIR/counterfactual.json"
+export TAG_DEDUP_FILE="$POOL_DIR/dedup_clusters.json"
+export TAG_GATE_REF="${TAG_GATE_REF:-$CLEAN_DIR/delta_hat_05b.pt}"
 
 log() { echo "[run_tag_lowq_05b] $*" >&2; }
 
@@ -82,8 +82,8 @@ stage_calibrate() {
     --config "$CFG_TAG" \
     --pool "$CLEAN_DIR/pool.json" \
     --counterfactual "$CLEAN_DIR/counterfactual.json" \
-    --out "$TADS_GATE_REF"
-  log "gate reference written to $TADS_GATE_REF"
+    --out "$TAG_GATE_REF"
+  log "gate reference written to $TAG_GATE_REF"
 }
 
 stage_phasea() {
@@ -127,7 +127,7 @@ stage_smoke() {
   # epoch 2. A one-epoch test proves nothing about it.
   local n="${SMOKE_N:-512}"
   log "smoke: $n samples, 2 epochs — exercises the epoch-2 gate-cache path"
-  python -m tads.train --config "$CFG_TAG" \
+  python -m tag.train --config "$CFG_TAG" \
     --run_suffix smoke \
     --override "dataset_subset_size=$n" train_epochs=2 \
       output_subdir=lowq/tag_05b_smoke
@@ -193,7 +193,7 @@ PY
 
 stage_phaseb() {
   log "phase B: end-to-end SFT (TAG arm)"
-  python -m tads.train --config "$CFG_TAG"
+  python -m tag.train --config "$CFG_TAG"
 }
 
 case "$STAGE" in

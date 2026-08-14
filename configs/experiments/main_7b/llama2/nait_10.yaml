@@ -10,7 +10,7 @@
 #       --seed_path /path/to/seeds.json   를 추가
 #
 # 평가는 별도 root로:
-#   python -m tads.eval \
+#   python -m tag.eval \
 #       --config configs/experiments/main_7b/llama2/nait_10.yaml \
 #       --ckpt ${OUTPUT_ROOT}/main_7b/llama2/nait_10/nait_nait_mix/epoch_last \
 #       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
@@ -23,5 +23,5 @@ defaults:
 
 output_subdir: main_7b/llama2/nait_10
 selection_ratio: 0.1
-# Cross-method 비교를 위해 TADS/data_agent와 동일하게 3으로 고정 (base default와 동일).
+# Cross-method 비교를 위해 legacy-score/data_agent와 동일하게 3으로 고정 (base default와 동일).
 train_epochs: 3

@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tads"
+name = "tag"
 version = "0.1.0"
-description = "Trajectory-Anchored Data Selection for Instruction Tuning"
+description = "Training-Adaptive data selection with a reliability Gate"
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
@@ -20,7 +20,7 @@ dependencies = [
     "sentencepiece",
     "bitsandbytes>=0.43",
     # Cross-process serialisation for concurrent training jobs sharing
-    # the Alpaca dataset cache (tads/data/alpaca.py).
+    # the Alpaca dataset cache (tag/data/alpaca.py).
     "filelock>=3.12",
 ]
 
@@ -32,7 +32,7 @@ eval = [
     # eval (mmlu, mmlu_pro, gsm8k, svamp, mbpp, tydiqa) fails without it.
     "pyarrow>=14.0",
     # HumanEval functional-correctness scorer. Imported lazily by
-    # tads.evals.humaneval; missing-import is caught and surfaces a clear
+    # tag.evals.humaneval; missing-import is caught and surfaces a clear
     # RuntimeError so the other 8 benches still run.
     "human-eval>=1.0",
 ]
@@ -42,5 +42,5 @@ test = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["tads*"]
+include = ["tag*"]
 exclude = ["tests*", "scripts*"]

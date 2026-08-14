@@ -4,7 +4,7 @@
 Why this exists as a separate step
 ----------------------------------
 Selection runs on rank 0 only — the module docstring in
-``tads/pipelines/selection.py`` explains why (an NCCL barrier there deadlocked
+``tag/pipelines/selection.py`` explains why (an NCCL barrier there deadlocked
 earlier versions, because rank 0 sits inside a 30-90 minute scoring pass while
 the other ranks wait in the collective and trip the watchdog). That design is
 right for selection, but it means the gate's 1+K pool forwards also run on one
@@ -35,8 +35,8 @@ and the whole thing restarts cleanly after a pre-emption.
     python scripts/precompute_gate.py --config <cfg> --out <cache.pt> --merge \
         --num-shards 4
 
-Point the training runs at the result with ``tads.tag.gate_cache_file``
-(env: ``TADS_GATE_CACHE``). Every arm then starts with the gate already in
+Point the training runs at the result with ``selection.tag.gate_cache_file``
+(env: ``TAG_GATE_CACHE``). Every arm then starts with the gate already in
 hand and spends its GPU time on training.
 """
 from __future__ import annotations
@@ -60,7 +60,7 @@ def _shard_path(out: Path, shard: int, num_shards: int) -> Path:
 
 
 def _build_gate_cfg(params, scale, null=None):
-    from tads.core.gate import GateConfig
+    from tag.core.gate import GateConfig
 
     return GateConfig(
         span_tokens=int(params.get("span_tokens", 16)),
@@ -86,8 +86,8 @@ def _build_gate_cfg(params, scale, null=None):
 def _load_everything(cfg, *, want_model: bool):
     """Resolve pool + counterfactual datasets (and optionally the model)."""
     import torch  # noqa: F401  (import cost is real; keep it lazy)
-    from tads.data.alpaca import build_alpaca_dataset
-    from tads.modeling.loader import load_model, load_tokenizer
+    from tag.data.alpaca import build_alpaca_dataset
+    from tag.modeling.loader import load_model, load_tokenizer
 
     tokenizer = load_tokenizer(cfg["model_path"])
     cache_dir = str(Path(cfg["data_cache"]) / str(cfg.get("model_key", "m"))
@@ -102,13 +102,13 @@ def _load_everything(cfg, *, want_model: bool):
         prompt_style=style,
     )
 
-    tag_cfg = (cfg.get("tads") or {}).get("tag") or {}
+    tag_cfg = (cfg.get("selection") or {}).get("tag") or {}
     cf_spec = tag_cfg.get("counterfactual_data_files") or ""
     if not isinstance(cf_spec, (list, tuple)):
         cf_spec = [s.strip() for s in str(cf_spec).split(",") if s.strip()]
     if not cf_spec:
         sys.exit(
-            "tads.tag.counterfactual_data_files is empty — set TADS_CF_FILES "
+            "selection.tag.counterfactual_data_files is empty — set TAG_CF_FILES "
             "to the counterfactual pool(s)."
         )
     cf_datasets = []
@@ -148,9 +148,9 @@ def preflight_scale(cfg) -> None:
     twice. Resolving it up front is free and turns an 18-minute failure into
     an instant one.
     """
-    from tads.pipelines.selection import _resolve_gate_calibration
+    from tag.pipelines.selection import _resolve_gate_calibration
 
-    tag_cfg = (cfg.get("tads") or {}).get("tag") or {}
+    tag_cfg = (cfg.get("selection") or {}).get("tag") or {}
     # Raises with the exact fix when the reference is missing, unreadable, or
     # was fit at a different W / target_zero_rate.
     scale, null = _resolve_gate_calibration(tag_cfg)
@@ -173,7 +173,7 @@ def preflight_scale(cfg) -> None:
 def run_shard(args, cfg) -> None:
     import torch
     from torch.utils.data import Subset
-    from tads.core import gate as gatelib
+    from tag.core import gate as gatelib
 
     tokenizer, pool, cf_datasets, model, tag_cfg = _load_everything(
         cfg, want_model=True,
@@ -240,8 +240,8 @@ def run_shard(args, cfg) -> None:
 def run_merge(args, cfg) -> None:
     import torch
     import torch.nn.functional as F
-    from tads.core import gate as gatelib
-    from tads.core.reliability import completeness_from_dataset
+    from tag.core import gate as gatelib
+    from tag.core.reliability import completeness_from_dataset
 
     out = Path(args.out)
     shards = []
@@ -301,7 +301,7 @@ def run_merge(args, cfg) -> None:
         c_trunc=float(tag_cfg.get("c_trunc", 0.2)),
     )
 
-    from tads.pipelines.selection import _resolve_gate_calibration
+    from tag.pipelines.selection import _resolve_gate_calibration
     scale, null = _resolve_gate_calibration(tag_cfg)
     gcfg = _build_gate_cfg(tag_cfg, scale, null)
     if gcfg.scale is None:
@@ -333,7 +333,7 @@ def run_merge(args, cfg) -> None:
     if float((result["gate"] == 0).float().mean()) > 0.9:
         print("  WARNING: over 90% at zero weight — the scale is almost certainly "
               "wrong (uncalibrated in-pool fallback?).")
-    print(f"\nPoint runs at it:\n  export TADS_GATE_CACHE={out}")
+    print(f"\nPoint runs at it:\n  export TAG_GATE_CACHE={out}")
     if not args.keep_shards:
         for i in range(args.num_shards):
             _shard_path(out, i, args.num_shards).unlink(missing_ok=True)
@@ -356,7 +356,7 @@ def main() -> None:
         format=f"%(asctime)s [shard {args.shard}] %(message)s"
         if args.shard is not None else "%(asctime)s [merge] %(message)s",
     )
-    from tads.core.utils import load_config
+    from tag.core.utils import load_config
     cfg = load_config(args.config)
 
     # Both paths need the calibration to exist; check before any GPU work.

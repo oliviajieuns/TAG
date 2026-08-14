@@ -15,7 +15,7 @@
 #
 # Filter examples
 # ---------------
-#   MODELS="llama2 qwen25" METHODS="tads_10 random_10" \
+#   MODELS="llama2 qwen25" METHODS="legacy_10 random_10" \
 #       bash scripts/run_main_7b.sh
 #
 # Legacy parallel mode (1 GPU per concurrent experiment, e.g. for the
@@ -32,7 +32,7 @@ fi
 
 MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
 # Default methods = 4-experiment main matrix (paper-faithful 10% / full).
-METHODS=${METHODS:-"full_100 random_10 data_agent_10 tads_10"}
+METHODS=${METHODS:-"full_100 random_10 data_agent_10 legacy_10"}
 GPUS=${GPUS:-"0,1,2,3"}
 NPROC=${NPROC:-}                 # if empty, derived from GPUS
 # Default master_port: derived from the launching shell's PID so concurrent
@@ -85,7 +85,7 @@ run_ddp() {
   CUDA_VISIBLE_DEVICES="${GPUS}" torchrun \
     --nproc_per_node="${NPROC}" \
     --master_port="${MASTER_PORT}" \
-    -m tads.train --config "$cfg" 2>&1 | tee -a "$log"
+    -m tag.train --config "$cfg" 2>&1 | tee -a "$log"
 }
 
 run_parallel_single_gpu() {
@@ -98,7 +98,7 @@ run_parallel_single_gpu() {
   fi
   echo "=== ${model} / ${method} (GPU ${gpu}, background) ==="
   CUDA_VISIBLE_DEVICES="$gpu" \
-    nohup python -m tads.train --config "$cfg" \
+    nohup python -m tag.train --config "$cfg" \
     >> "$log" 2>&1 &
 }
 

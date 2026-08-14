@@ -2,7 +2,7 @@
 # Evaluate every checkpoint produced by run_evol_7b.sh.
 #
 # Mirrors scripts/run_eval_main_7b.sh exactly — same epoch-resolution logic,
-# same `python -m tads.eval` invocation — but pulls configs / checkpoints
+# same `python -m tag.eval` invocation — but pulls configs / checkpoints
 # from the evol_7b/ tree.
 #
 # Table 5 reports MMLU / SVAMP / MBPP / TydiQA (the four diagnostic tasks).
@@ -17,7 +17,7 @@
 #
 # Filters
 # -------
-#   MODELS="llama2" METHODS="tads_10" \
+#   MODELS="llama2" METHODS="legacy_10" \
 #       BENCHMARKS="mmlu,svamp,mbpp,tydiqa" bash scripts/run_eval_evol_7b.sh
 set -euo pipefail
 
@@ -29,7 +29,7 @@ if [ -z "${OUTPUT_ROOT:-}" ] || [ -z "${EVAL_RESULTS_ROOT:-}" ]; then
 fi
 
 MODELS=${MODELS:-"llama2 qwen25"}
-METHODS=${METHODS:-"full_100 random_10 data_agent_10 tads_10"}
+METHODS=${METHODS:-"full_100 random_10 data_agent_10 legacy_10"}
 # Full 9-benchmark suite (Table 1 / Table 5 share the same eval coverage).
 BENCHMARKS=${BENCHMARKS:-"mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh"}
 LIMIT=${LIMIT:-}
@@ -110,12 +110,12 @@ eval_one() {
   if [ -n "$LIMIT" ]; then extra_args+=(--limit "$LIMIT"); fi
 
   if [ "$PARALLEL" = "1" ]; then
-    CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tads.eval \
+    CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tag.eval \
       --config "$cfg" --ckpt "$ckpt" --benchmarks "$BENCHMARKS" \
       --out_dir "$out_dir" --cuda_device 0 \
       "${extra_args[@]}" >> "$log" 2>&1 &
   else
-    CUDA_VISIBLE_DEVICES="$gpu" python -m tads.eval \
+    CUDA_VISIBLE_DEVICES="$gpu" python -m tag.eval \
       --config "$cfg" --ckpt "$ckpt" --benchmarks "$BENCHMARKS" \
       --out_dir "$out_dir" --cuda_device 0 \
       "${extra_args[@]}" 2>&1 | tee -a "$log"

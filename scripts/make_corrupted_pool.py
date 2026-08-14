@@ -14,7 +14,7 @@ corruption mix, and writes:
     <out-dir>/corruption_manifest.json  ground-truth labels for Dirty@K etc.
     <out-dir>/counterfactual.json       index-aligned counterfactual pool
                                         (with --emit-counterfactual; feeds
-                                        tads.mvf.counterfactual_data_files)
+                                        selection.mvf.counterfactual_data_files)
     <out-dir>/counterfactual_<k>.json   K independent counterfactual pools
                                         (with --num-counterfactuals K > 1;
                                         derived seeds seed+1000*k, k
@@ -27,7 +27,7 @@ corruption mix, and writes:
                                         --emit-fluent-wrong-targets)
     <out-dir>/dedup_clusters.json       near-duplicate cluster id per record
                                         (with --emit-dedup-clusters; feeds
-                                        tads.mvf.dedup_clusters_file)
+                                        selection.mvf.dedup_clusters_file)
 
 Source imbalance (T6): pass --input several times; each file becomes a
 source. --source-scale NAME=FACTOR multiplies the four in-place corruption
@@ -96,7 +96,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 def _load_module(name: str, rel_path: str):
-    """Load a repo module by file path WITHOUT importing the ``tads``
+    """Load a repo module by file path WITHOUT importing the ``tag``
     package __init__ (which pulls in torch). Pool generation is pure
     Python and must stay runnable on nodes whose torch install is broken
     or absent."""
@@ -106,7 +106,7 @@ def _load_module(name: str, rel_path: str):
     return mod
 
 
-_corruption = _load_module("_tads_corruption", "tads/data/corruption.py")
+_corruption = _load_module("_tag_corruption", "tag/data/corruption.py")
 corrupt_pool = _corruption.corrupt_pool
 make_counterfactual = _corruption.make_counterfactual
 response_word_len = _corruption.response_word_len
@@ -378,7 +378,7 @@ def main() -> None:
 
     if args.emit_dedup_clusters:
         near_duplicate_clusters = _load_module(
-            "_tads_dedup", "tads/core/dedup.py",
+            "_tag_dedup", "tag/core/dedup.py",
         ).near_duplicate_clusters
 
         texts = [str(r.get("instruction", "")) for r in all_records]

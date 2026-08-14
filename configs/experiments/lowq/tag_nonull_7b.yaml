@@ -13,10 +13,10 @@
 #       --pool $POOLS/clean_ref/pool.json \
 #       --counterfactual $POOLS/clean_ref/counterfactual.json \
 #       --out $POOLS/clean_ref/delta_hat_7b_nonull.pt
-#   export TADS_GATE_REF_7B_NONULL=$POOLS/clean_ref/delta_hat_7b_nonull.pt
+#   export TAG_GATE_REF_7B_NONULL=$POOLS/clean_ref/delta_hat_7b_nonull.pt
 #
 # ...and its own gate cache, because G differs:
-#   TADS_GATE_CACHE_NONULL=$POOLS/composite20/tag_gate_qwen2.5-7b_nonull.pt
+#   TAG_GATE_CACHE_NONULL=$POOLS/composite20/tag_gate_qwen2.5-7b_nonull.pt
 #
 # Everything else — optimizer, precision, schedule, batch, epochs, span
 # config — is inherited unchanged, so the arm differs from tag_7b in exactly
@@ -26,9 +26,9 @@ defaults:
   - configs/experiments/lowq/_shared_7b.yaml
 
 output_subdir: lowq/tag_nonull_7b
-tads:
+selection:
   tag:
     null_correction: false
-    gate_ref_file: ${oc.env:TADS_GATE_REF_7B_NONULL,}
-    gate_cache_file: ${oc.env:TADS_GATE_CACHE_NONULL,}
+    gate_ref_file: ${oc.env:TAG_GATE_REF_7B_NONULL,}
+    gate_cache_file: ${oc.env:TAG_GATE_CACHE_NONULL,}
     store_token_losses: false

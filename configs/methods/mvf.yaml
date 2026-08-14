@@ -1,0 +1,72 @@
+# MVF v3 — reliability-gated multi-view fusion score for low-quality
+# pools (docs/plan_low_quality_multiview.md §2; supersedes the
+# uncertainty-carrying composite reward for the low-quality-data experiments).
+#
+#   D'_i  = d_floor + (1 − d_floor) · D_i^t
+#   S_i^t = (Q_i · c_i + ε)^γ · (D'_i + ε) · (1 + λ_t · Ã_i^t)
+#
+#   Q_i   reliability (Consistency view)
+#         — counterfactual instruction fidelity, zero-anchored calibrated
+#           sigmoid gate: clip(2·(σ(ΔL_i/s) − 0.5), 0, 1) with
+#           ΔL_i = L(y_i|x_i^-) − L(y_i|x_i), scale s calibrated once per
+#           backbone on a CLEAN reference pool. Computed once at the base
+#           checkpoint and cached; the pipeline hard-errors if the cache is
+#           missing at epoch > 1. ("rank" mode = v1 ablation arm.)
+#   c_i   completeness — raw-text completeness heuristic AND label-EOS check
+#           (text-level check added in v3: EOS alone cannot see T3 textual
+#           truncation because tokenisation appends EOS unconditionally)
+#   D_i^t learnability (Dynamics view)
+#         — rank01(L^t) · (η + (1−η)·P̂), progress P̂ ranked WITHIN the
+#           previous refresh's selected set only (split mode); unselected
+#           samples get the neutral 0.5 — no gradient evidence, no verdict.
+#           d_floor compresses the factor to [0.5, 1] so learnability
+#           modulates instead of overriding the gate (non-compensation).
+#   Ã_i^t alignment (Geometry view)
+#         — anchor alignment, pool-CDF (rank01) normalised in MVF mode;
+#           λ_t = λ0 · anchor-stability when adaptive_lam is on
+#           (quality-adaptive fusion).
+#
+# Entropy is NOT part of this score (it is uncertainty, not quality); it is
+# still logged for diagnostics. Duplicates are handled by the dedup
+# constraint (max one selection per near-duplicate cluster), not the score.
+method: selection
+episode_batch_size: 16
+selection:
+  lam: 1.0
+  use_anchor: true
+  score_mode: mvf          # "legacy" (legacy Eq.10) | "mvf"
+  mvf:
+    # Index-aligned counterfactual pool(s) (same records, deranged
+    # instructions). A single path, a YAML list, or a COMMA-SEPARATED
+    # string (so the env var can express K > 1 pools for the
+    # dispersion-discounted evidential-lite Q):
+    #   export TAG_CF_FILES=p/counterfactual_1.json,p/counterfactual_2.json
+    # Generate together with the pool:
+    #   python scripts/make_corrupted_pool.py ... --emit-counterfactual \
+    #       --num-counterfactuals K
+    counterfactual_data_files: ${oc.env:TAG_CF_FILES,}
+    # Near-duplicate cluster ids (one int per record, -1 = unique).
+    # Generate with --emit-dedup-clusters. Empty = no dedup constraint.
+    dedup_clusters_file: ${oc.env:TAG_DEDUP_FILE,}
+    gamma: 1.0             # reliability-gate sharpness (0 disables the gate)
+    eta: 0.5               # progress-modulation floor in D (1 disables progress)
+    eps: 0.01              # gate/score floor
+    c_trunc: 0.2           # completeness assigned to truncated responses
+    d_floor: 0.5           # learnability range compression (0 = v2 ablation)
+    progress_mode: split   # split (v3) | global (v1 ablation) | off
+    # ---- reliability gate (Q) ----
+    reliability_mode: sigmoid   # sigmoid (v3) | rank (v1 ablation)
+    reliability_rezero: true    # clip(2·(σ−0.5),0,1); false = raw σ (v2 ablation)
+    # Calibrated scale s: set ONE of the two. reliability_scale is the
+    # explicit value; reliability_ref_file points to a .pt with the clean-
+    # reference ΔL tensor (or {"delta": tensor}) from which s is derived as
+    # P{target_pct}(ΔL_clean)/logit(target_q). Leaving both empty falls back
+    # to in-pool self-calibration with a loud warning — diagnostics only,
+    # never for reported runs.
+    reliability_scale: ${oc.env:TAG_RELIABILITY_SCALE,}
+    reliability_ref_file: ${oc.env:TAG_RELIABILITY_REF,}
+    calibration_target_pct: 0.10
+    calibration_target_q: 0.8
+    # ---- arms / controls ----
+    static: false          # true = freeze the epoch-1 selection (MVF-static arm)
+    adaptive_lam: false    # true = λ_t = λ0 · anchor-stability (quality-adaptive)

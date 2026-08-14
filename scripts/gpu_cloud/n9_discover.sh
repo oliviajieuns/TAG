@@ -18,7 +18,7 @@ set -uo pipefail
 WRITE=0
 [ "${1:-}" = "--write" ] && WRITE=1
 
-TAG_ROOT="${TAG_ROOT:-/group-volume/jieuns.shin/tads/tests/tag}"
+TAG_ROOT="${TAG_ROOT:-/group-volume/jieuns.shin/tag/tests/tag}"
 OUT="$TAG_ROOT/discovered_env.sh"
 
 # Roots to search, cheapest first. Add your own by exporting EXTRA_ROOTS.
@@ -93,7 +93,7 @@ PY
   done < <(find "$r" -maxdepth 6 -name '*alpaca*.json' -size +100k 2>/dev/null | head -20)
 done
 # Prefer Alpaca-GPT4 when several corpora exist: it is what base.yaml and the
-# prior TADS numbers use, so silently picking another would break
+# prior legacy-score numbers use, so silently picking another would break
 # comparability without anyone noticing.
 for c in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
   case "$c" in *gpt4*|*GPT4*) CORPUS="$c"; break ;; esac
@@ -121,7 +121,7 @@ if [ -n "$CORPUS" ]; then
     *gpt4*|*GPT4*) : ;;
     *)
       say "     ^ this is NOT alpaca-GPT4, which is what base.yaml and the"
-      say "       prior TADS numbers use — results will not be comparable."
+      say "       prior legacy-score numbers use — results will not be comparable."
       if [ -n "$HF_ALPACA_GPT4" ]; then
         say "       BUT alpaca-gpt4 IS cached at $HF_ALPACA_GPT4/datasets."
         say "       Materialise it (offline, no download) and prefer it:"
@@ -184,7 +184,7 @@ probe_bench MBPP_DATA_DIR      'mbpp'
 probe_bench TYDIQA_DATA_DIR    'tydiqa'
 probe_bench XQUAD_DATA_DIR     'xquad'
 probe_bench BBH_DATA_DIR       'bbh'
-say '  (eval dirs are only needed for "python -m tads.eval", not for training)'
+say '  (eval dirs are only needed for "python -m tag.eval", not for training)'
 
 # ----------------------------------------------------------------- emit
 say ""

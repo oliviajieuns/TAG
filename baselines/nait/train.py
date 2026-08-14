@@ -20,8 +20,8 @@ from pathlib import Path
 # via its video model registry, which fails on torchvision builds without
 # ffmpeg support — even though our LLM-only training never touches video.
 # Stub the missing attribute BEFORE any transformers import (incl. via
-# tads.modeling.loader) so the import resolves to a harmless placeholder.
-# Same pattern as tads.train + every other baselines/<m>/train.py.
+# tag.modeling.loader) so the import resolves to a harmless placeholder.
+# Same pattern as tag.train + every other baselines/<m>/train.py.
 # Cap BLAS / OMP thread pools BEFORE `import torch` — libgomp + MKL read
 # these at library init, so setting them later has zero effect. Symptom:
 #   libgomp: Thread creation failed: Resource temporarily unavailable
@@ -44,23 +44,23 @@ except Exception:
 import numpy as np
 import torch
 from torch.utils.data import Subset
-from tads.core.schedulers import get_cosine_schedule_with_warmup
-from tads.core.timing import PhaseTimer
-from tads.core.utils import (
+from tag.core.schedulers import get_cosine_schedule_with_warmup
+from tag.core.timing import PhaseTimer
+from tag.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
     load_config,
     set_seed,
     setup_logger,
 )
-from tads.data.alpaca import build_alpaca_dataset
-from tads.modeling.loader import load_model, load_tokenizer
+from tag.data.alpaca import build_alpaca_dataset
+from tag.modeling.loader import load_model, load_tokenizer
 from baselines.nait.direction import (
     extract_delta_from_seed,
     fit_directions,
     score_candidates,
 )
-from tads.pipelines.sft import make_dataloader, sft_one_epoch
+from tag.pipelines.sft import make_dataloader, sft_one_epoch
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,7 +127,7 @@ def _ensure_seed_file(
     )
     # Cross-process lock so two concurrent training jobs sharing this seeds/
     # dir don't race on the cache write. filelock is already a pinned dep
-    # (requirements.txt) used by tads/data/alpaca.py for the same purpose.
+    # (requirements.txt) used by tag/data/alpaca.py for the same purpose.
     try:
         from filelock import FileLock  # type: ignore
     except Exception:
@@ -141,7 +141,7 @@ def _ensure_seed_file(
             logger.info("Reusing cached seed file built by a concurrent job: %s", target)
             return
         # Read via the shared loader so JSON / JSONL / Parquet all work.
-        from tads.core.data_io import read_records
+        from tag.core.data_io import read_records
         records = []
         for f in matches:
             records.extend(read_records(f))
@@ -162,13 +162,13 @@ def _ensure_seed_file(
 
 
 def main() -> None:
-    # Cap RLIMIT_CORE on this process — see tads.train.main for rationale.
+    # Cap RLIMIT_CORE on this process — see tag.train.main for rationale.
     disable_coredumps()
 
     # Clean process-local cache state — see clear_runtime_caches() docs.
     clear_runtime_caches()
 
-    # OFFLINE BY DEFAULT — see tads.train.main for rationale.
+    # OFFLINE BY DEFAULT — see tag.train.main for rationale.
     import os as _os
     _os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
     _os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -183,7 +183,7 @@ def main() -> None:
     set_seed(seed)
 
     output_dir = Path(cfg["output_root"]) / cfg["output_subdir"] / f"nait_{args.tag.lower().replace('-', '_')}"
-    cfg["output_dir"] = str(output_dir)  # see tads.train comment re: parallel-job isolation
+    cfg["output_dir"] = str(output_dir)  # see tag.train comment re: parallel-job isolation
     output_dir.mkdir(parents=True, exist_ok=True)
     log_dir = Path(cfg.get("log_dir", output_dir / "logs"))
     log_dir.mkdir(parents=True, exist_ok=True)

@@ -56,7 +56,7 @@ step_data() {
   # Always materialise Alpaca-GPT4 to a FIXED workspace path, independent of
   # whatever ALPACA_RAW_JSON currently points at: discovery may have found a
   # different corpus (alpaca-cleaned), and silently keeping that one would
-  # break comparability with base.yaml and the prior TADS numbers.
+  # break comparability with base.yaml and the prior legacy-score numbers.
   local out="$TAG_WORKSPACE/datasets/alpaca_gpt4.json"
   if [ -f "$out" ]; then
     log "Alpaca-GPT4 already at $out — skipping"
@@ -113,7 +113,7 @@ DLPY
     log ""
     log "  ALPACA_RAW_JSON currently points at:"
     log "    ${ALPACA_RAW_JSON:-<unset>}"
-    log "  To use Alpaca-GPT4 (what base.yaml and prior TADS numbers use):"
+    log "  To use Alpaca-GPT4 (what base.yaml and prior legacy-score numbers use):"
     log "    export ALPACA_RAW_JSON=$out"
     log "    bash scripts/gpu_cloud/n9_discover.sh --write   # or re-detect"
     log ""
@@ -185,15 +185,15 @@ CHK
     mv "$out" "$out.notokens.bak"
   fi
   log "calibrating the 7B gate scale on the clean pool"
-  TADS_GATE_REF="" python scripts/calibrate_reliability.py --mode tag \
+  TAG_GATE_REF="" python scripts/calibrate_reliability.py --mode tag \
     --config configs/experiments/lowq/tag_7b.yaml \
     --pool "$POOLS/clean_ref/pool.json" \
     --counterfactual "$POOLS/clean_ref/counterfactual.json" \
     --out "$out"
-  # NOT TADS_GATE_REF — that one is the 0.5B reference. env.sh already
-  # defaults TADS_GATE_REF_7B to this path; the echo is just a reminder of
+  # NOT TAG_GATE_REF — that one is the 0.5B reference. env.sh already
+  # defaults TAG_GATE_REF_7B to this path; the echo is just a reminder of
   # which variable the 7B arms actually read.
-  log "7B gate reference -> $out   (read via TADS_GATE_REF_7B)"
+  log "7B gate reference -> $out   (read via TAG_GATE_REF_7B)"
 
   # The Eq. 5' ablation arm needs a reference fit WITHOUT the correction.
   # It costs no GPU: the artifact above kept the per-token NLLs, so the
@@ -208,14 +208,14 @@ print(int((torch.load(sys.argv[1], map_location="cpu", weights_only=False)
            .get("gate_config") or {}).get("span_tokens", 16)))
 W
 )" --no-null-correction --refit-out "$nonull" >/dev/null \
-      && log "ablation reference -> $nonull   (read via TADS_GATE_REF_7B_NONULL)" \
+      && log "ablation reference -> $nonull   (read via TAG_GATE_REF_7B_NONULL)" \
       || log "WARNING: ablation reference not written; tag_nonull_7b will not run"
   fi
 }
 
 step_calibrate() {
-  if [ -f "$TADS_GATE_REF" ]; then
-    log "gate reference already at $TADS_GATE_REF — skipping"
+  if [ -f "$TAG_GATE_REF" ]; then
+    log "gate reference already at $TAG_GATE_REF — skipping"
     return
   fi
   log "calibrating the gate scale on the clean pool (GPU, two pool forwards)"
@@ -223,7 +223,7 @@ step_calibrate() {
     --config configs/experiments/lowq/light_tag_05b.yaml \
     --pool "$POOLS/clean_ref/pool.json" \
     --counterfactual "$POOLS/clean_ref/counterfactual.json" \
-    --out "$TADS_GATE_REF"
+    --out "$TAG_GATE_REF"
 }
 
 case "$STEP" in
@@ -251,10 +251,10 @@ fi
 if [ "$STEP" = "all7b" ]; then
   echo ""
   echo "Next (7B):"
-  echo "  # env.sh already set TADS_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b.pt"
-  echo "  export TADS_EPISODE_BS_7B=32"
+  echo "  # env.sh already set TAG_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b.pt"
+  echo "  export TAG_EPISODE_BS_7B=32"
   echo "  # choose W from the calibration (CPU, seconds — no forward pass):"
-  echo "  python scripts/sweep_gate_config.py --ref \$TADS_GATE_REF_7B \\"
+  echo "  python scripts/sweep_gate_config.py --ref \$TAG_GATE_REF_7B \\"
   echo "      --span-tokens 16,32,64,128"
   echo "  # check the completeness heuristic's false-positive rate on this pool:"
   echo "  python scripts/audit_completeness.py --ablate \\"
@@ -262,6 +262,6 @@ if [ "$STEP" = "all7b" ]; then
   echo "  python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml"
   echo "  bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml"
   echo "      # ^ shards the gate across every GPU, once; then:"
-  echo "  export TADS_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt"
+  echo "  export TAG_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt"
   echo "  SCALE=7b bash scripts/run_lowq_all_arms.sh 42"
 fi

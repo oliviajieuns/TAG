@@ -6,7 +6,7 @@
         --manifest $POOLS/composite20/manifest.json
 
 ``c_i`` multiplies every candidate's score by ``c_trunc`` (0.2) when
-``tads.data.sft_prompts.text_is_complete`` says the response reads as cut off.
+``tag.data.sft_prompts.text_is_complete`` says the response reads as cut off.
 That is a five-fold demotion decided by a string heuristic, so its error rate
 is not a detail: a false positive rate of ten percent on a clean pool demotes
 more good data than the T3 corruption it is there to catch.
@@ -62,7 +62,7 @@ def main() -> None:
                    help="print this many example false positives")
     args = p.parse_args()
 
-    from tads.data import sft_prompts as sp
+    from tag.data import sft_prompts as sp
 
     records: List[Dict[str, Any]] = _load_json(args.pool)
     if not isinstance(records, list):

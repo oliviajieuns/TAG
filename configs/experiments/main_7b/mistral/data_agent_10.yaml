@@ -7,7 +7,7 @@
 #       --tag DataAgent-PPO
 #
 # 평가 (별도 root):
-#   python -m tads.eval \
+#   python -m tag.eval \
 #       --config configs/experiments/main_7b/mistral/data_agent_10.yaml \
 #       --ckpt ${OUTPUT_ROOT}/main_7b/mistral/data_agent_10/data_agent_dataagent_ppo/epoch_last \
 #       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \

@@ -33,7 +33,7 @@ GPU="${1:-0}"
 shift || true
 RUNS=("$@")
 if [ ${#RUNS[@]} -eq 0 ]; then
-  RUNS=(tads_50 data_agent_50 random_50 full_100)
+  RUNS=(legacy_50 data_agent_50 random_50 full_100)
 fi
 
 if [ -z "${OUTPUT_ROOT:-}" ] || [ -z "${EVAL_RESULTS_ROOT:-}" ]; then
@@ -69,7 +69,7 @@ while true; do
       # Run eval. Only mark done + (optionally) clean up earlier epochs if
       # eval actually succeeded — the previous version touched the marker
       # and rm'd epochs even on a failed run, destroying recoverable state.
-      if CUDA_VISIBLE_DEVICES="${GPU}" python -m tads.eval \
+      if CUDA_VISIBLE_DEVICES="${GPU}" python -m tag.eval \
           --config "${cfg}" \
           --ckpt "${ckpt}" \
           --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \

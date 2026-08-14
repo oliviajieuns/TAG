@@ -27,7 +27,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tads.data.corruption import dirty_labels_from_manifest  # noqa: E402
+from tag.data.corruption import dirty_labels_from_manifest  # noqa: E402
 
 
 def main() -> None:

@@ -1,7 +1,7 @@
 """Minimal DDP smoke test — isolates the bug from our pipeline.
 
 If THIS script hangs/fails, the cluster's distributed stack is broken and
-no amount of TADS-side code change will help. If it passes, the bug is
+no amount of application-side code change will help. If it passes, the bug is
 inside our training pipeline (model loading, gradient_checkpointing,
 PEFT/bnb integration, etc.) and we can localize from there.
 
@@ -11,7 +11,7 @@ Run with torchrun (4 GPU, mirrors our real launch):
 
 Or with a specific backend (nccl / gloo):
 
-    TADS_DDP_BACKEND=gloo torchrun --standalone --nproc-per-node=4 \\
+    TAG_DDP_BACKEND=gloo torchrun --standalone --nproc-per-node=4 \\
         tests/test_ddp_smoke.py
 
 Pass criteria — all four log lines visible within ~30 seconds:
@@ -44,7 +44,7 @@ def _log(msg: str, rank: int = -1) -> None:
 
 
 def main() -> None:
-    backend = os.environ.get("TADS_DDP_BACKEND", "nccl").lower()
+    backend = os.environ.get("TAG_DDP_BACKEND", "nccl").lower()
     if backend not in ("nccl", "gloo"):
         backend = "nccl"
 

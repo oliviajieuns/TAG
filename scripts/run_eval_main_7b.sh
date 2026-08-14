@@ -3,8 +3,8 @@
 #
 # For each (model, method) in main_7b/, locate the most recent saved
 # epoch under ${OUTPUT_ROOT}/main_7b/<model>/<method>/ — prefers
-# epoch_last/ (tads.train layout) and falls back to the largest
-# epoch_N/ (comparison-baseline layout) — and run `python -m tads.eval`
+# epoch_last/ (tag.train layout) and falls back to the largest
+# epoch_N/ (comparison-baseline layout) — and run `python -m tag.eval`
 # on it. Results land under ${EVAL_RESULTS_ROOT}/<model>/<method>/.
 #
 # GPU selection
@@ -17,7 +17,7 @@
 #
 # Filters
 # -------
-#   MODELS="llama2 qwen25" METHODS="tads_10" \
+#   MODELS="llama2 qwen25" METHODS="legacy_10" \
 #       BENCHMARKS="mmlu,gsm8k" bash scripts/run_eval_main_7b.sh
 set -euo pipefail
 
@@ -29,7 +29,7 @@ if [ -z "${OUTPUT_ROOT:-}" ] || [ -z "${EVAL_RESULTS_ROOT:-}" ]; then
 fi
 
 MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
-METHODS=${METHODS:-"full_100 random_10 data_agent_10 tads_10"}
+METHODS=${METHODS:-"full_100 random_10 data_agent_10 legacy_10"}
 BENCHMARKS=${BENCHMARKS:-"mmlu,gsm8k,humaneval,tydiqa,bbh"}
 LIMIT=${LIMIT:-}
 GPUS=${GPUS:-"0"}
@@ -119,12 +119,12 @@ eval_one() {
   if [ -n "$LIMIT" ]; then extra_args+=(--limit "$LIMIT"); fi
 
   if [ "$PARALLEL" = "1" ]; then
-    CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tads.eval \
+    CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tag.eval \
       --config "$cfg" --ckpt "$ckpt" --benchmarks "$BENCHMARKS" \
       --out_dir "$out_dir" --cuda_device 0 \
       "${extra_args[@]}" >> "$log" 2>&1 &
   else
-    CUDA_VISIBLE_DEVICES="$gpu" python -m tads.eval \
+    CUDA_VISIBLE_DEVICES="$gpu" python -m tag.eval \
       --config "$cfg" --ckpt "$ckpt" --benchmarks "$BENCHMARKS" \
       --out_dir "$out_dir" --cuda_device 0 \
       "${extra_args[@]}" 2>&1 | tee -a "$log"

@@ -56,19 +56,19 @@ except Exception:
 import torch
 from torch.utils.data import Subset
 
-from tads.core.data_io import read_records, read_records_glob
-from tads.core.schedulers import get_cosine_schedule_with_warmup
-from tads.core.timing import PhaseTimer
-from tads.core.utils import (
+from tag.core.data_io import read_records, read_records_glob
+from tag.core.schedulers import get_cosine_schedule_with_warmup
+from tag.core.timing import PhaseTimer
+from tag.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
     load_config,
     set_seed,
     setup_logger,
 )
-from tads.data.alpaca import build_alpaca_dataset
-from tads.modeling.loader import load_model, load_tokenizer
-from tads.pipelines.sft import make_dataloader, sft_one_epoch
+from tag.data.alpaca import build_alpaca_dataset
+from tag.modeling.loader import load_model, load_tokenizer
+from tag.pipelines.sft import make_dataloader, sft_one_epoch
 
 logger = logging.getLogger(__name__)
 

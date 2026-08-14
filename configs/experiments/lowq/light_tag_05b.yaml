@@ -7,9 +7,9 @@
 #       --preset composite20 --duplicate-frac 0.05 --seed 42 \
 #       --emit-counterfactual --emit-dedup-clusters
 #   export ALPACA_DATA_FILES=$POOLS/composite20/pool.json
-#   export TADS_CF_FILES=$POOLS/composite20/counterfactual.json
-#   export TADS_DEDUP_FILE=$POOLS/composite20/dedup_clusters.json
-#   export TADS_GATE_REF=$POOLS/clean_ref/delta_hat_05b.pt   # calibration
+#   export TAG_CF_FILES=$POOLS/composite20/counterfactual.json
+#   export TAG_DEDUP_FILE=$POOLS/composite20/dedup_clusters.json
+#   export TAG_GATE_REF=$POOLS/clean_ref/delta_hat_05b.pt   # calibration
 #
 # The calibration reference is produced on a CLEAN pool with
 #   python scripts/calibrate_reliability.py --mode tag \
@@ -28,7 +28,7 @@ defaults:
   - configs/experiments/lowq/_shared_light_05b.yaml
 
 output_subdir: lowq/tag_05b
-tads:
+selection:
   tag:
     # Keep the per-token NLLs in the gate cache (fp16). At 0.5B pool scale
     # this is tens of MB and it makes the REQUIRED span-width sweep free:

@@ -1,0 +1,24 @@
+# Llama-2-7B + Evol-Instruct + Legacy score (λ=1, anchor on) at 10% — Table 5.
+#
+# Score: s_i = R̃_i · (1 + λ · ã_i)   (paper Eq.8)
+#   R̃_i = (R_i - R̄) / (σ_R + 1e-6)   calibrated utility (pool z-score)
+#   ã_i = min-max-norm( (1/L) Σ_l <h̄_l(x_i), v_l> )   sequence-mean alignment
+defaults:
+  - configs/base.yaml
+  - configs/methods/legacy.yaml
+  - configs/models/llama2-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: evol_7b/llama2/legacy_10
+selection_ratio: 0.1
+train_epochs: 3
+
+# main_7b/llama2/legacy_10 과 동일한 SFT optimizer lever — Llama-2 legacy-score 전용
+# 안정성 조정. random_10 / data_agent_10 / full_100 baseline 과는 직접 비교 시
+# 이 차이를 인지하고 해석할 것 (main_7b 셀에서 적용된 동일 결정).
+use_8bit_optimizer: false
+warmup_ratio: 0.06
+gradient_clip: 0.5
+
+data_files: ${oc.env:EVOL_INSTRUCT_DATA_FILES,/group-volume/IT-datasets/wizardlm_evol_instruct_70k/*.json}
+dataset_name: WizardLMTeam/WizardLM_evol_instruct_70k

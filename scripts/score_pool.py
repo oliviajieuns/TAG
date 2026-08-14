@@ -10,13 +10,13 @@ would admit. Ground truth comes from the corruption manifest written by
 Signals compared (each used AS a selection score, higher = selected):
     entropy        mean predictive entropy H_i         (uncertainty view)
     loss           mean response CE L_i
-    R              legacy composite reward wL + (1-w)H (old TADS carrier)
-    legacy_score   R · (1 + λ·align)                   (old TADS, Eq. 10)
+    R              legacy composite reward wL + (1-w)H (legacy carrier)
+    legacy_score   R · (1 + λ·align)                   (legacy, Eq. 10)
     Q              counterfactual reliability, v3 calibrated sigmoid gate
     Q_rank         v1 rank01 reliability               (ablation arm)
     gate           (Q·c + ε)^γ                          (MVF reliability gate)
     D              learnable difficulty at t=1 = rank01(L)
-    mvf_score      full MVF v3 fusion S^1              (new TADS)
+    mvf_score      full MVF v3 fusion S^1              (score_mode: mvf)
     mvf_v2         v2 ablation: raw σ gate (no rezero) + d_floor=0 —
                    the parameterisation whose non-compensation provably
                    reverses (kept as the motivating-counterexample row)
@@ -28,7 +28,7 @@ Signals compared (each used AS a selection score, higher = selected):
     ifd            L(y|x)/L(y): IFD (Li et al. 2024)   (needs --uncond-loss;
                    closest published relative of Q)
 
-TAG signals (paper Eqs. 2-6; computed when the config has a tads.tag block,
+TAG signals (paper Eqs. 2-6; computed when the config has a selection.tag block,
 or with --tag-gate. They need a TOKEN-LEVEL counterfactual forward, which is
 one extra pool forward per pool on top of the mean-loss passes above):
     delta_bar      1 - L(y|x)/L(y|x^-)                  (Eq. 3, overall gain)
@@ -53,11 +53,11 @@ Metrics per signal:
 
 Usage:
     python scripts/score_pool.py \
-        --config configs/experiments/lowq/light_tads_mvf_05b.yaml \
+        --config configs/experiments/lowq/light_mvf_05b.yaml \
         --manifest $POOLS/composite20/corruption_manifest.json \
         --out $POOLS/composite20/score_report.json
 The pool/counterfactual files come from the config's data_files /
-tads.mvf.counterfactual_data_files (env-var wired, same as training).
+selection.mvf.counterfactual_data_files (env-var wired, same as training).
 """
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# Mirrors the guard in tads/train.py: transformers eager-imports
+# Mirrors the guard in tag/train.py: transformers eager-imports
 # `from torchvision.io import VideoReader` via its video model registry,
 # which raises on torchvision builds without ffmpeg support — even though
 # this script never touches video. Stub the missing attribute BEFORE any
@@ -85,24 +85,24 @@ except Exception:
 
 import torch  # noqa: E402
 
-from tads.core.reliability import (  # noqa: E402
+from tag.core.reliability import (  # noqa: E402
     completeness_from_dataset,
     compute_pool_loss,
     reliability_from_losses,
 )
-from tads.core.scorer import (  # noqa: E402
+from tag.core.scorer import (  # noqa: E402
     learnable_difficulty,
     mvf_score,
     pool_reward,
     rank01,
-    tads_score,
+    legacy_score,
 )
-from tads.core.selector import collect_episode  # noqa: E402
-from tads.core.trajectory_anchor import TrajectoryAnchor  # noqa: E402
-from tads.core.utils import load_config, set_seed, setup_logger  # noqa: E402
-from tads.data.alpaca import build_alpaca_dataset  # noqa: E402
-from tads.data.corruption import dirty_labels_from_manifest  # noqa: E402
-from tads.modeling.loader import load_model, load_tokenizer  # noqa: E402
+from tag.core.selector import collect_episode  # noqa: E402
+from tag.core.trajectory_anchor import TrajectoryAnchor  # noqa: E402
+from tag.core.utils import load_config, set_seed, setup_logger  # noqa: E402
+from tag.data.alpaca import build_alpaca_dataset  # noqa: E402
+from tag.data.corruption import dirty_labels_from_manifest  # noqa: E402
+from tag.modeling.loader import load_model, load_tokenizer  # noqa: E402
 
 
 def average_precision(detector: torch.Tensor, labels: torch.Tensor) -> float:
@@ -203,7 +203,7 @@ def length_bias_report(
     # Rank correlation between length and the gate: the single number that
     # says whether the gate ranks by length.
     if n > 1:
-        from tads.core.scorer import rank01
+        from tag.core.scorer import rank01
         rg, rl = rank01(g), rank01(n_tok)
         rg = rg - rg.mean()
         rl = rl - rl.mean()
@@ -229,7 +229,7 @@ def length_bias_report(
 # drifts from the first makes the answer wrong in the one way that is hardest
 # to notice — it already happened once (score_pool ranked with plain topk
 # while training ranked with the gated key, measured AP 0.3341 vs 0.3468).
-from tads.pipelines.selection import (  # noqa: E402
+from tag.pipelines.selection import (  # noqa: E402
     _build_gate_config as _build_gate_cfg,
     _resolve_gate_calibration,
 )
@@ -242,7 +242,7 @@ def main() -> None:
     p.add_argument("--out", required=True, help="output report JSON path")
     p.add_argument("--ks", default="", help="extra selection ratios, e.g. 0.1,0.5")
     p.add_argument("--dedup-clusters", default=None,
-                   help="dedup_clusters.json (defaults to tads.mvf.dedup_clusters_file)")
+                   help="dedup_clusters.json (defaults to selection.mvf.dedup_clusters_file)")
     p.add_argument("--uncond-loss", default=None,
                    help=".pt from scripts/compute_uncond_loss.py — enables the "
                         "ppl and ifd baseline signal rows")
@@ -251,16 +251,16 @@ def main() -> None:
     p.add_argument("--tag-gate", dest="tag_gate", action="store_true", default=None,
                    help="force the TAG signals on (token-level counterfactual "
                         "forward: +1 pool forward per pool). Default: on when "
-                        "the config has a tads.tag block.")
+                        "the config has a selection.tag block.")
     p.add_argument("--no-tag-gate", dest="tag_gate", action="store_false",
                    help="force the TAG signals off")
     p.add_argument("--span-tokens", type=int, default=None,
-                   help="override tads.tag.span_tokens (W) for this run — the "
+                   help="override selection.tag.span_tokens (W) for this run — the "
                         "required W sweep. With store_token_losses the gate is "
                         "re-derived from cached token losses, but score_pool "
                         "always re-forwards, so budget one pass per W.")
     p.add_argument("--tau", type=float, default=None,
-                   help="override tads.tag.tau for this run")
+                   help="override selection.tag.tau for this run")
     p.add_argument("--save-signals", default=None,
                    help="write every per-sample signal vector to this .pt "
                         "(needed for the reliability diagram, the "
@@ -278,19 +278,19 @@ def main() -> None:
         manifest = json.load(f)
     labels = torch.tensor(dirty_labels_from_manifest(manifest), dtype=torch.long)
 
-    tads_cfg = cfg.get("tads", {}) or {}
-    mvf_cfg = tads_cfg.get("mvf", {}) or {}
-    tag_cfg = tads_cfg.get("tag", {}) or {}
-    lam = float(tads_cfg.get("lam", 1.0))
+    selection_cfg = cfg.get("selection", {}) or {}
+    mvf_cfg = selection_cfg.get("mvf", {}) or {}
+    tag_cfg = selection_cfg.get("tag", {}) or {}
+    lam = float(selection_cfg.get("lam", 1.0))
     gamma = float(mvf_cfg.get("gamma", 1.0))
     eps = float(mvf_cfg.get("eps", 0.01))
-    # A TAG arm has no tads.mvf block, so c_trunc must come from whichever
+    # A TAG arm has no selection.mvf block, so c_trunc must come from whichever
     # score block the config actually carries.
     c_trunc = float(tag_cfg.get("c_trunc", mvf_cfg.get("c_trunc", 0.2)))
     want_tag = bool(tag_cfg) if args.tag_gate is None else bool(args.tag_gate)
     if args.tag_gate and not tag_cfg:
         logger.warning(
-            "--tag-gate was requested but the config has no tads.tag block; "
+            "--tag-gate was requested but the config has no selection.tag block; "
             "the gate will use gate.py defaults and in-pool calibration "
             "(diagnostic-only). Point --config at a TAG arm for reported runs.",
         )
@@ -330,14 +330,14 @@ def main() -> None:
     )
     if not cf_files:
         raise ValueError(
-            "config has no tads.mvf.counterfactual_data_files nor "
-            "tads.tag.counterfactual_data_files — every reliability signal "
+            "config has no selection.mvf.counterfactual_data_files nor "
+            "selection.tag.counterfactual_data_files — every reliability signal "
             "(Q, gate, mvf_score, delta_*, G, tag_score) needs the "
             "counterfactual pool."
         )
     if not isinstance(cf_files, (list, tuple)):
         # Comma-separated strings express K > 1 through a single env var,
-        # matching the training-side plumbing in tads/train.py.
+        # matching the training-side plumbing in tag/train.py.
         cf_files = [s.strip() for s in str(cf_files).split(",") if s.strip()]
     cf_datasets = []
     for k_cf, one in enumerate(cf_files, start=1):
@@ -365,7 +365,7 @@ def main() -> None:
     )
     cluster_ids = None
     if cluster_path:
-        from tads.core.dedup import load_clusters
+        from tag.core.dedup import load_clusters
         cluster_ids = load_clusters(str(cluster_path))
         if len(cluster_ids) != n:
             raise ValueError(
@@ -374,7 +374,7 @@ def main() -> None:
 
     # ---- anchor (optional; gives the alignment factor of both scores) ----
     anchor = None
-    use_anchor = bool(tads_cfg.get("use_anchor", True)) and not args.no_anchor
+    use_anchor = bool(selection_cfg.get("use_anchor", True)) and not args.no_anchor
     if use_anchor:
         anchor_cfg = cfg.get("anchor", {}) or {}
         anchor = TrajectoryAnchor(
@@ -436,7 +436,7 @@ def main() -> None:
     gate = torch.pow(q * completeness + eps, gamma)
     d1 = learnable_difficulty(loss, None)
     R, r_weight = pool_reward(loss, entropy)
-    legacy = tads_score(R, alignment, lam) if alignment is not None else R
+    legacy = legacy_score(R, alignment, lam) if alignment is not None else R
     # rank01 of the min-max alignment == rank01 of the raw alignment
     # (monotone transform), i.e. the MVF pool-CDF normalisation.
     alignment_cdf = rank01(alignment) if alignment is not None else None
@@ -477,7 +477,7 @@ def main() -> None:
     # pool and each counterfactual pool.
     tag_components = None
     if want_tag:
-        from tads.core import gate as gatelib
+        from tag.core import gate as gatelib
 
         gcfg_params = dict(tag_cfg)
         gcfg_params.setdefault("c_trunc", c_trunc)
@@ -567,7 +567,7 @@ def main() -> None:
         # metrics here all resolve that tie with torch.topk/argsort, i.e. by
         # pool file order — so the diagnostic would report a dirty@K that the
         # trainer never produces. gated_selection_key is the shipped rule.
-        from tads.core.scorer import gated_selection_key
+        from tag.core.scorer import gated_selection_key
 
         tag_key, _n_adm = gated_selection_key(
             g_i * legacy, tag_components["delta_hat"], g_i,

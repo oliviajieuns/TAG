@@ -9,7 +9,7 @@
 # CONCURRENT arms rather than one distributed arm.
 #
 # Every arm inherits its training hyperparameters from
-# _shared_light_05b.yaml, and TADS_EPISODE_BS is read from THIS shell, so
+# _shared_light_05b.yaml, and TAG_EPISODE_BS is read from THIS shell, so
 # all arms launched here share it by construction — which is the property
 # plan §5.2 demands. Launching a stray arm later with a different value
 # would break comparability; check cfg.yaml in each run dir if unsure.
@@ -21,12 +21,12 @@ shift || true
 # SCALE=7b runs the 7B grid; anything else runs the 0.5B one.
 SCALE="${SCALE:-05b}"
 if [ "$SCALE" = "7b" ]; then
-  DEFAULT_ARMS=(tag_7b tag_static_7b tads_legacy_7b random_7b)
+  DEFAULT_ARMS=(tag_7b tag_static_7b legacy_7b random_7b)
 else
   DEFAULT_ARMS=(
     light_tag_05b
     light_tag_static_05b
-    light_tads_legacy_05b
+    light_legacy_05b
     light_random_05b
   )
 fi
@@ -72,11 +72,11 @@ mkdir -p "$LOGDIR"
 # A shared gate cache turns N redundant gate computations into zero: every
 # TAG arm here reads the same file. Without it each arm recomputes the gate
 # on its own GPU, which at 7B is 1+K full pool forwards per arm.
-if [ -n "${TADS_GATE_CACHE:-}" ]; then
-  if [ -f "$TADS_GATE_CACHE" ]; then
-    echo "[arms] shared gate cache: $TADS_GATE_CACHE"
+if [ -n "${TAG_GATE_CACHE:-}" ]; then
+  if [ -f "$TAG_GATE_CACHE" ]; then
+    echo "[arms] shared gate cache: $TAG_GATE_CACHE"
   else
-    echo "[arms] WARNING: TADS_GATE_CACHE=$TADS_GATE_CACHE does not exist." >&2
+    echo "[arms] WARNING: TAG_GATE_CACHE=$TAG_GATE_CACHE does not exist." >&2
     echo "[arms]          Each TAG arm will recompute the gate separately." >&2
     echo "[arms]          Run: bash scripts/precompute_gate.sh <config>" >&2
   fi
@@ -84,9 +84,9 @@ fi
 
 echo "[arms] scale=$SCALE seed=$SEED gpus=$N_GPU"
 if [ "$SCALE" = "7b" ]; then
-  echo "[arms] episode_bs=${TADS_EPISODE_BS_7B:-8} grad_accum=${TADS_GRAD_ACCUM_7B:-16} (1 arm/GPU)"
+  echo "[arms] episode_bs=${TAG_EPISODE_BS_7B:-8} grad_accum=${TAG_GRAD_ACCUM_7B:-16} (1 arm/GPU)"
 else
-  echo "[arms] episode_bs=${TADS_EPISODE_BS:-2}"
+  echo "[arms] episode_bs=${TAG_EPISODE_BS:-2}"
 fi
 echo "[arms] logs -> $LOGDIR"
 
@@ -108,7 +108,7 @@ for arm in "${ARMS[@]}"; do
   log="$LOGDIR/${arm}.log"
   echo "[arms] gpu$gpu <- $arm   ($log)"
   CUDA_VISIBLE_DEVICES="$gpu" \
-    python -m tads.train --config "$cfg" \
+    python -m tag.train --config "$cfg" \
       --run_suffix "seed${SEED}" \
       --override "seed=${SEED}" \
       > "$log" 2>&1 &
@@ -138,6 +138,6 @@ if [ "$n_fail" -gt 0 ]; then
   echo "[arms] NOTE: a failed arm can leave a process holding GPU memory while" >&2
   echo "[arms]       its CUDA context tears down. Check nvidia-smi before" >&2
   echo "[arms]       relaunching; kill leftovers with:" >&2
-  echo "[arms]         pkill -u \$USER -f 'tads\\.train'" >&2
+  echo "[arms]         pkill -u \$USER -f 'tag\\.train'" >&2
 fi
 exit $([ "$n_fail" -gt 0 ] && echo 1 || echo 0)

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from tads.evals import get_evaluator, list_evaluators
-from tads.evals.mmlu import MMLUEvaluator
+from tag.evals import get_evaluator, list_evaluators
+from tag.evals.mmlu import MMLUEvaluator
 
 
 def test_registry_lists_known_benchmarks():

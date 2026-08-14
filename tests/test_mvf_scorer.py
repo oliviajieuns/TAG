@@ -6,12 +6,12 @@ from __future__ import annotations
 
 import torch
 
-from tads.core.reliability import reliability_from_losses
-from tads.core.scorer import (
+from tag.core.reliability import reliability_from_losses
+from tag.core.scorer import (
     learnable_difficulty,
     mvf_score,
     rank01,
-    tads_score,
+    legacy_score,
 )
 
 
@@ -274,11 +274,11 @@ def test_mvf_score_validation():
             pass
 
 
-def test_legacy_tads_score_unchanged():
+def test_legacy_score_unchanged():
     """The MVF additions must not perturb the legacy Eq. 10 path."""
     R = torch.tensor([1.0, 2.0, 3.0])
     align = torch.tensor([0.0, 0.5, 1.0])
-    s = tads_score(R, align, lam=1.0)
+    s = legacy_score(R, align, lam=1.0)
     assert torch.allclose(s, torch.tensor([1.0, 3.0, 6.0]))
 
 

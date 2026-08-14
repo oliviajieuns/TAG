@@ -26,7 +26,7 @@ train_epochs: 3
 # alone (~56 GB fp32) does not fit beside the weights.
 #
 # The DEFAULT here is one arm per GPU, not one arm across four, because
-# selection runs on rank 0 only (see tads/pipelines/selection.py): DDP speeds
+# selection runs on rank 0 only (see tag/pipelines/selection.py): DDP speeds
 # up the SFT step but not the 30-90 min per-epoch scoring pass, so three of
 # four GPUs would idle for most of a 7B run. Running four arms concurrently,
 # one per GPU, keeps every card busy. DDP replicates the full model, grads
@@ -38,19 +38,19 @@ train_epochs: 3
 # allocation, on top of ~47 GB of weights, grads and 8-bit optimizer state.
 # Measured: it OOMs on an 80 GB H100 mid-epoch. 4 is the largest that fits
 # with headroom; halve again if a longer max_seq_len is ever used.
-batch_size: ${oc.env:TADS_BATCH_7B,4}
+batch_size: ${oc.env:TAG_BATCH_7B,4}
 #
 # effective batch = batch_size(4) x grad_accum x world_size, held at 128:
 #   one arm per GPU  (world_size 1) -> grad_accum 32   <- default
-#   one arm on 4 DDP (world_size 4) -> grad_accum 8    -> export TADS_GRAD_ACCUM_7B=8
-grad_accum: ${oc.env:TADS_GRAD_ACCUM_7B,32}
+#   one arm on 4 DDP (world_size 4) -> grad_accum 8    -> export TAG_GRAD_ACCUM_7B=8
+grad_accum: ${oc.env:TAG_GRAD_ACCUM_7B,32}
 
 # Forward-only scoring batch. 7B activations are ~14x the 0.5B ones, so the
 # default is lower than the 0.5B arm's H100 setting. Raise it once, in the
 # shell that launches EVERY arm:
-#     export TADS_EPISODE_BS_7B=32
+#     export TAG_EPISODE_BS_7B=32
 # Each run records the resolved value in its cfg snapshot.
-episode_batch_size: ${oc.env:TADS_EPISODE_BS_7B,8}
+episode_batch_size: ${oc.env:TAG_EPISODE_BS_7B,8}
 
 anchor:
   layer_idx: -1

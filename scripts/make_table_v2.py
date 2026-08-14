@@ -72,7 +72,7 @@ data machine-readably via ``--tsv out.tsv``.
 
 Usage:
     python scripts/make_table_v2.py --manifest results/manifest.json \
-        --pairs "tads_10:random_10,tads_10:data_agent_10" --tsv table.tsv
+        --pairs "legacy_10:random_10,legacy_10:data_agent_10" --tsv table.tsv
     python scripts/make_table_v2.py --results-root $EVAL_RESULTS_ROOT \
         --benches mmlu,bbh,gsm8k --allow-partial
 """
@@ -109,7 +109,7 @@ ACC_CONFLICT_TOL = 1e-9
 GIT_SHA_KEYS = ("git_sha", "git_commit", "commit", "git_rev")
 
 _SEED_SEG_PAT = re.compile(r"seed(\d+)", re.IGNORECASE)
-# Mirrors tads/core/run_layout.py: run tags are a portable charset, so a
+# Mirrors tag/core/run_layout.py: run tags are a portable charset, so a
 # _latest.txt payload that fails this is corruption, not a valid pointer.
 _RUN_TAG_PAT = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -352,7 +352,7 @@ def _resolve_latest(cell: Path) -> Optional[Path]:
     """Resolve the cell's ``_latest`` pointer to a run dir, or None.
 
     Same transparent symlink-or-textfile contract as
-    tads.core.run_layout.resolve_latest (not imported: that module pulls in
+    tag.core.run_layout.resolve_latest (not imported: that module pulls in
     pyyaml and this script must stay stdlib-only). A pointer that exists but
     names a missing run dir is an integrity error, not a skip — the layout's
     invariant ("_latest names the newest sealed run") is broken.
@@ -1106,7 +1106,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--pairs", default=None,
-        help="paired comparisons, e.g. 'tads_10:random_10,tads_10:full_100' "
+        help="paired comparisons, e.g. 'legacy_10:random_10,legacy_10:full_100' "
              "(A:B reports A − B)",
     )
     p.add_argument("--tsv", type=Path, default=None, help="also write a TSV file")

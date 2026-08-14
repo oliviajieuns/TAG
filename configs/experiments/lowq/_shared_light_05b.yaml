@@ -2,7 +2,7 @@
 #
 # WHY THIS FILE EXISTS (plan §5.2, CIKM lesson §2.3): the previous paper
 # died partly because one method silently ran with its own optimizer
-# settings (fp32 AdamW / warmup 0.06 / clip 0.5 on LLaMA-2-7B TADS only),
+# settings (fp32 AdamW / warmup 0.06 / clip 0.5 on the LLaMA-2-7B legacy-score arm only),
 # which made "only the selected subset differs" false. Every lowq arm MUST
 # inherit optimizer / precision / scheduler / batch / epochs from exactly
 # this one file; arm overlays may set ONLY the selection method and its
@@ -20,7 +20,7 @@ selection_ratio: 0.1
 train_epochs: 5
 batch_size: 4
 grad_accum: 2
-# Scoring-forward batch. Method fragments (configs/methods/tads*.yaml) set
+# Scoring-forward batch. Method fragments (configs/methods/{legacy,mvf,tag}.yaml) set
 # their own episode_batch_size: 16 for the 7B experiments — the lowq arm
 # files list the METHOD FIRST and this fragment LAST so this value wins
 # (adversarial review 2026-08: the reverse order silently resolved to 16,
@@ -33,11 +33,11 @@ grad_accum: 2
 #
 # 2 is sized for a small-VRAM GPU. On an H100/A100 80GB with the 0.5B model
 # that leaves the card ~idle and the pool forwards dominate the run, so set
-#     export TADS_EPISODE_BS=64
+#     export TAG_EPISODE_BS=64
 # ONCE in the shell that launches EVERY arm — never for a subset of them.
 # Each run records the resolved value in its cfg.yaml snapshot, so a
 # mismatch between arms is auditable after the fact.
-episode_batch_size: ${oc.env:TADS_EPISODE_BS,2}
+episode_batch_size: ${oc.env:TAG_EPISODE_BS,2}
 
 lora:
   r: 8

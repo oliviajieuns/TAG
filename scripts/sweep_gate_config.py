@@ -80,7 +80,7 @@ def main() -> None:
     args = p.parse_args()
 
     import torch
-    from tads.core.gate import GateConfig, fit_calibration, gate_components
+    from tag.core.gate import GateConfig, fit_calibration, gate_components
 
     ref = torch.load(args.ref, map_location="cpu", weights_only=False)
     if "token_true" not in ref:
@@ -238,11 +238,11 @@ def main() -> None:
     print("committing:  python scripts/score_pool.py --config <arm> ...")
     print()
     print("Apply it in configs/methods/tag.yaml (or the 7B arm):")
-    print(f"  tads.tag.span_tokens: {W}")
-    print(f"  tads.tag.tau: {tau}")
+    print(f"  selection.tag.span_tokens: {W}")
+    print(f"  selection.tag.tau: {tau}")
     if tail != "min":
-        print(f"  tads.tag.tail_mode: {tail}")
-    print(f"  tads.tag.target_zero_rate: {args.target_zero_rate}")
+        print(f"  selection.tag.tail_mode: {tail}")
+    print(f"  selection.tag.target_zero_rate: {args.target_zero_rate}")
 
     if args.refit_out:
         _write_refit(args, ref, winner)
@@ -283,7 +283,7 @@ def _write_refit(args, ref, chosen) -> None:
           f"clean zero-weight rate {100*fit['zero_rate']:.1f}% | "
           f"null {'off' if fit['null'] is None else 'on'}")
     print("Point the arm at it and recompute the gate:")
-    print(f"  export TADS_GATE_REF_7B={out}")
+    print(f"  export TAG_GATE_REF_7B={out}")
     print("  rm -f $POOLS/composite20/tag_gate_*.pt")
     print("  bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml")
 

@@ -9,7 +9,7 @@
 #
 # After completion the directory layout will be:
 #   <target_dir>/
-#     validation-00000-of-00001.parquet   # eval split (used by tads.evals.tydiqa)
+#     validation-00000-of-00001.parquet   # eval split (used by tag.evals.tydiqa)
 #     train-00000-of-00001.parquet        # demo source for 5-shot prompting
 #
 # Source: the official Google Research mirror on HuggingFace:
@@ -88,7 +88,7 @@ if [ -z "$_probe_url" ]; then
 fi
 echo "[probe] reachable via: $_probe_url"
 
-# Final filenames (what tads/evals/tydiqa.py looks for via _resolve_split_paths).
+# Final filenames (what tag/evals/tydiqa.py looks for via _resolve_split_paths).
 # Both candidate URL patterns get saved under the same canonical filename so
 # the evaluator doesn't care which one we fetched from.
 declare -A DST_FNAMES=(

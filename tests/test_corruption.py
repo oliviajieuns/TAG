@@ -1,4 +1,4 @@
-"""Unit tests for tads.data.corruption — synthetic low-quality pool
+"""Unit tests for tag.data.corruption — synthetic low-quality pool
 generation (plan §3): determinism, manifest ground truth, per-type
 behaviour, and the counterfactual derangement used by the reliability view.
 Also covers T1b cross-source mismatch, T7 fluent-wrong (two-step CLI
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tads.data.corruption import (
+from tag.data.corruption import (
     append_duplicates,
     corrupt_cross_source,
     corrupt_fluent_wrong,

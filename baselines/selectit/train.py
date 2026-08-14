@@ -10,7 +10,7 @@ Pipeline (mirrors baselines/nait/train.py):
     2. Run forward-only scoring per sample using `selectit_scores` (token
        or sentence level).
     3. Top-`selection_ratio` indices → SFT one-epoch loop with the shared
-       `tads.pipelines.sft.sft_one_epoch`.
+       `tag.pipelines.sft.sft_one_epoch`.
 
 Usage:
     source scripts/setup_env.sh
@@ -19,7 +19,7 @@ Usage:
         --tag SelectIT-Token
 
 Eval (writes under SELECTIT_EVAL_RESULTS_ROOT):
-    python -m tads.eval --config <same cfg> \\
+    python -m tag.eval --config <same cfg> \\
         --ckpt ${OUTPUT_ROOT}/main_7b/llama2/selectit_10/selectit_selectit_token/epoch_last \\
         --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \\
         --out_dir ${SELECTIT_EVAL_RESULTS_ROOT}/llama2/selectit_10/
@@ -48,7 +48,7 @@ for _k, _v in (
 ):
     _os_for_threads.environ.setdefault(_k, _v)
 
-# transformers 5.0 video-registry workaround — see tads.train.main.
+# transformers 5.0 video-registry workaround — see tag.train.main.
 try:
     import torchvision.io as _tv_io
     if not hasattr(_tv_io, "VideoReader"):
@@ -59,19 +59,19 @@ except Exception:
 import torch
 from torch.utils.data import Subset
 
-from tads.core.data_io import read_records_glob
-from tads.core.schedulers import get_cosine_schedule_with_warmup
-from tads.core.timing import PhaseTimer
-from tads.core.utils import (
+from tag.core.data_io import read_records_glob
+from tag.core.schedulers import get_cosine_schedule_with_warmup
+from tag.core.timing import PhaseTimer
+from tag.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
     load_config,
     set_seed,
     setup_logger,
 )
-from tads.data.alpaca import build_alpaca_dataset
-from tads.modeling.loader import load_model, load_tokenizer
-from tads.pipelines.sft import make_dataloader, sft_one_epoch
+from tag.data.alpaca import build_alpaca_dataset
+from tag.modeling.loader import load_model, load_tokenizer
+from tag.pipelines.sft import make_dataloader, sft_one_epoch
 
 from .score import select_top_proportion, selectit_scores
 

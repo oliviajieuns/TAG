@@ -2,7 +2,7 @@
 # n9-cluster environment for the TAG experiments.
 #
 #   source /group-volume/jieuns.shin/venvs/exp/bin/activate
-#   cd /group-volume/jieuns.shin/tads/tests/tag/TAG
+#   cd /group-volume/jieuns.shin/tag/tests/tag/TAG
 #   source scripts/gpu_cloud/n9_env.sh
 #
 # This is a thin wrapper over scripts/gpu_cloud/env.sh that pins the paths
@@ -18,7 +18,7 @@ _N9_REPO="$(cd "$(dirname "$_N9_SRC")/../.." && pwd)"
 
 # Root for this experiment: code lives in $TAG_ROOT/TAG, everything the run
 # produces lives in $TAG_ROOT/workspace.
-export TAG_ROOT="${TAG_ROOT:-/group-volume/jieuns.shin/tads/tests/tag}"
+export TAG_ROOT="${TAG_ROOT:-/group-volume/jieuns.shin/tag/tests/tag}"
 export TAG_WORKSPACE="${TAG_WORKSPACE:-$TAG_ROOT/workspace}"
 
 # Paths found by scripts/gpu_cloud/n9_discover.sh --write. Sourced FIRST so
@@ -43,8 +43,8 @@ export HF_HOME="${HF_HOME:-/group-volume/data/hf_home}"
 # 4 x H100 80GB: the scoring forwards dominate, so raise the forward-only
 # batch well above the small-GPU default. Set here, once, so every arm
 # launched from this shell shares it (plan §5.2 comparability).
-export TADS_EPISODE_BS="${TADS_EPISODE_BS:-64}"      # 0.5B
-export TADS_EPISODE_BS_7B="${TADS_EPISODE_BS_7B:-32}"  # 7B
+export TAG_EPISODE_BS="${TAG_EPISODE_BS:-64}"      # 0.5B
+export TAG_EPISODE_BS_7B="${TAG_EPISODE_BS_7B:-32}"  # 7B
 
 source "$_N9_REPO/scripts/gpu_cloud/env.sh"
 

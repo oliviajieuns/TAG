@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from tads.data.sft_prompts import tokenize_alpaca
+from tag.data.sft_prompts import tokenize_alpaca
 
 
 class _StubTokenizer:

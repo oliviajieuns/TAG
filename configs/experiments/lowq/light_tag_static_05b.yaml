@@ -16,6 +16,6 @@ defaults:
   - configs/experiments/lowq/_shared_light_05b.yaml
 
 output_subdir: lowq/tag_static_05b
-tads:
+selection:
   tag:
     static: true

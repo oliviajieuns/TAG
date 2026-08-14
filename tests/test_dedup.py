@@ -1,10 +1,10 @@
-"""Unit tests for tads.core.dedup — near-duplicate clustering and the
+"""Unit tests for tag.core.dedup — near-duplicate clustering and the
 cluster-constrained top-K used by the MVF selection (plan §1.5)."""
 from __future__ import annotations
 
 import torch
 
-from tads.core.dedup import constrained_topk, near_duplicate_clusters
+from tag.core.dedup import constrained_topk, near_duplicate_clusters
 
 
 def test_exact_and_jittered_duplicates_clustered():

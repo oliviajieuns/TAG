@@ -42,7 +42,7 @@ the *graded* case (see `docs/tag-paper-deltas.md` C2).
 
 ### The gate, concretely (paper Eqs. 2-6)
 
-`tads/core/gate.py`. Per response token `k`, contrast the NLL under the true
+`tag/core/gate.py`. Per response token `k`, contrast the NLL under the true
 instruction against the NLL under an unrelated one, then aggregate at two
 granularities:
 
@@ -87,10 +87,12 @@ are trimmed to their common prefix first.
 
 ### What the code actually computes
 
-The package name and most config keys are still `tads` (rename pending).
-Three scoring modes ship:
+The package is `tag/`; the top-level config namespace (`method: selection`)
+is `selection:`, holding `score_mode` and its `mvf:`/`tag:` sub-blocks. Three
+scoring modes ship:
 
-**`score_mode: tads`** — ungated legacy trajectory-anchored score:
+**`score_mode: legacy`** — ungated legacy trajectory-anchored score
+(`configs/methods/legacy.yaml`, `legacy_score()` in `tag/core/scorer.py`):
 
     s_i = R_i · (1 + λ · ã_i),   R_i = w·L_i + (1−w)·H_i     (legacy Eq. 10)
 
@@ -103,7 +105,7 @@ error rather than a silent recomputation at the wrong checkpoint, since `G`
 is defined as a property of the data.
 
 **`score_mode: mvf`** — the earlier multi-view fusion, kept as a comparison
-arm (`configs/methods/tads_mvf.yaml`):
+arm (`configs/methods/mvf.yaml`):
 
     S_i^t = (Q_i · c_i + ε)^γ · (D'_i + ε) · (1 + λ_t · ã_i^t)
 
@@ -183,15 +185,15 @@ dependence that anchoring at `Δ̂ = 0` removes:
         --pool pools/clean_ref/pool.json \
         --counterfactual pools/clean_ref/counterfactual.json \
         --out pools/clean_ref/delta_hat_05b.pt
-    export TADS_GATE_REF=pools/clean_ref/delta_hat_05b.pt
+    export TAG_GATE_REF=pools/clean_ref/delta_hat_05b.pt
 
 Forward-only diagnosis (Dirty@K / AUPRC / per-type rejection per signal, no
 training) — includes the `entropy`, `ppl`, and `ifd` comparison rows, the
 TAG rows, and the length-bias profile:
 
     export ALPACA_DATA_FILES=pools/composite20/pool.json
-    export TADS_CF_FILES=pools/composite20/counterfactual.json
-    export TADS_DEDUP_FILE=pools/composite20/dedup_clusters.json
+    export TAG_CF_FILES=pools/composite20/counterfactual.json
+    export TAG_DEDUP_FILE=pools/composite20/dedup_clusters.json
     python scripts/score_pool.py \
         --config configs/experiments/lowq/light_tag_05b.yaml \
         --manifest pools/composite20/corruption_manifest.json \
@@ -204,7 +206,7 @@ tail gain does not beat the overall gain on the localized corruption types
 
 End-to-end training on the corrupted pool:
 
-    python -m tads.train --config configs/experiments/lowq/light_tag_05b.yaml
+    python -m tag.train --config configs/experiments/lowq/light_tag_05b.yaml
 
 ## Results status
 
@@ -217,10 +219,10 @@ be carried into the new manuscript (`docs/cikm-review-revision-audit.md`
 
 ## Layout
 
-    tads/core/gate.py the TAG reliability gate (Eqs. 2-6)
-    tads/core/        scorer, selector, reliability, dedup, trajectory anchor
-    tads/data/        Alpaca loading + corruption generation
-    tads/pipelines/   per-epoch selection dispatch + SFT loop
+    tag/core/gate.py the TAG reliability gate (Eqs. 2-6)
+    tag/core/        scorer, selector, reliability, dedup, trajectory anchor
+    tag/data/        Alpaca loading + corruption generation
+    tag/pipelines/   per-epoch selection dispatch + SFT loop
     baselines/        data_agent / nait / lima / selectit / alpagasus / q2q
     configs/          composable YAML (base / methods / models / modes / experiments)
     scripts/          pool generation, forward-only scoring, run helpers

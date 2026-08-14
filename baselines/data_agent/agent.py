@@ -1,7 +1,7 @@
 """PPO Actor-Critic for the Data Agent baseline (Yang et al., ICML 2026).
 
-Ported from the previous TADS implementation (`tads/core/agent.py` at commit
-1889eaf~1 — removed when TADS dropped its PPO actor) and aligned to the
+Ported from TAG's previous PPO-actor implementation (`tag/core/agent.py` at
+commit 1889eaf~1 — removed when the project dropped it) and aligned to the
 paper / reference repo (Jackbrocp/Data-Agent):
 
     Actor       :  3-layer MLP → Beta(α, β) with `softplus + 1.0`
@@ -10,7 +10,7 @@ paper / reference repo (Jackbrocp/Data-Agent):
     Entropy bonus: 0.0 (paper has no entropy term; configurable)
     Value clip  :  off by default (paper does not value-clip; configurable)
 
-The numerical guards from the old TADS PPO implementation (Beta-sample
+The numerical guards from that old PPO implementation (Beta-sample
 clamp before log_prob, advantage normalisation on the full rollout, optimizer-
 state device migration on resume) are kept — they are paper-orthogonal
 stability fixes that prevent NaN propagation under fp16/bf16 forwards.

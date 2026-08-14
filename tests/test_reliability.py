@@ -1,4 +1,4 @@
-"""Unit tests for tads.core.reliability — completeness gate (text + token
+"""Unit tests for tag.core.reliability — completeness gate (text + token
 level), the calibrated sigmoid Q gate, and cache round-trip. The
 counterfactual forward pass itself is exercised end-to-end on GPU runs;
 here we test the pure logic around it."""
@@ -8,14 +8,14 @@ import math
 
 import torch
 
-from tads.core.reliability import (
+from tag.core.reliability import (
     calibrate_reliability_scale,
     completeness_from_dataset,
     load_reliability_cache,
     reliability_from_losses,
     save_reliability_cache,
 )
-from tads.data.sft_prompts import text_is_complete
+from tag.data.sft_prompts import text_is_complete
 
 EOS = 2
 
@@ -112,7 +112,7 @@ def test_truncated_corruption_is_still_caught_after_the_new_rules():
     protect. Run T3 over realistic responses and check the flag rate."""
     import random
 
-    from tads.data.corruption import truncate_text
+    from tag.data.corruption import truncate_text
 
     rng = random.Random(0)
     originals = [
@@ -198,7 +198,7 @@ def test_sigmoid_gate_is_pool_independent():
 def test_rank_mode_is_v1_ablation():
     lo = torch.rand(50)
     lc = lo + torch.randn(50)
-    from tads.core.scorer import rank01
+    from tag.core.scorer import rank01
     q = reliability_from_losses(lo, lc, mode="rank")
     assert torch.allclose(q, rank01(lc - lo))
 

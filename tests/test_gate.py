@@ -17,7 +17,7 @@ import math
 import pytest
 import torch
 
-from tads.core.gate import (
+from tag.core.gate import (
     GateConfig,
     calibrate_gate_scale,
     compute_gate,
@@ -368,7 +368,7 @@ def test_recompute_from_cache_refuses_forward_bound_changes():
     completeness vector. Re-deriving under a new value would apply the OLD
     one while stamping the NEW identity, so every later run would then get a
     'cache hit' on a silently wrong gate."""
-    from tads.core.gate import recompute_gate_from_cache
+    from tag.core.gate import recompute_gate_from_cache
 
     tok_true, n, tok_cf, n_cf = _three_samples()
     cfg = _cfg()
@@ -390,7 +390,7 @@ def test_cache_identity_catches_a_wrong_pool_or_backbone():
     """A SHARED gate cache is reachable by runs it was never computed for.
     Shape alone would not catch a cache from a different backbone, and G is
     only meaningful for the (pool, base checkpoint) it was measured on."""
-    from tads.core.gate import cache_identity, check_cache_identity
+    from tag.core.gate import cache_identity, check_cache_identity
 
     want = cache_identity(model_path="/m/qwen-7b", pool_files="/p/pool.json", n_pool=100)
     assert check_cache_identity({"identity": dict(want)}, want) is None
@@ -405,7 +405,7 @@ def test_cache_identity_catches_a_wrong_pool_or_backbone():
 
 
 def test_shared_cache_round_trips_through_an_explicit_path(tmp_path):
-    from tads.core.gate import (
+    from tag.core.gate import (
         cache_identity, load_gate_cache, save_gate_cache,
     )
 
@@ -457,7 +457,7 @@ def test_raw_tail_min_zero_rate_drifts_with_response_length():
     zeroes the longest quintile several times more often than the shortest —
     because Delta^min is a minimum over M = ceil(n/W) spans and M grows.
     """
-    from tads.core.gate import GateConfig, gate_components
+    from tag.core.gate import GateConfig, gate_components
 
     true, lens, cf = _length_varying_pool()
     cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
@@ -469,7 +469,7 @@ def test_raw_tail_min_zero_rate_drifts_with_response_length():
 
 
 def test_null_correction_pins_the_clean_zero_rate_in_every_length_bin():
-    from tads.core.gate import GateConfig, fit_calibration, gate_components
+    from tag.core.gate import GateConfig, fit_calibration, gate_components
 
     true, lens, cf = _length_varying_pool()
     cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
@@ -494,7 +494,7 @@ def test_null_correction_preserves_detection_of_localized_corruption():
     A sample with one span the instruction no longer explains still lands
     below the clean null at its own length, so it still lands at zero weight.
     """
-    from tads.core.gate import GateConfig, fit_calibration, gate_components
+    from tag.core.gate import GateConfig, fit_calibration, gate_components
 
     true, lens, cf = _length_varying_pool()
     cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
@@ -521,7 +521,7 @@ def test_null_correction_preserves_detection_of_localized_corruption():
 
 def test_null_curve_is_nonincreasing_in_span_count():
     """mu(M) is projected onto the monotone cone; a rise would be noise."""
-    from tads.core.gate import GateConfig, fit_null_calibration, gate_components
+    from tag.core.gate import GateConfig, fit_null_calibration, gate_components
 
     true, lens, cf = _length_varying_pool()
     cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
@@ -535,7 +535,7 @@ def test_null_curve_is_nonincreasing_in_span_count():
 
 def test_null_curve_cannot_be_reused_at_a_different_span_width():
     """M is a span COUNT; mu(M) means something else at another W."""
-    from tads.core.gate import GateConfig, NullCalibration
+    from tag.core.gate import GateConfig, NullCalibration
 
     cal = NullCalibration(
         bin_edges=(4, 100), mu=(0.1, -0.2), counts=(500, 500),
@@ -550,7 +550,7 @@ def test_null_curve_cannot_be_reused_at_a_different_span_width():
 
 def test_gate_config_defaults_to_corrected_and_says_so_when_uncalibrated():
     """The production default is ON, and a missing curve is a loud error."""
-    from tads.core.gate import GateConfig, gate_components
+    from tag.core.gate import GateConfig, gate_components
 
     cfg = GateConfig(span_tokens=4, scale=0.2)
     assert cfg.null_correction is True
@@ -564,7 +564,7 @@ def test_scale_calibration_rejects_a_target_pct_below_the_zero_rate_target():
     """Centering puts the target_zero_rate quantile at exactly 0, so a target_pct
     at or below it derives s from a non-positive quantile — a config error
     with an exact fix, not something to paper over with the median."""
-    from tads.core.gate import calibrate_gate_scale, fit_calibration
+    from tag.core.gate import calibrate_gate_scale, fit_calibration
 
     ref = torch.linspace(-1.0, 1.0, 500)
     with pytest.raises(ValueError, match="target_pct"):
@@ -579,7 +579,7 @@ def test_scale_calibration_rejects_a_target_pct_below_the_zero_rate_target():
 
 
 def test_null_calibration_survives_a_cache_round_trip(tmp_path):
-    from tads.core.gate import (
+    from tag.core.gate import (
         GateConfig, NullCalibration, cache_identity, load_gate_cache,
         save_gate_cache,
     )

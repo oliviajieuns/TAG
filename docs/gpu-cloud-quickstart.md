@@ -71,7 +71,7 @@ reference pool, and they are not interchangeable:
   only options the code offers are a clean reference or
   `null_correction: false` (the declared ablation).
 
-If `TADS_GATE_REF_7B` names a file that does not exist, or one written before
+If `TAG_GATE_REF_7B` names a file that does not exist, or one written before
 the null curve existed, the run fails with the exact command to regenerate it
 rather than silently falling back.
 
@@ -128,7 +128,7 @@ versions — rank 0 spends a long time inside `collect_episode` while the
 other ranks sit in the collective). Training itself is ordinary DDP:
 
 ```bash
-torchrun --nproc_per_node=4 -m tads.train \
+torchrun --nproc_per_node=4 -m tag.train \
     --config configs/experiments/lowq/light_tag_05b.yaml
 ```
 
@@ -138,7 +138,7 @@ At 0.5B a single GPU is usually faster than the DDP overhead.
 
 **`no usable gate cache at epoch N (> 1)`** — `G` must come from the base
 checkpoint. Either restore `tag_gate_cache.pt` into the run dir, or start a
-fresh run. `tads.tag.allow_late_gate: true` accepts a wrong-checkpoint `G`
+fresh run. `selection.tag.allow_late_gate: true` accepts a wrong-checkpoint `G`
 explicitly, which is a deliberate escape hatch, not a fix.
 
 **Over 90% of the pool zeroed** — with `null_correction: true` this cannot be
@@ -160,7 +160,7 @@ item B4).
 pass keeps a per-token vector per sample rather than a scalar.
 
 **Cache seems stale after editing tokenisation** — the HF `map` fingerprint
-has served stale tokenisations before. Set `TADS_FRESH_DATA_CACHE=1` for one
+has served stale tokenisations before. Set `TAG_FRESH_DATA_CACHE=1` for one
 run.
 
 ---
@@ -170,21 +170,21 @@ run.
 ```bash
 source scripts/gpu_cloud/env.sh
 bash   scripts/gpu_cloud/bootstrap.sh all7b      # +Qwen2.5-7B (~15 GB), 7B calibration
-# env.sh already exported TADS_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b.pt.
-# The 7B arms read TADS_GATE_REF_7B, NOT TADS_GATE_REF — the latter is the
+# env.sh already exported TAG_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b.pt.
+# The 7B arms read TAG_GATE_REF_7B, NOT TAG_GATE_REF — the latter is the
 # 0.5B reference, and a single shared variable made picking the wrong
 # backbone's calibration silent.
-export TADS_EPISODE_BS_7B=32
+export TAG_EPISODE_BS_7B=32
 
 # Pick W from the calibration, on CPU, in seconds. The calibrate step keeps
 # the per-token NLLs, so every W is re-derived without a forward pass.
-python scripts/sweep_gate_config.py --ref $TADS_GATE_REF_7B \
+python scripts/sweep_gate_config.py --ref $TAG_GATE_REF_7B \
     --span-tokens 16,32,64,128
 # If the winner is not the config's W, refit the reference at that W (still
-# no GPU) and edit tads.tag.span_tokens in configs/methods/tag.yaml to match:
-#   python scripts/sweep_gate_config.py --ref $TADS_GATE_REF_7B \
+# no GPU) and edit selection.tag.span_tokens in configs/methods/tag.yaml to match:
+#   python scripts/sweep_gate_config.py --ref $TAG_GATE_REF_7B \
 #       --span-tokens 32 --refit-out $POOLS/clean_ref/delta_hat_7b_W32.pt
-#   export TADS_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b_W32.pt
+#   export TAG_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b_W32.pt
 
 # Completeness is a five-fold demotion decided by a string heuristic; check
 # its false-positive rate on THIS pool before running four arms on it.
@@ -194,7 +194,7 @@ python scripts/audit_completeness.py --ablate \
 python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml
 
 bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml
-export TADS_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt
+export TAG_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt
 
 SCALE=7b bash scripts/run_lowq_all_arms.sh 42
 ```
@@ -230,7 +230,7 @@ that expectation.
 
 ## Why one arm per GPU, not one arm across four
 
-Selection runs on **rank 0 only** — `tads/pipelines/selection.py` explains
+Selection runs on **rank 0 only** — `tag/pipelines/selection.py` explains
 why (an NCCL barrier there deadlocked earlier versions: rank 0 sits inside a
 30–90 minute scoring pass while the other ranks wait in the collective and
 trip the watchdog). DDP therefore accelerates the SFT step but **not** the
@@ -244,13 +244,13 @@ so the effective batch stays 128:
 | layout | world_size | grad_accum | env |
 |---|---|---|---|
 | one arm per GPU (default) | 1 | 16 | — |
-| one arm across 4 DDP ranks | 4 | 4 | `TADS_GRAD_ACCUM_7B=4` |
+| one arm across 4 DDP ranks | 4 | 4 | `TAG_GRAD_ACCUM_7B=4` |
 
 For the DDP layout:
 
 ```bash
-export TADS_GRAD_ACCUM_7B=4
-torchrun --nproc_per_node=4 -m tads.train \
+export TAG_GRAD_ACCUM_7B=4
+torchrun --nproc_per_node=4 -m tag.train \
     --config configs/experiments/lowq/tag_7b.yaml
 ```
 

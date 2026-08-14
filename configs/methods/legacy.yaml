@@ -1,0 +1,16 @@
+# Legacy trajectory-anchored score (paper §3, Algorithm 1; formerly "TADS").
+# Deterministic pipeline (no PPO actor). Score:
+#   s_i = R̃_i · (1 + λ · ã_i)            (Eq.8)
+#   R̃_i = (R_i - R̄) / (σ_R + 1e-6)       calibrated utility (pool z-score)
+#   ã_i = min-max-norm( (1/L) Σ_l <h̄_l(x_i), v_l> )  sequence-mean alignment (Eq.6-7)
+# λ=0 reduces s_i to R̃_i (clean ablation = calibrated-utility-only baseline).
+method: selection
+# Episode collection forward-only; safe to use a much larger batch on A100 80GB.
+# (Drops collect_episode wall time ~14x vs the default 1.)
+episode_batch_size: 16
+selection:
+  # λ controls the anchor-factor weight in Eq.8.  Anchor factor is bounded in
+  # [1, 1+λ] so λ → 0 disables it cleanly and λ → ∞ saturates the alignment
+  # signal.  Paper §4 ablation: typical λ ∈ [0.5, 2.0].
+  lam: 1.0
+  use_anchor: true

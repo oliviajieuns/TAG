@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Diagnose a hung tads.train / tads.eval run by dumping every Python stack
+# Diagnose a hung tag.train / tag.eval run by dumping every Python stack
 # plus a GPU and process snapshot. Output goes to a single timestamped file
 # under logs/ so it's easy to share / attach.
 #
 # Usage:
 #   bash tests/diagnose_hang.sh
-#   bash tests/diagnose_hang.sh --pattern tads.eval     # different entrypoint
+#   bash tests/diagnose_hang.sh --pattern tag.eval     # different entrypoint
 #   bash tests/diagnose_hang.sh --out /tmp/hang.txt     # custom output path
 #
 # Notes:
@@ -17,7 +17,7 @@
 #     to make subsequent runs work without sudo.
 set -u
 
-PATTERN="tads.train"
+PATTERN="tag.train"
 OUT=""
 
 while [ $# -gt 0 ]; do
@@ -65,7 +65,7 @@ fi
 
 {
     echo "============================================================"
-    echo "tads hang diagnostic — $(date)"
+    echo "tag hang diagnostic — $(date)"
     echo "pattern: $PATTERN"
     echo "============================================================"
     echo ""

@@ -8,7 +8,7 @@ output_root: ${oc.env:OUTPUT_ROOT,/group-volume/minsoo3.kim/tads-checkpoints}
 # Optional explicit log dir (default: <output_dir>/logs)
 # log_dir: ./logs
 
-# --- Benchmark data dirs (used by `python -m tads.eval`) ---
+# --- Benchmark data dirs (used by `python -m tag.eval`) ---
 mmlu_data_dir: ${oc.env:MMLU_DATA_DIR,/group-volume/IT-datasets/mmlu/all}
 mmlu_pro_data_dir: ${oc.env:MMLU_PRO_DATA_DIR,/group-volume/IT-datasets/mmlu_pro}
 gsm8k_data_dir: ${oc.env:GSM8K_DATA_DIR,/group-volume/IT-datasets/gsm8k}
@@ -55,7 +55,7 @@ attn_implementation: null
 selection_ratio: 0.5
 episode_batch_size: 1
 
-# --- Trajectory Anchor (used by tads) ---
+# --- Trajectory Anchor (used by score_mode: legacy/tag) ---
 #
 # Per-layer anchor v_l aggregates across the full decoder stack.
 # `layer_indices` controls which decoder layers contribute:
@@ -64,8 +64,9 @@ episode_batch_size: 1
 #   [0, 5, 10, ...]  → explicit list of decoder-layer indices
 #   null / unset     → falls back to legacy single-layer mode via layer_idx
 # `layer_idx` is kept only for backward compatibility with single-layer runs.
-# Scoring formula at runtime is TADS Eq.6 (sequence-mean alignment) for TADS
-# and NAIT Eq.5 (Δh alignment) for NAIT — both share the same v_l extraction.
+# Scoring formula at runtime is legacy/tag Eq.6 (sequence-mean alignment) for
+# the trajectory-anchored selection family and NAIT Eq.5 (Δh alignment) for
+# NAIT — both share the same v_l extraction.
 anchor:
   layer_indices: all
   layer_idx: -1

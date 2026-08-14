@@ -9,7 +9,7 @@
 #
 # After completion:
 #   <target_dir>/
-#     HumanEval.jsonl.gz   # exactly the file tads.evals.humaneval expects
+#     HumanEval.jsonl.gz   # exactly the file tag.evals.humaneval expects
 #
 # Source: official OpenAI release on GitHub
 #   https://github.com/openai/human-eval/raw/master/data/HumanEval.jsonl.gz

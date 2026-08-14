@@ -7,7 +7,7 @@
 > SI 실험의 eval 운영은 새 런북이 필요하며, 이 문서를 참조할 때 다음 두
 > 규칙은 **폐기됐으므로 절대 따르지 말 것**:
 >
-> 1. **§0-2 "파란불" 규칙** (`data_agent_10 > tads_10 + 1%p` → TADS
+> 1. **§0-2 "파란불" 규칙** (`data_agent_10 > legacy_10 + 1%p` → legacy-score
 >    하이퍼파라미터 재검토) — method별 비대칭 재튜닝은 비교 공정성을
 >    파괴한다. 새 실험은 전 arm 동일 hyperparameter, 결과 보고 재튜닝 금지.
 > 2. **§0-2 "upper-bound baseline"** (full_100) — multi-seed 검증 없는 단일
@@ -63,7 +63,7 @@ primary metric (JSON 파일의 점수 표 추출 키):
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ [1] EVAL 명령 자동 실행                                                 │
 │     매 tick에서 eval대기 셀 × 빈 GPU 만큼:                              │
-│     CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval                │
+│     CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tag.eval                │
 │         --config configs/.../<m>/<x>.yaml                               │
 │         --benchmarks <single_bench>                                     │
 │         --out_dir ${EVAL_RESULTS_ROOT}/<m>/<x>                          │
@@ -99,7 +99,7 @@ primary metric (JSON 파일의 점수 표 추출 키):
 
 **에이전트의 핵심 의무는 eval을 직접 launch하는 것이다 (9 벤치 전부 자동).** log 추출 + 점수 표 갱신만 하고 끝내는 게 아니라:
 
-1. **반드시 매 tick에서 `eval대기` 셀과 빈 GPU를 매칭해 `python -m tads.eval`을 직접 실행한다.** 이게 안 되면 tick 실패. PRE-FLIGHT CHECK 15 참조.
+1. **반드시 매 tick에서 `eval대기` 셀과 빈 GPU를 매칭해 `python -m tag.eval`을 직접 실행한다.** 이게 안 되면 tick 실패. PRE-FLIGHT CHECK 15 참조.
 2. 로그 polling(§0-7)은 **dispatch의 입력 신호일 뿐, 그 자체가 deliverable이 아님**. 로그만 읽고 표만 그리는 건 임무 미완.
 3. "사용자가 직접 eval을 launch하길 기다린다"는 옛 정책(폐기됨). 2026-05-16 이후 eval은 **에이전트가 cron 주기마다 자동 dispatch**한다. 사용자 개입 0 (BBH 포함, 9 벤치 전부).
 
@@ -132,7 +132,7 @@ primary metric (JSON 파일의 점수 표 추출 키):
 |---|---|
 | **학습전** | `<ckpt_root>/_latest` 도 `_latest.txt` 도 legacy flat `epoch_*` 도 없음 (정적 파일) |
 | **학습중** | sealed_n < cfg.train_epochs (정적 파일). (a) 학습 로그 mtime < 30분 = 진행 중. (b) mtime > 30분 = 학습 중단 의심이지만 표기는 `학습중` 유지, Status facet2에 `HANG <sec>s` 부기 |
-| **`eval중`** | **process-based**: `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 **또는** `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. 둘 중 하나만 만족해도 OK |
+| **`eval중`** | **process-based**: `pgrep -af "python.*tag.eval.*<m>/<x>\\.yaml"` ≥ 1 **또는** `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. 둘 중 하나만 만족해도 OK |
 | **NN.NN%** (DONE) | 정적 파일 only: sealed == target AND `_latest/_complete` 존재 AND `_latest/<label>-<bench>.json` (또는 §5-2.5 광역 스캔 결과 중 하나) 존재 AND summary mtime > sealed epoch mtime |
 | **eval대기** | 정적 파일 + 위 eval중 조건 NOT: sealed == target AND DONE 조건 미충족 AND (pgrep 0 AND log mtime ≥ 5분 또는 로그 없음) |
 
@@ -203,7 +203,7 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
             eval대기/eval중/NN.NN%) 중 하나.
 [CHECK 09] (9) History의 이번 tick 변경분이 newest-at-bottom으로
             append 되었다. 변경 0개면 history append 없음 OK.
-[CHECK 10] 사용자가 launch한 학습 프로세스(`pgrep python.*tads.train.
+[CHECK 10] 사용자가 launch한 학습 프로세스(`pgrep python.*tag.train.
             *<m>/<x>.yaml`)가 alive면 그 셀은 (6)에서 무조건 `학습중`.
             DONE 점수였더라도 학습중으로 되돌려 놔야 함 (§0-4 (10) 재학습
             감지 규약).
@@ -240,9 +240,9 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 [CHECK 15] **DISPATCH 실행 확인 (가장 자주 누락되는 단계)**.
             classify 후 status가 `eval대기` 인 셀이 1개 이상이고 nvidia-smi
             기준 빈 GPU 가 1개 이상이면 **이번 tick에 반드시 1개 이상의
-            `python -m tads.eval` 명령을 background로 실행했어야 한다**.
+            `python -m tag.eval` 명령을 background로 실행했어야 한다**.
             확인 방법:
-              - `pgrep -af "python -m tads.eval"` 결과에 이번 tick에 launch한
+              - `pgrep -af "python -m tag.eval"` 결과에 이번 tick에 launch한
                 PID 들이 떠 있음, AND
               - tick 로그(stdout/cron log)에 `dispatched <model>/<method> ->
                 GPU <n>` 한 줄 이상.
@@ -299,7 +299,7 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 3. **`eval대기` 셀 발견 + 빈 GPU 존재**시 자동 dispatch (9 벤치 전부 자동, bbh는 마지막 순서):
    - **운영 가정 (사용자 명시)**: 노드에 학습이 동시에 안 돈다. eval만 진행.
    - 1셀 = 1 GPU = 1명령 (§4-1). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지.
-   - `CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval --config ... --benchmarks <single_bench> --out_dir ... &` — 단일 벤치, 한 cell의 앞 벤치가 DONE되어야 다음 벤치 enqueue.
+   - `CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tag.eval --config ... --benchmarks <single_bench> --out_dir ... &` — 단일 벤치, 한 cell의 앞 벤치가 DONE되어야 다음 벤치 enqueue.
    - 빈 GPU가 K개면 매 tick K개 (cell, bench) pair launch (큐 나머지는 다음 tick — 매 tick continuous).
    - 9 benchmark 16셀 전부 DONE될 때까지 에이전트 혼자서 자동 진행. 사용자 개입 0.
    - **벤치 순서**: `mmlu → mmlu_pro → gsm8k → svamp → humaneval → mbpp → tydiqa → xquad → bbh`. bbh는 셀당 ~15h+ 라 마지막에 배치 (앞 8개 벤치 다 끝난 셀만 bbh enqueue).
@@ -307,10 +307,10 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 5. **체크포인트가 없는 셀(`학습전`)** 은 사용자에게 명시적으로 보고 — "이 셀은 사용자가 학습을 돌려야 한다"는 신호. **`eval대기` 는 보고 + 자동 launch 양쪽 다 수행**.
 
 에이전트가 **자동 실행해도 되는** 명령:
-- `python -m tads.eval --config <main_7b config> ...` (1셀 = 1명령 형식만, §4-1).
+- `python -m tag.eval --config <main_7b config> ...` (1셀 = 1명령 형식만, §4-1).
 
 에이전트가 **절대 실행하지 않는** 명령:
-- 학습 (`run_main_7b.sh`, `python -m tads.train`, `torchrun ... -m tads.train` 등) — 사용자 영역.
+- 학습 (`run_main_7b.sh`, `python -m tag.train`, `torchrun ... -m tag.train` 등) — 사용자 영역.
 - batch wrapper (`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) — cascade fail / log race / _latest race 문제. 단일 셀 명령으로 분해할 것.
 - 가중치 / 캐시 / 결과 삭제 (`rm`, `git clean`, `mv runs/*`, `truncate` 등).
 - 환경 수정 (`pip install`, `apt`, `git config`, `crontab -e` 등).
@@ -322,7 +322,7 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 | 축 | 개수 | 값 |
 |---|---|---|
 | 모델 | **4** | `llama2`, `qwen25`, `mistral`, `deepseek` |
-| 메서드(실험) | **4** | `full_100`, `random_10`, `data_agent_10`, `tads_10` |
+| 메서드(실험) | **4** | `full_100`, `random_10`, `data_agent_10`, `legacy_10` |
 | 벤치마크 | **9** | `mmlu`, `mmlu_pro`, `gsm8k`, `svamp`, `humaneval`, `mbpp`, `tydiqa`, `xquad`, `bbh` |
 
 → 4 × 4 × 9 = **144개** (모델, 메서드, 벤치마크) 결과 셀.
@@ -335,28 +335,28 @@ dispatch pass를 건너뛰는 어떤 tick도 잘못된 출력이다 (9-bench 대
 
 | 약칭 | 무엇 | 역할 |
 |---|---|---|
-| **BASE-FULL** | `full_100` — Alpaca-GPT4 **전체** 데이터로 학습 (= 01 alpaca-gpt4 full data) | **upper-bound baseline**. 10%-셀렉션 메서드(treatment)는 이 점수에 **얼마나 근접하는지**가 핵심. tads_10 / data_agent_10 / random_10 모두 이걸 향해 간다. |
-| **BASE-NAIT** | `random_10` — NAIT 논문의 10% 랜덤 샘플링 baseline | **lower-bound / naive baseline**. tads_10 / data_agent_10가 **반드시 이겨야 하는** 기준선. |
+| **BASE-FULL** | `full_100` — Alpaca-GPT4 **전체** 데이터로 학습 (= 01 alpaca-gpt4 full data) | **upper-bound baseline**. 10%-셀렉션 메서드(treatment)는 이 점수에 **얼마나 근접하는지**가 핵심. legacy_10 / data_agent_10 / random_10 모두 이걸 향해 간다. |
+| **BASE-NAIT** | `random_10` — NAIT 논문의 10% 랜덤 샘플링 baseline | **lower-bound / naive baseline**. legacy_10 / data_agent_10가 **반드시 이겨야 하는** 기준선. |
 
 즉, 매 모델마다 비교 라인은 다음 두 줄:
 
 ```
 BASE-FULL (full_100)     ← treatment가 도달하려는 천장
 BASE-NAIT (random_10)    ← treatment가 넘어야 하는 바닥
-treatment (data_agent_10, tads_10)  ← 위 둘 사이 어디쯤이어야 정상
+treatment (data_agent_10, legacy_10)  ← 위 둘 사이 어디쯤이어야 정상
 ```
 
 비정상 신호 (에이전트가 보고 시 우측 컬럼에 플래그할 것):
 
-- `tads_10 < random_10` (BASE-NAIT보다 낮음) → **빨간불**. 셀렉션이 오히려 해롭다는 뜻.
-- `tads_10 << full_100` (BASE-FULL보다 5%p 이상 처짐) → **노란불**. 10% 데이터로 100% 격차 회수 실패.
-- `data_agent_10 > tads_10 + 1%p` → **파란불**. 경쟁 method가 더 잘함 — TADS 하이퍼파라미터 재검토 필요.
+- `legacy_10 < random_10` (BASE-NAIT보다 낮음) → **빨간불**. 셀렉션이 오히려 해롭다는 뜻.
+- `legacy_10 << full_100` (BASE-FULL보다 5%p 이상 처짐) → **노란불**. 10% 데이터로 100% 격차 회수 실패.
+- `data_agent_10 > legacy_10 + 1%p` → **파란불**. 경쟁 method가 더 잘함 — legacy-score 하이퍼파라미터 재검토 필요.
 
 ### 0-3. 전체 매트릭스 — 로컬 파일 기준 표
 
 아래 표는 **이 repo (`/home/jieun/kms/tads`)에 실제로 존재하는 config**와, 그것이 만들어낼 체크포인트/결과 경로, 그리고 각 셀의 **비교 대상**을 정리한 것이다. 각 모델 블록 안에서 **baseline 두 줄이 위, treatment 두 줄이 아래** 순서.
 
-`experiment_label`은 `tads/eval.py` 규칙(`<parent_dir>_<config_stem>`)으로 자동 생성되며, 결과 JSON 파일명에 그대로 박힌다.
+`experiment_label`은 `tag/eval.py` 규칙(`<parent_dir>_<config_stem>`)으로 자동 생성되며, 결과 JSON 파일명에 그대로 박힌다.
 
 #### (a) 학습 config × 체크포인트 위치 × 결과 디렉터리 (16개 셀)
 
@@ -365,21 +365,21 @@ treatment (data_agent_10, tads_10)  ← 위 둘 사이 어디쯤이어야 정상
 | 1 | llama2 | full_100 | `configs/experiments/main_7b/llama2/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/full_100/_latest/` | `llama2_full_100` | 기준선 (천장). 절대값 자체가 sanity 체크 — 평균 정확도가 동급 reference 대비 5%p 이상 낮으면 학습 자체 의심 |
 | 2 | llama2 | random_10 | `configs/experiments/main_7b/llama2/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/random_10/_latest/` | `llama2_random_10` | 기준선 (바닥). 보통 BASE-FULL 대비 3~8%p 처짐이 정상 |
 | 3 | llama2 | data_agent_10 | `configs/experiments/main_7b/llama2/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/data_agent_10/_latest/` | `llama2_data_agent_10` | vs `llama2_random_10` (반드시 ≥), vs `llama2_full_100` (≤이지만 -2%p 이내 권장) |
-| 4 | llama2 | tads_10 | `configs/experiments/main_7b/llama2/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/` | `llama2_tads_10` | vs `llama2_random_10` (반드시 ≥, -1%p 처지면 **빨간불**), vs `llama2_data_agent_10` (≥ 권장), vs `llama2_full_100` (-5%p 이상 처지면 **노란불**) |
+| 4 | llama2 | legacy_10 | `configs/experiments/main_7b/llama2/legacy_10.yaml` | `${OUTPUT_ROOT}/main_7b/llama2/legacy_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/` | `llama2_legacy_10` | vs `llama2_random_10` (반드시 ≥, -1%p 처지면 **빨간불**), vs `llama2_data_agent_10` (≥ 권장), vs `llama2_full_100` (-5%p 이상 처지면 **노란불**) |
 | 5 | qwen25 | full_100 | `configs/experiments/main_7b/qwen25/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/full_100/_latest/` | `qwen25_full_100` | 기준선 (천장) |
 | 6 | qwen25 | random_10 | `configs/experiments/main_7b/qwen25/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/random_10/_latest/` | `qwen25_random_10` | 기준선 (바닥) |
 | 7 | qwen25 | data_agent_10 | `configs/experiments/main_7b/qwen25/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/_latest/` | `qwen25_data_agent_10` | vs `qwen25_random_10` / `qwen25_full_100` (위 #3 규칙) |
-| 8 | qwen25 | tads_10 | `configs/experiments/main_7b/qwen25/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/tads_10/_latest/` | `qwen25_tads_10` | vs `qwen25_random_10` / `qwen25_data_agent_10` / `qwen25_full_100` (위 #4 규칙) |
+| 8 | qwen25 | legacy_10 | `configs/experiments/main_7b/qwen25/legacy_10.yaml` | `${OUTPUT_ROOT}/main_7b/qwen25/legacy_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/qwen25/legacy_10/_latest/` | `qwen25_legacy_10` | vs `qwen25_random_10` / `qwen25_data_agent_10` / `qwen25_full_100` (위 #4 규칙) |
 | 9 | mistral | full_100 | `configs/experiments/main_7b/mistral/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/full_100/_latest/` | `mistral_full_100` | 기준선 (천장) |
 | 10 | mistral | random_10 | `configs/experiments/main_7b/mistral/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/random_10/_latest/` | `mistral_random_10` | 기준선 (바닥) |
 | 11 | mistral | data_agent_10 | `configs/experiments/main_7b/mistral/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/data_agent_10/_latest/` | `mistral_data_agent_10` | vs `mistral_random_10` / `mistral_full_100` (위 #3 규칙) |
-| 12 | mistral | tads_10 | `configs/experiments/main_7b/mistral/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/tads_10/_latest/` | `mistral_tads_10` | vs `mistral_random_10` / `mistral_data_agent_10` / `mistral_full_100` (위 #4 규칙) |
+| 12 | mistral | legacy_10 | `configs/experiments/main_7b/mistral/legacy_10.yaml` | `${OUTPUT_ROOT}/main_7b/mistral/legacy_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/mistral/legacy_10/_latest/` | `mistral_legacy_10` | vs `mistral_random_10` / `mistral_data_agent_10` / `mistral_full_100` (위 #4 규칙) |
 | 13 | deepseek | full_100 | `configs/experiments/main_7b/deepseek/full_100.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/full_100/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/full_100/_latest/` | `deepseek_full_100` | 기준선 (천장) |
 | 14 | deepseek | random_10 | `configs/experiments/main_7b/deepseek/random_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/random_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/random_10/_latest/` | `deepseek_random_10` | 기준선 (바닥) |
 | 15 | deepseek | data_agent_10 | `configs/experiments/main_7b/deepseek/data_agent_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/data_agent_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/data_agent_10/_latest/` | `deepseek_data_agent_10` | vs `deepseek_random_10` / `deepseek_full_100` (위 #3 규칙) |
-| 16 | deepseek | tads_10 | `configs/experiments/main_7b/deepseek/tads_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/tads_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/tads_10/_latest/` | `deepseek_tads_10` | vs `deepseek_random_10` / `deepseek_data_agent_10` / `deepseek_full_100` (위 #4 규칙) |
+| 16 | deepseek | legacy_10 | `configs/experiments/main_7b/deepseek/legacy_10.yaml` | `${OUTPUT_ROOT}/main_7b/deepseek/legacy_10/_latest/epoch_*` | `${EVAL_RESULTS_ROOT}/deepseek/legacy_10/_latest/` | `deepseek_legacy_10` | vs `deepseek_random_10` / `deepseek_data_agent_10` / `deepseek_full_100` (위 #4 규칙) |
 
-> 모든 config 파일은 로컬에 실제로 존재함을 확인함. `random_50 / data_agent_50 / tads_50`도 디스크엔 있지만 **이번 매트릭스 범위 밖**이므로 자동 eval에서 제외.
+> 모든 config 파일은 로컬에 실제로 존재함을 확인함. `random_50 / data_agent_50 / legacy_50`도 디스크엔 있지만 **이번 매트릭스 범위 밖**이므로 자동 eval에서 제외.
 
 #### (b) 셀 하나당 떨어지는 결과 JSON (16개 셀 × 9 벤치 = 144개 점수 파일 + 16개 summary)
 
@@ -413,19 +413,19 @@ ${EVAL_RESULTS_ROOT}/<model>/<method>/
 - 같은 run에 추가 벤치만 돌리려면 `--eval_tag=latest`로 호출 → 새 dir을 안 만들고 기존 `_latest/`에 추가 점수 JSON을 끼워 넣는다.
 - legacy flat 레이아웃이 필요하면 `--flat` 플래그 (one-off ad-hoc 평가용, 점수표 에이전트는 이걸 안 읽음).
 
-예시 (llama2 + tads_10 셀, 가장 최신 평가):
+예시 (llama2 + legacy_10 셀, 가장 최신 평가):
 
 ```
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-mmlu.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-mmlu_pro.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-gsm8k.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-svamp.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-humaneval.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-mbpp.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-tydiqa.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-xquad.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-bbh.json
-${EVAL_RESULTS_ROOT}/llama2/tads_10/_latest/llama2_tads_10-eval_summary.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-mmlu.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-mmlu_pro.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-gsm8k.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-svamp.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-humaneval.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-mbpp.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-tydiqa.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-xquad.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-bbh.json
+${EVAL_RESULTS_ROOT}/llama2/legacy_10/_latest/llama2_legacy_10-eval_summary.json
 ```
 
 > **모든 점수 파싱은 `<셀 BASE>/_latest/<exp_label>-…json` 경로를 사용**한다. `_latest`를 거치지 않은 flat 경로(`<셀 BASE>/<exp_label>-…json`)는 `--flat`으로 만든 legacy / ad-hoc 결과로 간주하여 LEGACY 분류(§5-5)로 떨어진다.
@@ -524,7 +524,7 @@ ${EVAL_RESULTS_ROOT}/experiments.md
 1. `학습전` — 체크포인트가 아직 없음 (§5-4 NEED-TRAIN)
 2. `학습중` — 학습 프로세스가 살아있거나 sealed epoch 수 < train_epochs
 3. `eval대기` — 학습 완료, eval 프로세스 안 떴음 (NEED-EVAL)
-4. `eval중` — `python -m tads.eval.*<model>/<method>` 프로세스 살아있음
+4. `eval중` — `python -m tag.eval.*<model>/<method>` 프로세스 살아있음
 5. `NN.NN%` — 점수 산출 완료 (`47.56%` 형식, 둘째 자리 + `%`)
 
 **🚫 금지된 토큰** — 아래 중 어떤 것도 `experiments.md`의 셀 값으로 절대 들어가면 안 된다:
@@ -561,7 +561,7 @@ table=$(awk '/^## \(6\) Current/,0' experiments.md \
 # 2. 상태 토큰 외의 토큰이 있는지 확인 (정규식: 학습전/학습중/eval대기/eval중/NN.NN%)
 bad=$(echo "$table" \
       | grep -oE '[^[:space:]]+' \
-      | grep -vE '^([0-9]+|llama2|qwen25|mistral|deepseek|/|full_100|random_10|data_agent_10|tads_10|학습전|학습중|eval대기|eval중|[0-9]+\.[0-9]{2}%)$' \
+      | grep -vE '^([0-9]+|llama2|qwen25|mistral|deepseek|/|full_100|random_10|data_agent_10|legacy_10|학습전|학습중|eval대기|eval중|[0-9]+\.[0-9]{2}%)$' \
       | sort -u)
 if [ -n "$bad" ]; then
   echo "[FAIL] 144-cell 표에 금지 토큰 발견 — 상태 토큰로 재분류 필요:"
@@ -620,7 +620,7 @@ Method          mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydi
 full_100        -         -         -         -         -         -         -         -         -         -
 random_10       -         -         -         -         -         -         -         -         -         -
 data_agent_10   -         -         -         -         -         -         -         -         -         -
-tads_10         -         -         -         -         -         -         -         -         -         -
+legacy_10         -         -         -         -         -         -         -         -         -         -
 ```
 
 #### (2) qwen25
@@ -631,7 +631,7 @@ Method          mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydi
 full_100        -         -         -         -         -         -         -         -         -         -
 random_10       -         -         -         -         -         -         -         -         -         -
 data_agent_10   -         -         -         -         -         -         -         -         -         -
-tads_10         -         -         -         -         -         -         -         -         -         -
+legacy_10         -         -         -         -         -         -         -         -         -         -
 ```
 
 #### (3) mistral
@@ -642,7 +642,7 @@ Method          mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydi
 full_100        -         -         -         -         -         -         -         -         -         -
 random_10       -         -         -         -         -         -         -         -         -         -
 data_agent_10   -         -         -         -         -         -         -         -         -         -
-tads_10         -         -         -         -         -         -         -         -         -         -
+legacy_10         -         -         -         -         -         -         -         -         -         -
 ```
 
 #### (4) deepseek
@@ -653,7 +653,7 @@ Method          mmlu      mmlu_pro  gsm8k     svamp     humaneval mbpp      tydi
 full_100        -         -         -         -         -         -         -         -         -         -
 random_10       -         -         -         -         -         -         -         -         -         -
 data_agent_10   -         -         -         -         -         -         -         -         -         -
-tads_10         -         -         -         -         -         -         -         -         -         -
+legacy_10         -         -         -         -         -         -         -         -         -         -
 ```
 
 #### (5) Cross-model summary (avg of 9 benchmarks)
@@ -664,7 +664,7 @@ tads_10         -         -         -         -         -         -         -   
 full_100        -          -          -          -
 random_10       -          -          -          -
 data_agent_10   -          -          -          -
-tads_10         -          -          -          -
+legacy_10         -          -          -          -
 ```
 
 #### (6) Current — 144-cell real-time status table + Status + Params
@@ -680,22 +680,22 @@ tads_10         -          -          -          -
  1  llama2 / full_100          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
- 4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 4  llama2 / legacy_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 
  5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
  7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
- 8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+ 8  qwen25 / legacy_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 
  9  mistral / full_100         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 10  mistral / random_10        학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
-12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+12  mistral / legacy_10          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 
 13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
-16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
+16  deepseek / legacy_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    -                                                 (no run yet)
 ```
 
 #### (7) Latest — 가장 최근의 DONE 점수만 모은 표 (`NN.NN%` 또는 `-` only)
@@ -737,8 +737,8 @@ tads_10         -          -          -          -
 2026-05-16 18:30  cell=llama2/full_100      bench=mmlu       prev=-       new=46.87%   reason=initial      source=runs/20260516_180000/eval/.../llama2_full_100-mmlu.json
 2026-05-16 18:32  cell=llama2/full_100      bench=gsm8k      prev=-       new=14.32%   reason=initial      source=runs/20260516_180000/eval/.../llama2_full_100-gsm8k.json
 2026-05-17 09:15  cell=llama2/random_10     bench=mmlu       prev=-       new=47.14%   reason=initial      source=runs/20260517_091500/eval/.../llama2_random_10-mmlu.json
-2026-05-17 22:00  cell=llama2/tads_10       bench=mmlu       prev=47.20%  new=학습중   reason=재학습 시작  source=runs/20260517_220000/ (train launched)
-2026-05-18 02:30  cell=llama2/tads_10       bench=mmlu       prev=학습중  new=48.05%   reason=재학습 완료  source=runs/20260517_220000/eval/.../llama2_tads_10-mmlu.json
+2026-05-17 22:00  cell=llama2/legacy_10       bench=mmlu       prev=47.20%  new=학습중   reason=재학습 시작  source=runs/20260517_220000/ (train launched)
+2026-05-18 02:30  cell=llama2/legacy_10       bench=mmlu       prev=학습중  new=48.05%   reason=재학습 완료  source=runs/20260517_220000/eval/.../llama2_legacy_10-mmlu.json
 ...
 ```
 
@@ -753,7 +753,7 @@ tads_10         -          -          -          -
 #### (10) 재학습 ↔ 표 갱신 규약 + Params 한 줄 형식
 
 **재학습 감지 시 표 흐름:**
-1. 사용자가 어떤 셀에 새 학습 launch (예: `python -m tads.train --config configs/.../llama2/tads_10.yaml`)
+1. 사용자가 어떤 셀에 새 학습 launch (예: `python -m tag.train --config configs/.../llama2/legacy_10.yaml`)
    → `<ckpt_root>/runs/<new_tag>/` 생성 + `_latest` 포인터가 그쪽으로 이동.
 2. 다음 tick에서 §5-4 분류기가 `학습 프로세스 alive` (pgrep) 신호를 잡음 → (6) Current 표의 그 셀 5개 컬럼 모두 `학습중`으로 전환.
 3. (7) Latest 표는 **건드리지 않음** — 이전 DONE 값(예: `47.20%`)이 그대로 남아있음. 사용자는 "현재 학습중이지만 직전 마지막 점수는 47.20%였다"를 두 표를 동시에 보고 확인.
@@ -782,14 +782,14 @@ tads_10         -          -          -          -
 lr=<learning_rate> ep=<train_epochs> bs=<batch_size>/ga=<grad_accum> wd=<weight_decay>
 ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 [attn=<attn_implementation>] [opt=AdamW(fp32|8bit)] [prompt=<prompt_style>]
-[lam=<tads.lam>] [anchor=<anchor.layer_indices>] [ent=<agent.entropy_coef>]
+[lam=<selection.lam>] [anchor=<anchor.layer_indices>] [ent=<agent.entropy_coef>]
 ```
 
-값이 base.yaml 기본값과 같으면 생략 가능 (간결성). method-specific 키는 method가 `tads`/`data_agent`일 때만 표기.
+값이 base.yaml 기본값과 같으면 생략 가능 (간결성). method-specific 키는 method가 `selection`/`data_agent`일 때만 표기.
 
 예시:
 - llama2/full_100: `lr=2e-5 ep=3 bs=8/ga=4 ratio=1.0 mode=full opt=AdamW8bit prompt=alpaca_default`
-- llama2/tads_10:  `lr=2e-5 ep=3 bs=8/ga=4 ratio=0.1 mode=full opt=AdamW8bit prompt=alpaca_default lam=1.0 anchor=all ent=0.02`
+- llama2/legacy_10:  `lr=2e-5 ep=3 bs=8/ga=4 ratio=0.1 mode=full opt=AdamW8bit prompt=alpaca_default lam=1.0 anchor=all ent=0.02`
 - qwen25/random_10: `lr=2e-5 ep=3 bs=8/ga=4 ratio=0.1 mode=full opt=AdamW8bit`
 
 **Params 컬럼 갱신 시점:**
@@ -804,7 +804,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 | **NO-CKPT** | `학습전` | `_latest`도 `_latest.txt`도 legacy flat `epoch_*`도 없음. 행 전체 5컬럼 동일. 사용자에게 "학습이 필요한 셀 목록" 보고. |
 | **TRAINING** | `학습중` | sealed epoch < `cfg_target_epochs` (= `<latest_run>/cfg.json` 의 `train_epochs` snapshot). 행 전체 5컬럼 동일. train 로그 mtime < 30분이면 진행 중, > 30분이면 Status facet2 에 `HANG <sec>s` 부기하지만 표기는 학습중 유지. |
 | **NEED-EVAL** | `eval대기` | (a) sealed == `cfg_target_epochs` AND (b) `_latest/_complete` + `_latest/<label>-<bench>.json` 부재 또는 stale AND (c) **eval 로그 mtime ≥ 5분 (또는 로그 없음, = 잡 활성도 없음)**. 다음 dispatch pass에서 에이전트가 자동 launch (§4 / §7 3.7). |
-| **EVAL-RUNNING** | `eval중` | **process-based** (예외): `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 **또는** `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. 잡 활성도 직접 확인. (정책 §0: eval중만 process, 나머지는 정적 파일.) |
+| **EVAL-RUNNING** | `eval중` | **process-based** (예외): `pgrep -af "python.*tag.eval.*<m>/<x>\\.yaml"` ≥ 1 **또는** `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. 잡 활성도 직접 확인. (정책 §0: eval중만 process, 나머지는 정적 파일.) |
 | **DONE** | `NN.NN%` 예: `47.56%` | §5-3 의 3-조건 만족. 정확도(%) 소수점 둘째자리 + `%`. **humaneval은 pass@10** (NAIT 논문 기준, n=20 sampled completions, T=0.8, p=0.95). 점수 JSON엔 `pass@1`도 같이 기록되지만 점수표는 `pass@10`만 본다. |
 
 > **분류 결정 트리 — 매 tick 반드시 위에서 아래로 순회. 어느 분기에도 안 걸린 셀은 마지막에 `eval대기`로 떨어뜨림** (절대 `-` / `err` / 공란 금지):
@@ -822,7 +822,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 >    (보조: train log mtime > 30분이면 Status facet2에 `HANG <sec>s` 부기,
 >     셀 자체 표기는 학습중 유지)
 >
-> 3a. `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 (잡이 살아있음, 가장 직접적 신호)
+> 3a. `pgrep -af "python.*tag.eval.*<m>/<x>\\.yaml"` ≥ 1 (잡이 살아있음, 가장 직접적 신호)
 >    → eval중 [END]
 >
 > 3b. pgrep 0 + eval 로그 파일 mtime < 5분 이내 (잡이 활발히 로그 쓰는 중, pgrep 보호망)
@@ -852,12 +852,12 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
 > 흔한 실수: 가이드 §0-4(6) 코드 블록의 `-`로 채워진 행을 그대로 `experiments.md`에 복사하고 끝내는 것. 이건 잘못된 출력이다. **복사 직후 같은 tick에서 분류해서 상태 토큰로 덮어써야 매 tick이 마무리된다.**
 
 추가 규칙:
-- treatment 행이 DONE이면 옆에 §0-2의 발산 알람을 인라인으로 붙일 것. 예: `tads_10  41.20% (RED < random_10)`
+- treatment 행이 DONE이면 옆에 §0-2의 발산 알람을 인라인으로 붙일 것. 예: `legacy_10  41.20% (RED < random_10)`
 - `학습전` 셀은 score board 갱신 외에 **별도 섹션 "필요한 학습 목록"을 `experiments.md` 상단에 자동 추가**해서 사용자가 한눈에 보게 할 것. 형식:
   ```
   ## 사용자 액션 필요 — 아직 학습되지 않은 셀 (학습전)
   - llama2 / data_agent_10
-  - llama2 / tads_10
+  - llama2 / legacy_10
   - mistral / random_10
   ...
   ```
@@ -866,7 +866,7 @@ ratio=<selection_ratio> wmup=<warmup_ratio> mode=<training_mode>
   ## Auto-dispatch queue — eval 미실행 셀 (다음 tick에 자동 launch 예정)
   - llama2 / random_10        (epoch 3 sealed at 2026-05-16 18:00; eval 로그 없음)
   - qwen25 / data_agent_10    (epoch 3 sealed at 2026-05-16 17:30; 직전 eval 5h 전 idle)
-  - mistral / tads_10         (epoch 3 sealed at 2026-05-16 16:15)
+  - mistral / legacy_10         (epoch 3 sealed at 2026-05-16 16:15)
   ...
   현재 빈 GPU: 2개 (cuda:1, cuda:3) — 위 큐 중 앞 2개 launch 예정.
   ```
@@ -884,7 +884,7 @@ score board(`experiments.md`)는 점수 디테일을 위한 long-form, 이건 �
 | `학습전` | 체크포인트 없음 | `<ckpt_root>/_latest`도 `_latest.txt`도 없고, legacy flat `epoch_*`도 없음. 행(=한 셀) 전체 5개 컬럼이 모두 이 표기. |
 | `학습중` | 학습 진행 중 | sealed_n (`_latest/epoch_last/_complete` sentinel 내용, 또는 legacy max epoch_N) < `<latest_run>/cfg.json`의 `train_epochs` snapshot. 행 전체 5개 컬럼 모두 이 표기. (보조 사항: train log mtime > 30분이면 Status facet2에 `HANG <sec>s` 부기, 셀 표기 자체는 학습중 유지.) |
 | `eval대기` | 학습 끝남, eval 잡 활성도 없음 | (a) sealed_n >= cfg_target_epochs AND (b) `<eval_base>/_latest/<exp_label>-<bench>.json` 없음 또는 mtime ≤ sealed epoch AND (c) **`<eval_base>/_latest/logs/eval_*.log` mtime ≥ 5분 (또는 로그 없음)**. 다음 §7 3.7 dispatch pass에서 에이전트가 자동 launch. |
-| `eval중` | eval 잡 활성 | **process-based**: `pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1 OR `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. (정책 §0: eval중만 pgrep 사용, 나머지는 정적 파일.) |
+| `eval중` | eval 잡 활성 | **process-based**: `pgrep -af "python.*tag.eval.*<m>/<x>\\.yaml"` ≥ 1 OR `<eval_base>/_latest/logs/eval_*.log` mtime < 5분. (정책 §0: eval중만 pgrep 사용, 나머지는 정적 파일.) |
 | `47.56%` | 점수 산출 완료 | `<eval_base>/_latest/<exp_label>-<bench>.json`이 존재하고 mtime > latest sealed epoch. `_latest/_complete` sentinel도 있어야 함. 점수는 §5-5의 정규화 규칙으로 추출, **소수점 둘째 자리 + `%`**. |
 
 **판정 의사 코드** (cell-by-cell, §5-4 의 4-state 분류를 9×16에 투영):
@@ -926,7 +926,7 @@ def status_cell(model, method, bench):
             return f"{extract_score_pct(bench_json):.2f}%"   # DONE
     # 점수 JSON 아직 없음 또는 _latest unsealed.
     # eval중 = process (pgrep) OR log mtime < 5분 (정책 §0: eval중만 예외).
-    if pgrep_alive(f"python.*-m tads.eval.*{model}/{method}\\.yaml"):
+    if pgrep_alive(f"python.*-m tag.eval.*{model}/{method}\\.yaml"):
         return "eval중"
     eval_log = newest(f"{eval_base}/_latest/logs/eval_*.log")
     if eval_log and (now() - mtime(eval_log)) < 300:
@@ -946,25 +946,25 @@ def status_cell(model, method, bench):
  1  llama2 / full_100          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
  2  llama2 / random_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
  3  llama2 / data_agent_10     학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
- 4  llama2 / tads_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+ 4  llama2 / legacy_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 
  5  qwen25 / full_100          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
  6  qwen25 / random_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
  7  qwen25 / data_agent_10     학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
- 8  qwen25 / tads_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+ 8  qwen25 / legacy_10           학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 
  9  mistral / full_100         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 10  mistral / random_10        학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 11  mistral / data_agent_10    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
-12  mistral / tads_10          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+12  mistral / legacy_10          학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 
 13  deepseek / full_100        학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 14  deepseek / random_10       학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 15  deepseek / data_agent_10   학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
-16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+16  deepseek / legacy_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 ```
 
-> `**tads_10**` 같은 markdown bold는 experiments.md에는 쓰지 않는다 (terminal에서 `**` 별표가 그대로 보임). 강조가 필요하면 별도 ASCII 마커(`<` `>` 같은) 사용하거나 그냥 평문.
+> `**legacy_10**` 같은 markdown bold는 experiments.md에는 쓰지 않는다 (terminal에서 `**` 별표가 그대로 보임). 강조가 필요하면 별도 ASCII 마커(`<` `>` 같은) 사용하거나 그냥 평문.
 
 #### 진행 예시 (이런 형태로 보고 + 그대로 experiments.md에 들어가는 모양)
 
@@ -976,11 +976,11 @@ def status_cell(model, method, bench):
  1  llama2 / full_100          47.56%    21.89%    14.63%    39.00%    27.87%    51.58%    39.48%    42.99%    39.94%
  2  llama2 / random_10         47.14%    eval중    14.13%    eval대기  eval대기  eval대기  eval대기  eval대기  eval대기
  3  llama2 / data_agent_10     학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중
- 4  llama2 / tads_10           학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중
+ 4  llama2 / legacy_10           학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중    학습중
 
  5  qwen25 / full_100          eval중    eval대기  eval대기  eval대기  eval대기  eval대기  eval대기  eval대기  eval대기
  ...
-16  deepseek / tads_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
+16  deepseek / legacy_10         학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전    학습전
 ```
 
 해석 가이드:
@@ -993,7 +993,7 @@ def status_cell(model, method, bench):
 
 - 매 tick (cron 15분 주기)마다 dispatch pass 직전 1회, dispatch 직후 1회 = tick당 2회 출력.
 - 출력은 `experiments.md` **상단**에 §0-4의 "표 작성 규칙"을 따른 **코드 펜스(```) + 고정폭 정렬** 표로 갱신 (markdown pipe table 금지 — terminal `cat`에서 깨짐). 전체 파일을 매번 다시 쓰지 말고 `<!-- STATUS DASHBOARD START -->` ... `<!-- STATUS DASHBOARD END -->` 마커 사이만 atomic 교체. 마커 자체는 markdown 렌더러에선 안 보이고 terminal에선 한 줄로 보여 위치 식별에 도움.
-- 채팅/슬랙 보고에는 변경된 셀만 `diff` 형태로 인용 ("[#4 llama2/tads_10] 학습중 → eval대기", "[#1 llama2/full_100, MMLU] eval중 → 47.56%" 등). 표 전체 매번 복붙 금지.
+- 채팅/슬랙 보고에는 변경된 셀만 `diff` 형태로 인용 ("[#4 llama2/legacy_10] 학습중 → eval대기", "[#1 llama2/full_100, MMLU] eval중 → 47.56%" 등). 표 전체 매번 복붙 금지.
 
 ### 0-6. History Tracking Guide — Status 컬럼 + per-cell `HISTORY.md`
 
@@ -1127,7 +1127,7 @@ facet count ≠ 3 → atomic 교체 중단, Status 컬럼을 위 placeholder 규
 - eval run dir: ${EVAL_RESULTS_ROOT}/<model>/<method>/runs/<eval_tag>/  (snapshot)
 
 ## 2026-05-16 22:00  [param]  lr 5e-5 → 1e-4, warmup 200 → 500
-- cfg: configs/experiments/main_7b/llama2/tads_10.yaml
+- cfg: configs/experiments/main_7b/llama2/legacy_10.yaml
 - git: <commit hash>
 - 이유: 직전 평균 44.78%가 BASE-FULL 대비 -8%p (YELLOW)
 
@@ -1168,12 +1168,12 @@ OOM 특화 처리:
 #### (d) 발산 알람 (3번 facet) 갱신 시점
 
 - 점수 셀이 `eval중`/`eval대기` → `NN.NN%`로 전환되는 매 tick
-- 해당 행이 treatment (data_agent_10 / tads_10)일 때만 평가. baseline 행은 알람 없음.
-- 비교 대상 셀(예: tads_10이면 같은 모델의 random_10 / data_agent_10 / full_100)이 아직 `NN.NN%`가 아니면 알람 보류 (`pending baseline`).
+- 해당 행이 treatment (data_agent_10 / legacy_10)일 때만 평가. baseline 행은 알람 없음.
+- 비교 대상 셀(예: legacy_10이면 같은 모델의 random_10 / data_agent_10 / full_100)이 아직 `NN.NN%`가 아니면 알람 보류 (`pending baseline`).
 - 알람 규칙은 §0-2 그대로:
-  - `🔴 RED` — `tads_10 < random_10`
-  - `🟡 YELLOW` — `tads_10 < full_100 − 5%p`
-  - `🔵 BLUE` — `data_agent_10 > tads_10 + 1%p`
+  - `🔴 RED` — `legacy_10 < random_10`
+  - `🟡 YELLOW` — `legacy_10 < full_100 − 5%p`
+  - `🔵 BLUE` — `data_agent_10 > legacy_10 + 1%p`
   - 모두 통과 → `OK`
 
 #### (e) Status 업데이트 트리거 (요약)
@@ -1191,7 +1191,7 @@ OOM 특화 처리:
 
 ### 0-7. Log-Tail Polling — 로컬 로그 파일을 매 tick 읽어서 상태 최신화
 
-> **⚠️ 로그 polling은 분류의 입력 신호일 뿐이다. deliverable이 아님.** 이 섹션을 다 읽고 "agent는 log 추출기"라고 결론 내리지 말 것 — 매 tick의 핵심 deliverable은 §7 의 **3.7 dispatch pass에서 빈 GPU 만큼 `python -m tads.eval`을 launch**하는 것. log는 dispatch 가능 여부 + 상태 확인용 input. PRE-FLIGHT CHECK 15 참조.
+> **⚠️ 로그 polling은 분류의 입력 신호일 뿐이다. deliverable이 아님.** 이 섹션을 다 읽고 "agent는 log 추출기"라고 결론 내리지 말 것 — 매 tick의 핵심 deliverable은 §7 의 **3.7 dispatch pass에서 빈 GPU 만큼 `python -m tag.eval`을 launch**하는 것. log는 dispatch 가능 여부 + 상태 확인용 input. PRE-FLIGHT CHECK 15 참조.
 
 **원칙**: 파일 시스템 state(체크포인트 sealed 여부, summary JSON 존재)만으로는 "현재 학습이 잘 돌고 있는지 / eval이 어디까지 갔는지 / 방금 OOM 났는지" 알 수 없다. 에이전트는 **매 tick마다 로컬 로그 파일들을 tail해서** 그 정보를 §0-5 dashboard / §0-6 HISTORY.md에 반영해야 한다.
 
@@ -1200,14 +1200,14 @@ OOM 특화 처리:
 | 로그 종류 | 경로 | 만들어지는 곳 |
 |---|---|---|
 | **학습 (script 기준, append)** | `logs/main_7b_<model>_<method>.log` | `scripts/run_main_7b.sh` (`tee -a`) |
-| **학습 (per-run)** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/runs/<tag>/logs/train_<method>_<ts>_r<rank>.log` | `tads/train.py` (DDP rank마다 1개) |
+| **학습 (per-run)** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/runs/<tag>/logs/train_<method>_<ts>_r<rank>.log` | `tag/train.py` (DDP rank마다 1개) |
 | **학습 (per-run, _latest 경유)** | `${OUTPUT_ROOT}/main_7b/<model>/<method>/_latest/logs/` | 위와 같은 파일, _latest로 접근 |
 | **평가 (script 기준, append)** | `logs/eval_main_7b_<model>_<method>.log` | `scripts/run_eval_main_7b.sh` (`tee -a`) |
-| **평가 (per-run, _latest 경유)** | `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log` | `tads/eval.py` (history layout) |
+| **평가 (per-run, _latest 경유)** | `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/logs/eval_<ts>_r0.log` | `tag/eval.py` (history layout) |
 | **평가 (per-run, snapshot)** | `${EVAL_RESULTS_ROOT}/<model>/<method>/runs/<eval_tag>/logs/` | 위와 같은 파일 (과거 run audit용) |
 | **cron tick 로그** | `${EVAL_RESULTS_ROOT}/.auto_eval_logs/tick_*.log` | §9-3 의 tick 스크립트가 만들 것 |
 
-> script-side 로그 (`logs/main_7b_*`, `logs/eval_main_7b_*`)는 **계속 append**되어 한 셀에서 여러 run을 거치면 누적된다. 최신 run만 보려면 mtime 가장 최근의 `runs/<tag>/logs/...`를 보는 게 정확. 단, 사용자가 종종 `tail -f logs/main_7b_llama2_tads_10.log`로 모니터링하므로 둘 다 살아있는 게 정상.
+> script-side 로그 (`logs/main_7b_*`, `logs/eval_main_7b_*`)는 **계속 append**되어 한 셀에서 여러 run을 거치면 누적된다. 최신 run만 보려면 mtime 가장 최근의 `runs/<tag>/logs/...`를 보는 게 정확. 단, 사용자가 종종 `tail -f logs/main_7b_llama2_legacy_10.log`로 모니터링하므로 둘 다 살아있는 게 정상.
 
 #### (b) 매 tick 로그에서 뽑아야 하는 신호 (필수)
 
@@ -1223,7 +1223,7 @@ EVAL_LOG=$(ls -t "${EVAL_RESULTS_ROOT}/${model}/${method}/_latest/logs/eval_"*.l
 | Signal | grep / tail 패턴 | 사용처 |
 |---|---|---|
 | **1. SFT 진행** | `grep -E "SFT \| epoch=[0-9]+ \| step=" "$TRAIN_LOG" \| tail -1` | dashboard Status (`step=N/T loss=X`) |
-| **2. PCA / anchor 진행** | `grep -E "TrajectoryAnchor.update\|collect_episode" "$TRAIN_LOG" \| tail -3` | tads/data_agent의 selection phase 정체 감지 |
+| **2. PCA / anchor 진행** | `grep -E "TrajectoryAnchor.update\|collect_episode" "$TRAIN_LOG" \| tail -3` | tag/data_agent의 selection phase 정체 감지 |
 | **3. epoch sealed 마커** | `grep -E "Checkpoint saved \+ sealed\|_latest -> runs/" "$TRAIN_LOG" \| tail -2` | "학습 N/M epoch 끝남" 표기 |
 | **4. eval 벤치 진행** | `grep -E "Progress:\|Eval start\|Benchmark .* failed" "$EVAL_LOG" \| tail -5` | dashboard "eval중" 셀의 현재 bench |
 | **5. eval 완료 마커** | `grep -E "Eval run sealed:\|_latest -> runs/.* under " "$EVAL_LOG" \| tail -2` | 신규 _latest 갱신 즉시 감지 (mtime 동기화 전에도) |
@@ -1278,7 +1278,7 @@ fi
 
 사용자에게 매 tick 메시지를 보낼 때 로그 raw dump는 금지. 다음 형식만:
 
-- 변경된 셀 1줄 요약: `[#4 llama2/tads_10] 학습중 → eval대기 (sealed epoch 4/4, ${OUTPUT_ROOT}/.../runs/20260516_120000/)`
+- 변경된 셀 1줄 요약: `[#4 llama2/legacy_10] 학습중 → eval대기 (sealed epoch 4/4, ${OUTPUT_ROOT}/.../runs/20260516_120000/)`
 - 오류 셀 1줄 요약 + log 경로: `[#7 qwen25/data_agent_10] OOM at eval mmlu (log: ${EVAL_RESULTS_ROOT}/qwen25/data_agent_10/_latest/logs/eval_20260516_180000_r0.log:142-167)`
 
 전체 로그 인용은 HISTORY.md에만. 사용자 메시지는 핵심 정보 + 파일 경로 + line range만.
@@ -1319,7 +1319,7 @@ def tick():
 ## 1. Repo / Working Directory
 
 - Repo root: `/home/jieun/kms/tads` (서버에서도 동일 경로라고 가정. 다르면 `cd $(git rev-parse --show-toplevel)`로 이동.)
-- 모든 명령은 **repo root에서 실행**해야 한다. 새 권장 형식(`python -m tads.eval`)은 cwd가 repo root여야 모듈 경로가 풀린다.
+- 모든 명령은 **repo root에서 실행**해야 한다. 새 권장 형식(`python -m tag.eval`)은 cwd가 repo root여야 모듈 경로가 풀린다.
 
 ---
 
@@ -1370,7 +1370,7 @@ ${OUTPUT_ROOT}/main_7b/<model>/<method>/
 ```
 
 - `<model>` ∈ {`llama2`, `qwen25`, `mistral`, `deepseek`}
-- `<method>` ∈ {`full_100`, `random_10`, `data_agent_10`, `tads_10`} (또는 `_50` 변형)
+- `<method>` ∈ {`full_100`, `random_10`, `data_agent_10`, `legacy_10`} (또는 `_50` 변형)
 - **epoch_last/ 레이아웃 (2026-05-16~)**: 학습은 매 epoch마다 단일 `epoch_last/` 디렉터리를 atomic하게 덮어쓴다. 디렉터리 이름엔 epoch 번호를 안 박는다 — 번호는 cfg.json snapshot의 `train_epochs`(target)와 `_complete` sentinel 내용(현재 마지막 sealed epoch, int)에서 읽는다.
 - 매 sealed epoch 저장 후 `_latest` 포인터가 atomic하게 갱신됨 (학습 중 eval 가능).
 - symlink 불가 FS는 `_latest.txt` (run_tag 한 줄)로 fallback.
@@ -1392,7 +1392,7 @@ target_n="$(python3 -c "import json;print(json.load(open('${latest_run}/cfg.json
 echo "sealed=${sealed_n} / target=${target_n}"
 ```
 
-> Back-compat: 이전 학습 결과는 `epoch_1/`, `epoch_2/`, … 처럼 epoch 번호별 별도 dir이었다 (legacy). 새 코드는 `epoch_last/`가 있으면 우선 사용하고, 없으면 가장 큰 sealed `epoch_<N>/`로 fall-back한다 (`tads/core/run_layout.py:find_latest_complete_epoch`).
+> Back-compat: 이전 학습 결과는 `epoch_1/`, `epoch_2/`, … 처럼 epoch 번호별 별도 dir이었다 (legacy). 새 코드는 `epoch_last/`가 있으면 우선 사용하고, 없으면 가장 큰 sealed `epoch_<N>/`로 fall-back한다 (`tag/core/run_layout.py:find_latest_complete_epoch`).
 
 ### 3-2. Legacy flat layout (`feature/run-layout` 이전 학습)
 
@@ -1403,13 +1403,13 @@ ${OUTPUT_ROOT}/main_7b/<model>/<method>/epoch_<N>/   ← runs/ 와 _latest 없�
 `feature/run-layout` 머지 이전에 학습된 셀은 평탄 구조로 떨어져 있다. eval 측은
 `_latest`가 없으면 평탄 구조를 fallback으로 자동 인식 (§4-4 참고).
 
-추가로 **epoch_last/ migration 이전 (~2026-05-15)에 학습된 run dir** 안에는 `epoch_1/`, `epoch_2/`, …처럼 epoch 번호별 별도 dir이 존재할 수 있다. 새 코드(`tads/core/run_layout.py:find_latest_complete_epoch`)는 `epoch_last/`를 우선 보고, 없으면 numeric `epoch_<N>/` glob fallback으로 자동 처리하므로 별도 마이그레이션 불필요. epoch 번호는 dir 이름(legacy) 또는 `_complete` sentinel 내용(new layout)에서 추출.
+추가로 **epoch_last/ migration 이전 (~2026-05-15)에 학습된 run dir** 안에는 `epoch_1/`, `epoch_2/`, …처럼 epoch 번호별 별도 dir이 존재할 수 있다. 새 코드(`tag/core/run_layout.py:find_latest_complete_epoch`)는 `epoch_last/`를 우선 보고, 없으면 numeric `epoch_<N>/` glob fallback으로 자동 처리하므로 별도 마이그레이션 불필요. epoch 번호는 dir 이름(legacy) 또는 `_complete` sentinel 내용(new layout)에서 추출.
 
 이전 체크포인트를 새 구조로 마이그레이션하려면 `runs/<tag>/`로 이동 후 `_latest`를 수동 설정:
 
 ```bash
-mv ${OUTPUT_ROOT}/main_7b/llama2/tads_10/epoch_* ${OUTPUT_ROOT}/main_7b/llama2/tads_10/runs/legacy/
-ln -s runs/legacy ${OUTPUT_ROOT}/main_7b/llama2/tads_10/_latest
+mv ${OUTPUT_ROOT}/main_7b/llama2/legacy_10/epoch_* ${OUTPUT_ROOT}/main_7b/llama2/legacy_10/runs/legacy/
+ln -s runs/legacy ${OUTPUT_ROOT}/main_7b/llama2/legacy_10/_latest
 ```
 
 ### 3-3. Legacy 7b_fullft (더 옛날 구버전, 보통은 건드릴 일 없음)
@@ -1426,9 +1426,9 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/      ← 옛 학습이면 epoch_3 (legac
 ## 4. Eval 실행 — **에이전트 auto-launch, 1 GPU = 1 cell** (2026-05-16 재정의)
 
 **원칙**:
-- **에이전트가 `eval대기` 셀을 자동 launch한다.** 빈 GPU가 K개 있으면 큐에서 K개를 골라 동시에 launch — **GPU 1장당 cell 1개**, 1셀 = 1 `python -m tads.eval` 명령 = 1 백그라운드 프로세스.
+- **에이전트가 `eval대기` 셀을 자동 launch한다.** 빈 GPU가 K개 있으면 큐에서 K개를 골라 동시에 launch — **GPU 1장당 cell 1개**, 1셀 = 1 `python -m tag.eval` 명령 = 1 백그라운드 프로세스.
 - **batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`) 절대 사용 금지** — 사용자도, 에이전트도. wrapper는 한 호출로 여러 셀을 sequential/parallel dispatch하는데, 우리는 셀별로 별개 PID + 별개 log + 별개 dispatch line이 필요. wrapper의 cascade fail / log race / `_latest` symlink race 문제는 1셀-1명령 분해로만 해소됨.
-- 학습은 사용자 영역. 에이전트는 `python -m tads.train` / `torchrun` / `run_main_7b.sh` 절대 실행 금지.
+- 학습은 사용자 영역. 에이전트는 `python -m tag.train` / `torchrun` / `run_main_7b.sh` 절대 실행 금지.
 - 매 tick에 에이전트가 하는 일: (1) 32 log polling (§0-7), (2) 144셀 분류, (3) eval대기 큐 만들기, (4) 빈 GPU 만큼 launch, (5) 표 atomic 갱신, (6) 사용자 보고.
 
 ### 4-1. 정식 명령 형태 — 에이전트(자동, 1-bench 순차, 9 벤치 전부)
@@ -1439,7 +1439,7 @@ ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_3/      ← 옛 학습이면 epoch_3 (legac
 # 매 cron tick에서 빈 GPU 만큼 자동 실행. 각 launch는 단일 (cell, bench).
 # ⚠️ 1 GPU = 1 (cell, bench). 여러 벤치를 한 명령에 묶지 말 것.
 # bench는 dispatch 큐 순서대로: mmlu 끝나면 같은 cell의 mmlu_pro, ..., 마지막 bbh.
-CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval \
+CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tag.eval \
     --config configs/experiments/main_7b/<model>/<method>.yaml \
     --benchmarks <single_bench> \    # mmlu / mmlu_pro / gsm8k / svamp / humaneval / mbpp / tydiqa / xquad / bbh 중 하나
     --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \
@@ -1448,10 +1448,10 @@ CUDA_VISIBLE_DEVICES=<free_gpu> nohup python -m tads.eval \
 
 예: 4 개 GPU가 비어있고 4 cells에서 각각 mmlu가 다음 차례라면:
 ```bash
-CUDA_VISIBLE_DEVICES=0 nohup python -m tads.eval --config .../llama2/full_100.yaml      --benchmarks mmlu --out_dir ... &
-CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval --config .../llama2/random_10.yaml     --benchmarks mmlu --out_dir ... &
-CUDA_VISIBLE_DEVICES=2 nohup python -m tads.eval --config .../llama2/data_agent_10.yaml --benchmarks mmlu --out_dir ... &
-CUDA_VISIBLE_DEVICES=3 nohup python -m tads.eval --config .../llama2/tads_10.yaml       --benchmarks mmlu --out_dir ... &
+CUDA_VISIBLE_DEVICES=0 nohup python -m tag.eval --config .../llama2/full_100.yaml      --benchmarks mmlu --out_dir ... &
+CUDA_VISIBLE_DEVICES=1 nohup python -m tag.eval --config .../llama2/random_10.yaml     --benchmarks mmlu --out_dir ... &
+CUDA_VISIBLE_DEVICES=2 nohup python -m tag.eval --config .../llama2/data_agent_10.yaml --benchmarks mmlu --out_dir ... &
+CUDA_VISIBLE_DEVICES=3 nohup python -m tag.eval --config .../llama2/legacy_10.yaml       --benchmarks mmlu --out_dir ... &
 ```
 이 4개 mmlu가 다 끝나면 다음 tick에서 같은 4 cells에 대해 `--benchmarks mmlu_pro` → 그 다음 `gsm8k` → `svamp` → `humaneval` → `mbpp` → `tydiqa` → `xquad` → 마지막 `bbh` 로 dispatch.
 
@@ -1475,23 +1475,23 @@ bash scripts/run_eval_main_7b.sh --parallel ...
 bash scripts/auto_eval_7b_fullft.sh ...
 
 # ❌ 절대 금지 — 한 명령으로 여러 셀 launch (for 루프 등)
-for m in llama2 qwen25; do for x in tads_10 random_10; do
-  python -m tads.eval --config configs/.../$m/$x.yaml ... &
+for m in llama2 qwen25; do for x in legacy_10 random_10; do
+  python -m tag.eval --config configs/.../$m/$x.yaml ... &
 done; done
 ```
 
 **허용 패턴:**
 ```bash
 # ✓ 셀 1개 launch → 결과 확인 → 그 다음 셀 launch
-CUDA_VISIBLE_DEVICES=0 nohup python -m tads.eval \
-    --config configs/experiments/main_7b/llama2/tads_10.yaml \
+CUDA_VISIBLE_DEVICES=0 nohup python -m tag.eval \
+    --config configs/experiments/main_7b/llama2/legacy_10.yaml \
     --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
-    --out_dir ${EVAL_RESULTS_ROOT}/llama2/tads_10 \
-    >> logs/eval_llama2_tads_10.log 2>&1 &
+    --out_dir ${EVAL_RESULTS_ROOT}/llama2/legacy_10 \
+    >> logs/eval_llama2_legacy_10.log 2>&1 &
 # (잡 끝나길 기다리거나 다른 빈 GPU 확인 후 다음 명령 입력)
 
 # ✓ 다른 GPU에 다른 셀 — 각각 별개 명령
-CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
+CUDA_VISIBLE_DEVICES=1 nohup python -m tag.eval \
     --config configs/experiments/main_7b/qwen25/data_agent_10.yaml \
     --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
     --out_dir ${EVAL_RESULTS_ROOT}/qwen25/data_agent_10 \
@@ -1501,7 +1501,7 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 요점:
 - `--ckpt` 생략 → `<output_dir>/_latest`에서 자동 resolve (§3-1).
 - `--out_dir` 명시 → 점수표 에이전트가 보는 표준 경로(`${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/`)로 결과가 떨어짐. 생략하면 기본값이 `<ckpt>/eval/`이라 점수표가 못 찾음.
-- `tads.eval`이 자동으로 `runs/<eval_tag>/` 생성 + `_complete` sentinel + `_latest` 갱신 (§5-1 history layout).
+- `tag.eval`이 자동으로 `runs/<eval_tag>/` 생성 + `_complete` sentinel + `_latest` 갱신 (§5-1 history layout).
 - 학습 중인 GPU는 피할 것 (OOM).
 
 ### 4-2. 에이전트가 매 tick 할 일 — polling → 분류 → dispatch → report
@@ -1510,8 +1510,8 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 1. §0-7 (b) log-tail polling으로 각 셀의 train + eval 로그 상태 확인.
 2. §5-4 표의 판정 신호로 셀별 상태 결정 (eval중만 pgrep + log mtime, 나머지 4종은 정적 파일 only — §0 정책). `eval대기` vs `eval중` 구분은 §4-3 5단계 우선순위.
 3. **빈 GPU 목록 ↔ `eval대기` 큐 매칭 (dispatch pass)**:
-   - free_gpus = `nvidia-smi`에서 `memory.used < 2GB` AND `pgrep tads.train` 없는 GPU.
-   - eval_queue = §5-4 분류에서 `eval대기`인 셀 목록 — 단, 이미 다른 GPU에서 같은 셀이 running(`pgrep tads.eval.*<model>/<method>\.yaml`)이면 큐에서 제외.
+   - free_gpus = `nvidia-smi`에서 `memory.used < 2GB` AND `pgrep tag.train` 없는 GPU.
+   - eval_queue = §5-4 분류에서 `eval대기`인 셀 목록 — 단, 이미 다른 GPU에서 같은 셀이 running(`pgrep tag.eval.*<model>/<method>\.yaml`)이면 큐에서 제외.
    - while free_gpus and eval_queue:
        * gpu = free_gpus.pop()
        * cell = eval_queue.pop_front()
@@ -1520,13 +1520,13 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 4. 결과를 `experiments.md` §0-4 점수표 4종(Current/Latest/Best/History) + §0-5 dashboard에 atomic 반영.
 5. 새로 sealed된 eval(`_latest/_complete` + summary mtime > sealed epoch)은 즉시 `NN.NN%`로 전환.
 6. `eval대기` 셀이 launch 가능했지만 빈 GPU가 모자라 큐에 남았으면 §0-4 "사용자 액션 필요" 섹션 대신 "다음 tick 자동 dispatch 예정" 섹션에 그 목록 표기. 사용자가 직접 띄울 필요 없음 (단, 사용자가 수동으로 띄워도 §4-3 1번에서 잡혀 중복 launch 안 됨).
-7. 학습 중인 GPU는 절대 건드리지 말 것 — dispatch pass의 free_gpus 필터에서 `tads.train` 점유 GPU 제외.
+7. 학습 중인 GPU는 절대 건드리지 말 것 — dispatch pass의 free_gpus 필터에서 `tag.train` 점유 GPU 제외.
 
 ### 4-3. eval대기 vs eval중 — 매 tick 재판정 (eval중만 process, 나머지 정적)
 
 §5-4 표 + §0 정책 (eval중만 pgrep, 나머지 정적 파일). 핵심 5단계 우선순위:
 
-1. **`pgrep -af "python.*tads.eval.*<m>/<x>\\.yaml"` ≥ 1** → **`eval중`**. 잡이 살아있는 가장 직접적인 신호.
+1. **`pgrep -af "python.*tag.eval.*<m>/<x>\\.yaml"` ≥ 1** → **`eval중`**. 잡이 살아있는 가장 직접적인 신호.
 2. pgrep 0 + **eval 로그 mtime < 5분** → **`eval중`** (pgrep이 잠시 놓친 케이스 보호).
 3. 로그 mtime ≥ 5분 + 로그 마지막 50줄에 OOM/CUDA/Traceback **있음** → **`eval대기`** + `.fail_count` 증가 + HISTORY.md `[eval]` 오류 엔트리.
 4. 로그 mtime ≥ 5분 + 오류 없음 + sealed `_complete` 있고 summary mtime > sealed epoch → **`NN.NN%`** (DONE) (정적 파일).
@@ -1538,14 +1538,14 @@ CUDA_VISIBLE_DEVICES=1 nohup python -m tads.eval \
 
 ```bash
 # 한 셀만 강제 실행 (테스트용)
-CUDA_VISIBLE_DEVICES=0 python -m tads.eval \
-    --config configs/experiments/main_7b/llama2/tads_10.yaml \
+CUDA_VISIBLE_DEVICES=0 python -m tag.eval \
+    --config configs/experiments/main_7b/llama2/legacy_10.yaml \
     --benchmarks mmlu \
     --limit 16    # 디버그용 sample cap
 
 # 과거 특정 run을 다시 평가
-CUDA_VISIBLE_DEVICES=0 python -m tads.eval \
-    --config configs/experiments/main_7b/llama2/tads_10.yaml \
+CUDA_VISIBLE_DEVICES=0 python -m tag.eval \
+    --config configs/experiments/main_7b/llama2/legacy_10.yaml \
     --run_tag 20260515_180000 \
     --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh
 ```
@@ -1587,7 +1587,7 @@ HISTORY.md                ← §0-6 시계열 로그
 요약:
 - 모든 점수 파싱은 `${EVAL_RESULTS_ROOT}/<model>/<method>/_latest/<exp_label>-…json` 경로만 사용. flat 경로(`<base>/<label>-….json`)에 점수가 있으면 LEGACY (§5-5 (3)) — `--flat` 호출로 생긴 ad-hoc 결과로 간주.
 - 같은 셀을 재평가할 때마다 새 `runs/<eval_tag>/`가 생기고 `_latest`가 그쪽으로 atomic 이동. 이전 평가는 `runs/`에 그대로 보존되어 §0-6 history의 입력.
-- 기존 `_latest`에 벤치만 추가하고 싶을 때(예: 처음 4개 벤치만 끝났고 BBH만 마저 돌리려는 경우): `python -m tads.eval ... --eval_tag=latest --benchmarks bbh` — 새 dir을 안 만들고 같은 run에 JSON만 끼워 넣음.
+- 기존 `_latest`에 벤치만 추가하고 싶을 때(예: 처음 4개 벤치만 끝났고 BBH만 마저 돌리려는 경우): `python -m tag.eval ... --eval_tag=latest --benchmarks bbh` — 새 dir을 안 만들고 같은 run에 JSON만 끼워 넣음.
 
 ### 5-2. 로그
 
@@ -1658,7 +1658,7 @@ echo "  ..."
 
 ### 5-3. 중복 평가 방지 로직 (에이전트가 직접 판정해야 함)
 
-`python -m tads.eval`은 자체적인 "이미 함" 체크가 **없다** (기존 bash wrapper도 마찬가지였음). 호출 전에 에이전트가 판단해야 한다.
+`python -m tag.eval`은 자체적인 "이미 함" 체크가 **없다** (기존 bash wrapper도 마찬가지였음). 호출 전에 에이전트가 판단해야 한다.
 
 새 run-layout (§3-1) + eval history layout (§5-1) 기준 — 셀 한 개에 대해 **다음이 모두 만족**되면 eval 재실행 불필요. **§5-2.5 광역 스캔으로 모은 모든 result file을 후보로 본다 (`_latest` 한정 X)**:
 
@@ -1817,8 +1817,8 @@ def classify_cell(model, method):
 
 | 우선 | 파일 패턴 | 비고 |
 |---|---|---|
-| 1 (최신) | `_latest/<experiment_label>-eval_summary.json` <br/> 예: `_latest/llama2_tads_10-eval_summary.json` | history layout (§5-1)의 표준. `_latest` 안에 `_complete` sentinel과 같이 있을 때만 DONE. 모든 벤치 점수와 메타데이터 포함. |
-| 2 (최신, 벤치별) | `_latest/<experiment_label>-<bench>.json` <br/> 예: `_latest/llama2_tads_10-mmlu.json` | 벤치별 상세. summary가 없으면 이것들로 합산 (단, 9개 벤치 다 있을 때만 DONE 처리). |
+| 1 (최신) | `_latest/<experiment_label>-eval_summary.json` <br/> 예: `_latest/llama2_legacy_10-eval_summary.json` | history layout (§5-1)의 표준. `_latest` 안에 `_complete` sentinel과 같이 있을 때만 DONE. 모든 벤치 점수와 메타데이터 포함. |
+| 2 (최신, 벤치별) | `_latest/<experiment_label>-<bench>.json` <br/> 예: `_latest/llama2_legacy_10-mmlu.json` | 벤치별 상세. summary가 없으면 이것들로 합산 (단, 9개 벤치 다 있을 때만 DONE 처리). |
 | 3 (legacy, flat) | `<exp_label>-eval_summary.json` (BASE 디렉터리 직속) | `--flat` 호출이나 history layout 도입 전 산출물. `_latest`가 없을 때만 본다. LEGACY로 분류. |
 | 4 (legacy, 접두어 없음) | `eval_summary.json` (BASE 디렉터리 직속, 접두어 없음) | 옛 코드 산출물. label 충돌 위험(다른 셀의 결과를 덮어썼을 수 있음). LEGACY로 분류. |
 | 5 (legacy, 벤치별 접두어 없음) | `mmlu.json` / `gsm8k.json` / `humaneval.json` / `tydiqa.json` / `bbh.json` (BASE 디렉터리 직속, 접두어 없음) | 옛 벤치별. LEGACY로 분류. |
@@ -1893,7 +1893,7 @@ bash scripts/auto_eval_7b_fullft.sh <gpu_id> [run1 run2 ...]
 이 트리(`${OUTPUT_ROOT}/7b_fullft/...`)를 평가해야 한다면 §4-1 패턴(단일 셀 단일 명령)을 따른다:
 ```bash
 # 셀 1개 — 사용자가 직접 입력
-CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
+CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tag.eval \
     --config configs/experiments/7b_fullft_<run>.yaml \
     --ckpt ${OUTPUT_ROOT}/7b_fullft/<run>/epoch_last \  # epoch_3 (legacy)도 가능
     --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
@@ -1905,7 +1905,7 @@ CUDA_VISIBLE_DEVICES=<gpu> nohup python -m tads.eval \
 
 ## 7. 에이전트가 한 번의 tick에서 해야 할 일 (의사 코드)
 
-**원칙 재강조**: 셀 1개 = GPU 1장 = `python -m tads.eval` 백그라운드 프로세스 1개.
+**원칙 재강조**: 셀 1개 = GPU 1장 = `python -m tag.eval` 백그라운드 프로세스 1개.
 bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하고, 큐에 남은 셀은
 다음 tick에서 또 빈 GPU가 생기면 launch.
 
@@ -1925,7 +1925,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 > [ ] 13 (6) Status 컬럼 = 3-facet (`<history> · <오류> · <발산알람>`) ←
 >       자주 facet 1만 적고 끝내는 위반. placeholder로라도 facet 3개 유지.
 > [ ] 15a 결과 파일 광역 스캔 (4 위치) — `_latest/`만 보지 말 것 (§5-2.5).
-> [ ] 15 DISPATCH 실행 — eval대기 + 빈 GPU 존재 시 `python -m tads.eval`
+> [ ] 15 DISPATCH 실행 — eval대기 + 빈 GPU 존재 시 `python -m tag.eval`
 >       background launch 1회 이상 (9 벤치 전부, bbh는 마지막 순서).
 > ```
 > 
@@ -1937,7 +1937,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 
 2.5 log-tail polling pass (§0-7) — classify보다 먼저
    for model in {llama2, qwen25, mistral, deepseek}:
-     for method in {full_100, random_10, data_agent_10, tads_10}:
+     for method in {full_100, random_10, data_agent_10, legacy_10}:
          train_log = newest("${OUTPUT_ROOT}/main_7b/${model}/${method}/_latest/logs/train_*_r0.log")
          eval_log  = newest("${EVAL_RESULTS_ROOT}/${model}/${method}/_latest/logs/eval_*.log")
          # script append 로그도 fallback으로 검사
@@ -1956,7 +1956,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 
 3. classify pass — 모든 144개 셀에 §5-4 표의 상태 토큰 부여
    for model in {llama2, qwen25, mistral, deepseek}:
-     for method in {full_100, random_10, data_agent_10, tads_10}:
+     for method in {full_100, random_10, data_agent_10, legacy_10}:
          ckpt_root = ${OUTPUT_ROOT}/main_7b/${model}/${method}
          eval_base = ${EVAL_RESULTS_ROOT}/${model}/${method}
          label     = "${model}_${method}"
@@ -1987,7 +1987,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
          sentinel_ok  = eval_latest and exists(eval_latest + "/_complete")
 
          # eval중 우선순위 1: pgrep 살아있음 — 가장 직접적인 신호.
-         eval_alive = pgrep_alive(f"python.*-m tads.eval.*{model}/{method}\\.yaml")
+         eval_alive = pgrep_alive(f"python.*-m tag.eval.*{model}/{method}\\.yaml")
          if eval_alive:
              status[(model, method)] = "eval중"
              continue
@@ -2060,7 +2060,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
            continue
        # 같은 cell이 이미 다른 GPU에서 running이면 그 cell 큐에서 제외
        # (같은 cell의 다음 bench는 현재 bench 끝난 후 다음 tick에 enqueue).
-       if pgrep_alive(f"python.*-m tads.eval.*{m}/{x}\\.yaml"):
+       if pgrep_alive(f"python.*-m tag.eval.*{m}/{x}\\.yaml"):
            continue
        pair_queue.append((m, x, b))
 
@@ -2078,7 +2078,7 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
        cmd = (
            # 단일 bench dispatch (2026-05-17 정책). 4개를 한 명령에 묶지 말 것.
            # bench별 log path 분리 — log race 방지.
-           f'CUDA_VISIBLE_DEVICES={gpu} nohup python -m tads.eval '
+           f'CUDA_VISIBLE_DEVICES={gpu} nohup python -m tag.eval '
            f'--config configs/experiments/main_7b/{m}/{x}.yaml '
            f'--benchmarks {b} '
            f'--out_dir ${{EVAL_RESULTS_ROOT}}/{m}/{x} '
@@ -2129,18 +2129,18 @@ bash wrapper 호출 금지. 빈 GPU가 있는 만큼만 한꺼번에 launch하�
 
 ## 8. 금지 사항 / 함정
 
-- **eval은 에이전트가 자동 launch한다** (§0 / §4 재정의, 2026-05-16). 매 tick `eval대기` 셀과 빈 GPU를 매칭해 셀별로 `python -m tads.eval`을 nohup background launch. 사용자 개입 0.
-- **학습은 절대 자동 launch 금지** — `python -m tads.train`, `torchrun`, `run_main_7b.sh` 호출은 사용자만 가능. NEED-TRAIN 셀은 보고만.
-- **eval은 1셀 = 1 GPU = 1명령으로만 실행** (§4 정책). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`)는 에이전트도 사용자도 쓰지 말 것 — wrapper의 cascade fail / log race / `_latest` symlink race 문제. 셀 여러 개를 동시에 돌릴 때도 각 셀마다 별개 `python -m tads.eval` 명령을 다른 GPU에 핀해서 따로 실행. for 루프로 여러 셀을 한꺼번에 띄우는 패턴 금지.
+- **eval은 에이전트가 자동 launch한다** (§0 / §4 재정의, 2026-05-16). 매 tick `eval대기` 셀과 빈 GPU를 매칭해 셀별로 `python -m tag.eval`을 nohup background launch. 사용자 개입 0.
+- **학습은 절대 자동 launch 금지** — `python -m tag.train`, `torchrun`, `run_main_7b.sh` 호출은 사용자만 가능. NEED-TRAIN 셀은 보고만.
+- **eval은 1셀 = 1 GPU = 1명령으로만 실행** (§4 정책). batch wrapper(`run_eval_main_7b.sh`, `auto_eval_7b_fullft.sh`)는 에이전트도 사용자도 쓰지 말 것 — wrapper의 cascade fail / log race / `_latest` symlink race 문제. 셀 여러 개를 동시에 돌릴 때도 각 셀마다 별개 `python -m tag.eval` 명령을 다른 GPU에 핀해서 따로 실행. for 루프로 여러 셀을 한꺼번에 띄우는 패턴 금지.
 - **HF offline 모드를 끄지 말 것**. `setup_env.sh`가 `HF_DATASETS_OFFLINE=1` 등을 강제하는 이유는 클러스터 노드가 outbound HTTPS가 없어서 켜면 캐시락이 깨지기 때문.
 - **체크포인트를 절대 자동 삭제하지 말 것**. legacy 스크립트의 `CLEANUP_EARLY_EPOCHS` 옵션은 **opt-in이고 기본값 0**. 에이전트는 건드리지 말 것.
 - **`OUTPUT_ROOT`와 `EVAL_RESULTS_ROOT`를 혼동하지 말 것**. checkpoint는 `OUTPUT_ROOT/main_7b/...`, 결과는 `EVAL_RESULTS_ROOT/<model>/<method>` (접두어 없음).
 - **eval 실패 시 done 마커를 만들지 말 것**. 옛날 버그가 이거여서 실패한 run을 영영 재시도 안 했다.
 - **user-volume (`~`)에 절대 쓰지 말 것**. HF cache는 이미 `DATA_CACHE=${OUTPUT_ROOT}/cache` 아래로 redirect되어 있다. 새 파일을 만들 거면 `OUTPUT_ROOT` 또는 `EVAL_RESULTS_ROOT` 아래에만 만들 것 (user-volume 50GB는 금방 찬다).
-- **core dump 켜지 말 것** (`TADS_ENABLE_COREDUMPS=0` 유지). 7B DDP rank 한 개가 죽으면 ~240GB 코어 파일을 떨군다.
-- **GPU 충돌 주의**. 학습 중인 GPU에 eval을 같이 쏘면 OOM. 학습 잡(`python -m tads.train`)이 점유한 GPU는 §9-3의 `training_gpus` 필터로 자동 제외 — 그 필터를 끄지 말 것.
+- **core dump 켜지 말 것** (`TAG_ENABLE_COREDUMPS=0` 유지). 7B DDP rank 한 개가 죽으면 ~240GB 코어 파일을 떨군다.
+- **GPU 충돌 주의**. 학습 중인 GPU에 eval을 같이 쏘면 OOM. 학습 잡(`python -m tag.train`)이 점유한 GPU는 §9-3의 `training_gpus` 필터로 자동 제외 — 그 필터를 끄지 말 것.
 - **`CUDA_VISIBLE_DEVICES`에 GPU 1개만 지정**. 여러 개 지정하면 그 잡이 둘 다 점유해 다음 셀이 launch될 자리가 사라진다. 셀 1개 = GPU 1장이 §4의 의무 형식.
-- **`scripts/run_eval_main_7b.sh` (bash wrapper) 호출 금지**. `--parallel` 모드의 sequential dispatch 로직이 우리 per-tick 큐 알고리즘과 충돌. `python -m tads.eval`을 직접 호출할 것.
+- **`scripts/run_eval_main_7b.sh` (bash wrapper) 호출 금지**. `--parallel` 모드의 sequential dispatch 로직이 우리 per-tick 큐 알고리즘과 충돌. `python -m tag.eval`을 직접 호출할 것.
 
 ---
 
@@ -2172,9 +2172,9 @@ GPU 가 잠시도 idle해선 안 됨. cron 주기를 짧게 하고, 각 tick 안
 서버에 `crontab -e`로 등록:
 
 ```cron
-# TADS auto-eval — 매 5분, eval대기 셀이 있으면 빈 GPU 만큼 즉시 dispatch.
+# TAG auto-eval — 매 5분, eval대기 셀이 있으면 빈 GPU 만큼 즉시 dispatch.
 # tick 안에서 dispatch loop 돌려 GPU idle 최소화.
-*/5 * * * * /home/jieun/kms/tads/scripts/auto_eval_tick.sh >> /home/jieun/kms/tads/logs/auto_eval_cron.log 2>&1
+*/5 * * * * /home/jieun/kms/tag/scripts/auto_eval_tick.sh >> /home/jieun/kms/tag/logs/auto_eval_cron.log 2>&1
 ```
 
 > **continuous mode 대안** — cron 대신 단일 데몬으로 영구 실행하려면 nohup으로 한 번 띄우고 tick 스크립트 안에서 무한 loop (sleep 60). cron 보다 GPU idle 최소화에 유리하지만 process 죽으면 자동 재시작 안 됨. 운영 정책: cron + tick 내부 loop 조합이 권장.
@@ -2308,7 +2308,7 @@ poll_log_signals() {
     local mtime age proc_alive=0
     mtime=$(stat -c %Y "$L")
     age=$(( now - mtime ))
-    if pgrep -af "python.*tads.${kind}.*${model}/${method}\.yaml" >/dev/null 2>&1; then
+    if pgrep -af "python.*tag.${kind}.*${model}/${method}\.yaml" >/dev/null 2>&1; then
       proc_alive=1
     fi
     if [ "$proc_alive" = 1 ] && [ "$age" -ge 1800 ]; then
@@ -2323,7 +2323,7 @@ poll_log_signals() {
 # 읽어 Status / HISTORY.md / 점수표를 업데이트한다.
 echo "[tick $(date -Is)] === log-tail polling pass ==="
 for model in llama2 qwen25 mistral deepseek; do
-  for method in full_100 random_10 data_agent_10 tads_10; do
+  for method in full_100 random_10 data_agent_10 legacy_10; do
     poll_log_signals "$model" "$method"
   done
 done
@@ -2353,7 +2353,7 @@ while : ; do
 # --------------------------------- §7-3 classify pass -------------------------
 need=()
 for model in llama2 qwen25 mistral deepseek; do
-  for method in full_100 random_10 data_agent_10 tads_10; do
+  for method in full_100 random_10 data_agent_10 legacy_10; do
     ckpt_root="${OUTPUT_ROOT}/main_7b/${model}/${method}"
     latest_run=$(resolve_latest_run "$ckpt_root")
     [ -z "$latest_run" ] && continue
@@ -2390,7 +2390,7 @@ echo "[tick $(date -Is)] need: ${need[*]}"
 filtered=()
 for cell in "${need[@]}"; do
   model="${cell%/*}"; method="${cell#*/}"
-  if pgrep -af "python -m tads.eval.*main_7b/${model}/${method}\.yaml" >/dev/null; then
+  if pgrep -af "python -m tag.eval.*main_7b/${model}/${method}\.yaml" >/dev/null; then
     echo "[tick $(date -Is)] already running: ${cell} — skip enqueue (dispatch dedup, not classification)"
     continue
   fi
@@ -2398,16 +2398,16 @@ for cell in "${need[@]}"; do
 done
 need=("${filtered[@]}")
 
-# 빈 GPU 목록 (메모리 < 2GB, 그리고 tads.train 프로세스가 점유하지 않은 것).
+# 빈 GPU 목록 (메모리 < 2GB, 그리고 tag.train 프로세스가 점유하지 않은 것).
 # 학습 잡이 도는 GPU는 절대 건드리지 말 것 — OOM의 가장 흔한 원인.
 training_gpus=$(nvidia-smi --query-compute-apps=gpu_uuid,process_name \
                 --format=csv,noheader 2>/dev/null \
-                | grep -E 'python.*tads\.train' | awk -F',' '{print $1}' | sort -u)
+                | grep -E 'python.*tag\.train' | awk -F',' '{print $1}' | sort -u)
 free_gpus=()
 while IFS=, read -r idx mem; do
   mem="${mem# }"
   [ "${mem:-9999}" -ge 2048 ] && continue
-  # 이 GPU에 tads.train이 떠있으면 제외
+  # 이 GPU에 tag.train이 떠있으면 제외
   uuid=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i "$idx" | tr -d ' ')
   if echo "$training_gpus" | grep -q "$uuid"; then continue; fi
   free_gpus+=("$idx")
@@ -2421,7 +2421,7 @@ echo "[tick $(date -Is)] free GPUs (참고용): ${free_gpus[*]}  |  eval대기 �
 
 # Dispatch pass — 빈 GPU 만큼 자동 launch (1 GPU = 1 cell). 2026-05-16
 # 재정의: eval은 에이전트가 자동 실행 (운영 가정: 학습 동시 실행 없음).
-# wrapper 호출 금지 — 셀별 `python -m tads.eval` 명령을 직접 nohup &.
+# wrapper 호출 금지 — 셀별 `python -m tag.eval` 명령을 직접 nohup &.
 launched_pids=()
 LAUNCH_LOG="${LOG_DIR}/auto_dispatch_$(date +%Y%m%d).log"
 for gpu in "${free_gpus[@]}"; do
@@ -2430,7 +2430,7 @@ for gpu in "${free_gpus[@]}"; do
   model="${cell%/*}"; method="${cell#*/}"
 
   # 같은 셀이 이미 어디서 돌고 있으면 skip (중복 launch 방지).
-  if pgrep -af "python -m tads.eval.*main_7b/${model}/${method}\.yaml" >/dev/null; then
+  if pgrep -af "python -m tag.eval.*main_7b/${model}/${method}\.yaml" >/dev/null; then
     echo "[tick $(date -Is)] skip ${cell} — already running" | tee -a "$LAUNCH_LOG"
     continue
   fi
@@ -2449,7 +2449,7 @@ for gpu in "${free_gpus[@]}"; do
   model="${cellpath%/*}"
   method="${cellpath#*/}"
   log_path="${LOG_DIR}/eval_${model}_${method}_${bench}.log"
-  CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tads.eval \
+  CUDA_VISIBLE_DEVICES="$gpu" nohup python -m tag.eval \
       --config "$cfg" \
       --benchmarks "$bench" \
       --out_dir "$out_dir" \
@@ -2519,8 +2519,8 @@ done    # ← DISPATCH LOOP 닫기
 
 ```bash
 # (a) 우리 eval 프로세스 중 좀비/멈춤만 정리. 학습 프로세스는 절대 건드리지 않음.
-#     "tads.eval"로 시작하는 python만 타깃. 학습은 "tads.train" — 패턴이 다르므로 안전.
-pgrep -af 'python.*-m tads\.eval' \
+#     "tag.eval"로 시작하는 python만 타깃. 학습은 "tag.train" — 패턴이 다르므로 안전.
+pgrep -af 'python.*-m tag\.eval' \
   | awk '{print $1}' \
   | xargs -r -I{} sh -c 'echo "killing PID {}"; kill -TERM {}; sleep 2; kill -KILL {} 2>/dev/null || true'
 
@@ -2530,7 +2530,7 @@ find "${HF_HUB_CACHE:-${DATA_CACHE}/huggingface/hub}"        -name "*.lock" -mmi
 
 # (c) 학습/eval 둘 다 안 돌고 있는데 GPU phantom 메모리가 있을 때만 GPU 리셋 시도.
 #     일반 사용자 권한이면 `nvidia-smi --gpu-reset`는 실패함 — 이 경우 그냥 다음 tick에 재시도.
-if ! pgrep -f 'python.*-m tads\.(train|eval)' >/dev/null; then
+if ! pgrep -f 'python.*-m tag\.(train|eval)' >/dev/null; then
   nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader \
     | awk -F',' '{print "still attached:", $0}' || true
   # sudo 권한이 있으면 phantom 장에만 reset (없으면 그냥 스킵):
@@ -2541,7 +2541,7 @@ fi
 find "${OUTPUT_ROOT}/cache" -maxdepth 3 -name "*.lock" -mmin +60 -user "$USER" -print -delete 2>/dev/null || true
 
 # (e) Python bytecode 캐시 — eval 코드 갱신 후 stale .pyc 의심될 때만
-find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+find tag -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 ```
 
 ### 10-3. Cleanup 후 재시도 정책
@@ -2551,7 +2551,7 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 ### 10-4. 절대로 손대지 말 것
 
-- 학습 중인 프로세스 (`python -m tads.train ...`).
+- 학습 중인 프로세스 (`python -m tag.train ...`).
 - `OUTPUT_ROOT/main_7b/**` 아래 어떤 파일이든 (체크포인트는 학습 결과물).
 - 다른 사용자가 만든 락/캐시 파일 (`-user "$USER"` 필터 반드시 유지).
 - `nvidia-smi --gpu-reset`를 학습 GPU에 절대 쏘지 말 것.
@@ -2566,9 +2566,9 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 | 알람 | 의미 | 1차로 의심할 것 |
 |---|---|---|
-| **RED** `tads_10 < random_10` | 셀렉션이 오히려 해로움 | (a) 셀렉터(PPO agent)가 발산. agent.lr·entropy_coef·clip_eps 검토. (b) Anchor가 noisy: `anchor.max_samples_for_pca`가 너무 작음. (c) `selection_ratio`가 너무 낮아 학습량 부족. |
-| **YELLOW** `tads_10 << full_100` (>5%p 처짐) | 10% 데이터로 100% 격차 회수 실패 | (a) `train_epochs` 부족 (보통 3 → 4~5로 늘림). (b) 학습률이 너무 작음 (BASE-FULL이 충분히 학습되어 있으면 treatment는 더 빨리 수렴해야 함). (c) `selection_ratio`를 0.1 → 0.15로 살짝 올려보기. |
-| **BLUE** `data_agent_10 > tads_10 + 1%p` | 경쟁 method가 앞섬 | (a) `tads.lam` 조정 (현재 1.0). λ=0이면 사실상 data_agent와 같음 — 둘 사이 sweep. (b) `anchor.layer_indices`를 `all` ↔ `middle_to_last` 비교. (c) `anchor.use_anchor: false`로 ablation. |
+| **RED** `legacy_10 < random_10` | 셀렉션이 오히려 해로움 | (a) 셀렉터(PPO agent)가 발산. agent.lr·entropy_coef·clip_eps 검토. (b) Anchor가 noisy: `anchor.max_samples_for_pca`가 너무 작음. (c) `selection_ratio`가 너무 낮아 학습량 부족. |
+| **YELLOW** `legacy_10 << full_100` (>5%p 처짐) | 10% 데이터로 100% 격차 회수 실패 | (a) `train_epochs` 부족 (보통 3 → 4~5로 늘림). (b) 학습률이 너무 작음 (BASE-FULL이 충분히 학습되어 있으면 treatment는 더 빨리 수렴해야 함). (c) `selection_ratio`를 0.1 → 0.15로 살짝 올려보기. |
+| **BLUE** `data_agent_10 > legacy_10 + 1%p` | 경쟁 method가 앞섬 | (a) `selection.lam` 조정 (현재 1.0). λ=0이면 사실상 data_agent와 같음 — 둘 사이 sweep. (b) `anchor.layer_indices`를 `all` ↔ `middle_to_last` 비교. (c) `anchor.use_anchor: false`로 ablation. |
 
 ### 11-2. 주요 튜닝 노브 (config 경로 포함)
 
@@ -2586,12 +2586,12 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 | `use_8bit_optimizer` | false | true | A100 80GB 풀FT에서 OOM 시 켜기 |
 | `attn_implementation` | null | `flash_attention_2` | 속도 30% ↑ (flash-attn 설치되어 있어야 함) |
 
-#### Selection (TADS / data_agent 공통)
+#### Selection (legacy-score / data_agent 공통)
 
 | 노브 | 기본값 | 보통 시도 범위 | 의미 |
 |---|---|---|---|
 | `selection_ratio` | exp별 다름 (0.1) | 0.05 ~ 0.3 | 10%-셀렉션 매트릭스에선 0.1 고정이 원칙이지만, RED 진단용으로 잠시 0.15로 sweep 가능 |
-| `episode_batch_size` | 16 (tads/data_agent) | 1 ~ 32 | collect_episode 속도. NCCL hang 의심되면 1까지 내리기 |
+| `episode_batch_size` | 16 (tag/data_agent) | 1 ~ 32 | collect_episode 속도. NCCL hang 의심되면 1까지 내리기 |
 
 #### PPO Agent (`configs/base.yaml: agent.*`)
 
@@ -2603,12 +2603,12 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 | `agent.ppo_epochs` | 4 | 2 ~ 8 | over-fit ↔ 학습 부족 |
 | `agent.advantage_mode` | `group_relative` | (변경 안 권장) | 변경 전 ablation 필요 |
 
-#### Anchor (TADS 전용, `configs/base.yaml: anchor.*` + `configs/methods/tads.yaml`)
+#### Anchor (legacy/tag score 전용, `configs/base.yaml: anchor.*` + `configs/methods/legacy.yaml`)
 
 | 노브 | 기본값 | 보통 시도 범위 | 의미 |
 |---|---|---|---|
-| `tads.lam` | 1.0 | 0.0 ~ 1.0 | 0.0이면 data_agent와 동등. λ sweep으로 anchor 효과 측정. |
-| `tads.use_anchor` | true | true/false | false로 두면 anchor ablation |
+| `selection.lam` | 1.0 | 0.0 ~ 1.0 | 0.0이면 data_agent와 동등. λ sweep으로 anchor 효과 측정. |
+| `selection.use_anchor` | true | true/false | false로 두면 anchor ablation |
 | `anchor.layer_indices` | `all` | `all` / `middle_to_last` / 명시 리스트 | `all`이 paper-faithful. memory 부족 시 middle_to_last |
 | `anchor.max_samples_for_pca` | 2000 | 1024 ~ 4096 | RED일 때 노이즈 의심되면 늘리기 |
 | `anchor.pca_batch_size` | 4 | 1 ~ 16 | OOM 시 줄이기 |
@@ -2621,13 +2621,13 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 `_latest` 포인터는 가장 최근 학습을 가리키므로 **에이전트의 자동 eval은 자동으로 새 튜닝 결과를 평가**한다.
 
 1. **먼저 ablation 두 개로 원인 격리**:
-   - `tads.use_anchor: false` (= data_agent 동등) → 점수가 data_agent_10에 수렴하는가? (yes면 셀렉터는 정상, anchor가 문제)
-   - `tads.lam: 0.0` → λ만 끄고 anchor는 유지. 차이를 보면 λ vs anchor 기여 분리 가능.
+   - `selection.use_anchor: false` (= data_agent 동등) → 점수가 data_agent_10에 수렴하는가? (yes면 셀렉터는 정상, anchor가 문제)
+   - `selection.lam: 0.0` → λ만 끄고 anchor는 유지. 차이를 보면 λ vs anchor 기여 분리 가능.
 2. **§11-1 표대로 1차 노브 1~2개만 sweep** (한 번에 여러 개 동시 변경 금지 — 원인 추적 불가).
 3. **튜닝 학습 명령 권장 형태** (사용자에게 제안):
    ```bash
-   torchrun -m tads.train \
-       --config configs/experiments/main_7b/llama2/tads_10.yaml \
+   torchrun -m tag.train \
+       --config configs/experiments/main_7b/llama2/legacy_10.yaml \
        --run_suffix=lr5e5 \
        --override learning_rate=5e-5
    ```
@@ -2635,7 +2635,7 @@ find tads -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
    기존 baseline run (`runs/20260515_180000/`)은 그대로 보존됨.
 4. **이전 baseline run으로 다시 비교 평가**가 필요하면 사용자에게 다음 명령 제안:
    ```bash
-   python -m tads.eval --config <cfg> --run_tag=20260515_180000 --benchmarks ...
+   python -m tag.eval --config <cfg> --run_tag=20260515_180000 --benchmarks ...
    ```
    결과는 `runs/<해당 tag>/epoch_<N>/eval/` 에 저장됨 (같은 셀이지만 다른 run).
 5. 튜닝 결과 비교는 `experiments.md`의 **별도 섹션 ("Tuning sweeps")**에 따로 기록.
@@ -2707,22 +2707,22 @@ Model/Method               mmlu      mmlu_pro  gsm8k     svamp     humaneval mbp
 llama2 / random_10         47.14%    -         14.13%    -         25.55%    -         44.16%    -         39.21%
 llama2 / full_100          46.87%    21.89%    14.63%    39.00%    27.87%    51.58%    39.48%    42.99%    39.94%
 llama2 / data_agent_10     -         -         -         -         -         -         -         -         -
-llama2 / tads_10           -         -         -         -         -         -         -         -         -
+llama2 / legacy_10           -         -         -         -         -         -         -         -         -
 
 qwen25 / full_100          -         -         -         -         -         -         -         -         -
 qwen25 / random_10         -         -         -         -         -         -         -         -         -
 qwen25 / data_agent_10     -         -         -         -         -         -         -         -         -
-qwen25 / tads_10           -         -         -         -         -         -         -         -         -
+qwen25 / legacy_10           -         -         -         -         -         -         -         -         -
 
 mistral / full_100         -         -         -         -         -         -         -         -         -
 mistral / random_10        -         -         -         -         -         -         -         -         -
 mistral / data_agent_10    -         -         -         -         -         -         -         -         -
-mistral / tads_10          -         -         -         -         -         -         -         -         -
+mistral / legacy_10          -         -         -         -         -         -         -         -         -
 
 deepseek / full_100        -         -         -         -         -         -         -         -         -
 deepseek / random_10       -         -         -         -         -         -         -         -         -
 deepseek / data_agent_10   -         -         -         -         -         -         -         -         -
-deepseek / tads_10         -         -         -         -         -         -         -         -         -
+deepseek / legacy_10         -         -         -         -         -         -         -         -         -
 ```
 
 `llama2 / full_100` 9개 값 출처: **NAIT (ICLR 2026, Chen et al.) Table 2 row 01 "Alpaca-GPT4 (Peng et al., 2023)"**. paper-faithful baseline 동일 row 0 — 우리 환경에서 재현이 이 값에 ±2%p 안에 들어와야 학습/eval 정상.
@@ -2932,7 +2932,7 @@ XQuAD langs:    11           | ['xquad.ar.json', ..., 'xquad.zh.json']
 
 ```bash
 # MMLU-Pro
-CUDA_VISIBLE_DEVICES=<g> nohup python -m tads.eval \
+CUDA_VISIBLE_DEVICES=<g> nohup python -m tag.eval \
   --config configs/experiments/main_7b/<model>/<method>.yaml \
   --benchmarks mmlu_pro \
   --out_dir ${EVAL_RESULTS_ROOT}/<model>/<method> \

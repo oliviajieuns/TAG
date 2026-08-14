@@ -14,7 +14,7 @@ Usage:
         --tag LIMA
 
 Eval (separate root):
-    python -m tads.eval --config <same cfg> \\
+    python -m tag.eval --config <same cfg> \\
         --ckpt ${OUTPUT_ROOT}/main_7b/llama2/lima/lima_lima/epoch_last \\
         --benchmarks mmlu,gsm8k,humaneval,tydiqa,bbh \\
         --out_dir ${LIMA_EVAL_RESULTS_ROOT}/llama2/lima/
@@ -41,7 +41,7 @@ for _k, _v in (
 ):
     _os_for_threads.environ.setdefault(_k, _v)
 
-# transformers 5.0 video-registry workaround — see tads.train.main.
+# transformers 5.0 video-registry workaround — see tag.train.main.
 try:
     import torchvision.io as _tv_io
     if not hasattr(_tv_io, "VideoReader"):
@@ -51,17 +51,17 @@ except Exception:
 
 import torch
 
-from tads.core.schedulers import get_cosine_schedule_with_warmup
-from tads.core.timing import PhaseTimer
-from tads.core.utils import (
+from tag.core.schedulers import get_cosine_schedule_with_warmup
+from tag.core.timing import PhaseTimer
+from tag.core.utils import (
     clear_runtime_caches,
     disable_coredumps,
     load_config,
     set_seed,
     setup_logger,
 )
-from tads.modeling.loader import load_model, load_tokenizer
-from tads.pipelines.sft import make_dataloader, sft_one_epoch
+from tag.modeling.loader import load_model, load_tokenizer
+from tag.pipelines.sft import make_dataloader, sft_one_epoch
 
 from .data import build_lima_dataset
 

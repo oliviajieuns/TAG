@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tads.core.utils import load_config
+from tag.core.utils import load_config
 
 
 def _write(p: Path, content: str) -> Path:

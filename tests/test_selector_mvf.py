@@ -9,8 +9,8 @@ import torch
 
 transformers = pytest.importorskip("transformers")
 
-from tads.core.reliability import compute_pool_loss  # noqa: E402
-from tads.core.selector import collect_episode  # noqa: E402
+from tag.core.reliability import compute_pool_loss  # noqa: E402
+from tag.core.selector import collect_episode  # noqa: E402
 
 
 class _TinyDataset(torch.utils.data.Dataset):
@@ -65,7 +65,7 @@ def _run(model, dataset, mvf=None):
 def test_legacy_path_unchanged_and_vectors_exposed(tiny_model):
     ds = _TinyDataset()
     ep = _run(tiny_model, ds)
-    assert ep["score_mode"] == "tads"
+    assert ep["score_mode"] == "legacy"
     assert ep["r_loss"].shape == (len(ds),)
     assert ep["r_entropy"].shape == (len(ds),)
     # Legacy score at lam=0 is exactly the composite reward R.

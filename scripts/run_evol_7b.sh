@@ -3,9 +3,9 @@
 #
 # Difference vs. scripts/run_main_7b.sh:
 #   - Pulls configs from configs/experiments/evol_7b/ (Evol-Instruct dataset).
-#   - Launches plain `python -m tads.train` (single-process), NOT torchrun.
+#   - Launches plain `python -m tag.train` (single-process), NOT torchrun.
 #     The DDP path has an unresolved bug; single-process is the supported
-#     launcher for tads.train. Data Agent uses its own baselines.data_agent
+#     launcher for tag.train. Data Agent uses its own baselines.data_agent
 #     entry point, also single-process.
 #
 # GPU selection
@@ -18,7 +18,7 @@
 #
 # Filter examples
 # ---------------
-#   MODELS="llama2" METHODS="tads_10 random_10" \
+#   MODELS="llama2" METHODS="legacy_10 random_10" \
 #       bash scripts/run_evol_7b.sh --gpus 0
 set -euo pipefail
 
@@ -30,7 +30,7 @@ if [ -z "${OUTPUT_ROOT:-}" ]; then
 fi
 
 MODELS=${MODELS:-"llama2 qwen25"}
-METHODS=${METHODS:-"full_100 random_10 data_agent_10 tads_10"}
+METHODS=${METHODS:-"full_100 random_10 data_agent_10 legacy_10"}
 GPUS=${GPUS:-"0"}
 PARALLEL=0
 
@@ -53,11 +53,11 @@ echo "[run_evol_7b] METHODS=$METHODS"
 mkdir -p logs
 
 # Pick the entry-point module by method. data_agent uses the baselines launcher;
-# everything else (full / random / tads) goes through tads.train.
+# everything else (full / random / legacy) goes through tag.train.
 entry_for() {
   case "$1" in
     data_agent*) echo "baselines.data_agent.train" ;;
-    *)           echo "tads.train" ;;
+    *)           echo "tag.train" ;;
   esac
 }
 

@@ -2,11 +2,11 @@
 #
 # 실행:
 #   source scripts/setup_env.sh
-#   CUDA_VISIBLE_DEVICES=0 python -m tads.train \
+#   CUDA_VISIBLE_DEVICES=0 python -m tag.train \
 #       --config configs/experiments/main_05b/qwen25/full_100.yaml
 #
 # 평가:
-#   python -m tads.eval \
+#   python -m tag.eval \
 #       --config configs/experiments/main_05b/qwen25/full_100.yaml \
 #       --ckpt ${OUTPUT_ROOT}/main_05b/qwen25/full_100/runs/_latest/epoch_last \
 #       --benchmarks mmlu,mmlu_pro,gsm8k,svamp,humaneval,mbpp,tydiqa,xquad,bbh \
