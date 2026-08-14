@@ -1,0 +1,25 @@
+# CLEAN-pool control: TAG with the prefix contrast, no corruption injected.
+# Pairs with clean/legacy_7b.yaml — see that file for why this control
+# exists and what its calibration overlap means.
+#
+# Same gate configuration as lowq/tag_prefix_7b.yaml (prefix_tokens: 32,
+# tail_mode: none) and the same calibration reference, so the gate is not
+# retuned for the easier pool. Its own cache, because G is a function of the
+# pool and this is a different one.
+defaults:
+  - configs/methods/tag.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: clean/tag_prefix_7b
+data_files: ${oc.env:TAG_CLEAN_POOL,}
+selection:
+  tag:
+    prefix_tokens: 32
+    tail_mode: none
+    counterfactual_data_files: ${oc.env:TAG_CLEAN_CF,}
+    # Empty on purpose: the legacy arm has no dedup constraint, so leaving it
+    # on here would make the pair differ by more than G.
+    dedup_clusters_file: ""
+    gate_ref_file: ${oc.env:TAG_GATE_REF_7B_PREFIX,}
+    gate_cache_file: ${oc.env:TAG_GATE_CACHE_CLEAN,}
+    store_token_losses: true

@@ -16,7 +16,7 @@
 #
 # Then:
 #   python scripts/make_table_v2.py --results-root "$EVAL_RESULTS_ROOT" \
-#       --benches mmlu,gsm8k,humaneval,tydiqa,bbh \
+#       --benches mmlu,bbh,svamp,gsm8k,mbpp,humaneval,tydiqa,xquad \
 #       --pairs tag_prefix_7b:legacy_7b
 set -uo pipefail
 
@@ -28,8 +28,10 @@ shift || true
 ARMS=("$@")
 [ ${#ARMS[@]} -eq 0 ] && ARMS=(tag_prefix_7b legacy_7b)
 
-BENCHMARKS="${BENCHMARKS:-mmlu,gsm8k,humaneval,tydiqa,bbh}"
+# The paper's Table 2, in its order.
+BENCHMARKS="${BENCHMARKS:-mmlu,bbh,svamp,gsm8k,mbpp,humaneval,tydiqa,xquad}"
 LIMIT="${LIMIT:-}"
+ARM_DIR="${ARM_DIR:-configs/experiments/lowq}"
 SET_NAME="${SET_NAME:-lowq}"
 MODEL_NAME="${MODEL_NAME:-qwen25-7b}"
 
@@ -86,7 +88,7 @@ echo "[eval] logs    -> $LOGDIR"
 
 pids=(); names=(); i=0
 for arm in "${ARMS[@]}"; do
-  cfg="configs/experiments/lowq/${arm}.yaml"
+  cfg="$ARM_DIR/${arm}.yaml"
   if [ ! -f "$cfg" ]; then
     echo "[eval] SKIP $arm — no such config: $cfg" >&2
     i=$((i+1)); continue

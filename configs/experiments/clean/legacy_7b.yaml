@@ -1,0 +1,26 @@
+# CLEAN-pool control: legacy trajectory-anchored score, no corruption injected.
+#
+# The lowq grid answers "does the gate remove corruption". This one answers
+# the question a reviewer asks next: **does the gate COST anything when there
+# is nothing to remove?** G floors target_zero_rate (5 %) of any pool by
+# construction, clean or not, and it grades the rest — so on a clean corpus
+# the gate can only take data away. If TAG matches legacy here, the gate is
+# free; if it loses, that loss is the price of the lowq gain and belongs in
+# the paper next to it.
+#
+# Pool: $POOLS/clean_ref/pool.json — the same corpus bootstrap generates for
+# calibration, with no --preset and no corruption fractions. Note in any
+# writeup that the gate's scale s and null curve mu(M) were fit on THIS
+# corpus, so the 5 % floor rate here is by construction rather than measured.
+# That does not affect the question being asked (what the floor costs), but
+# it is not an independent estimate of the floor rate.
+#
+# Dedup is OFF for both arms of this pair. In the lowq grid only the TAG arm
+# threads cluster_ids, so part of its duplicate suppression is the dedup
+# constraint rather than G; here the two arms differ by exactly G.
+defaults:
+  - configs/methods/legacy.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: clean/legacy_7b
+data_files: ${oc.env:TAG_CLEAN_POOL,}

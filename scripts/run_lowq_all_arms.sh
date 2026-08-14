@@ -33,6 +33,12 @@ fi
 ARMS=("$@")
 [ ${#ARMS[@]} -eq 0 ] && ARMS=("${DEFAULT_ARMS[@]}")
 
+# Where the arm configs live. The clean-pool control pair sits in
+# configs/experiments/clean/ and is otherwise launched identically:
+#   ARM_DIR=configs/experiments/clean bash scripts/run_lowq_all_arms.sh 42 \
+#       tag_prefix_7b legacy_7b
+ARM_DIR="${ARM_DIR:-configs/experiments/lowq}"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -78,7 +84,7 @@ mkdir -p "$LOGDIR"
 # TAG_GATE_CACHE stayed silent for exactly the arms most likely to be
 # mis-wired. Read the variable name out of each config being launched.
 for arm in "${ARMS[@]}"; do
-  cfg="configs/experiments/lowq/${arm}.yaml"
+  cfg="$ARM_DIR/${arm}.yaml"
   [ -f "$cfg" ] || continue
   var="$(sed -n 's/.*gate_cache_file:[[:space:]]*\${oc\.env:\([A-Z_0-9]*\).*/\1/p' "$cfg" | head -1)"
   [ -n "$var" ] || continue
@@ -96,7 +102,7 @@ for arm in "${ARMS[@]}"; do
 done
 unset arm cfg var path
 
-echo "[arms] scale=$SCALE seed=$SEED gpus=$N_GPU"
+echo "[arms] scale=$SCALE seed=$SEED gpus=$N_GPU arm_dir=$ARM_DIR"
 if [ "$SCALE" = "7b" ]; then
   echo "[arms] episode_bs=${TAG_EPISODE_BS_7B:-8} grad_accum=${TAG_GRAD_ACCUM_7B:-16} (1 arm/GPU)"
 else
@@ -114,7 +120,7 @@ names=()
 i=0
 for arm in "${ARMS[@]}"; do
   gpu=$(( i % N_GPU ))
-  cfg="configs/experiments/lowq/${arm}.yaml"
+  cfg="$ARM_DIR/${arm}.yaml"
   if [ ! -f "$cfg" ]; then
     echo "[arms] SKIP $arm — no such config: $cfg" >&2
     i=$((i+1)); continue

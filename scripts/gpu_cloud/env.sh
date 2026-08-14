@@ -51,6 +51,22 @@ if [ -z "$_TAG_WS_PINNED" ] && [ ! -d "$TAG_WORKSPACE/pools" ]; then
   unset _cand
 fi
 
+# n9_discover.sh probes the cluster for models, corpora and every benchmark
+# directory and writes the answers to discovered_env.sh. Only n9_env.sh read
+# it, so a shell that sourced THIS file — the documented entry point — threw
+# that work away and reported benchmarks as missing that are on the box. Read
+# it here instead; n9_env.sh sourcing it first is harmless because every
+# assignment below is ${VAR:-default}.
+for _tag_disc in "$TAG_REPO_ROOT/discovered_env.sh" "$TAG_REPO_ROOT/../discovered_env.sh"; do
+  if [ -f "$_tag_disc" ]; then
+    # shellcheck disable=SC1090
+    . "$_tag_disc"
+    [ -z "${TAG_ENV_QUIET:-}" ] && echo "[tag-env] discovered paths: $_tag_disc"
+    break
+  fi
+done
+unset _tag_disc
+
 # Reuse assets the machine already has rather than re-downloading ~1 GB.
 # First existing candidate wins; the workspace path is the download target.
 _tag_first_existing() {
@@ -114,6 +130,16 @@ export TAG_GATE_CACHE_BAR="${TAG_GATE_CACHE_BAR:-$POOLS/composite20/tag_gate_qwe
 # The prefix arm (tag_prefix_7b) — the measured-best support statistic.
 export TAG_GATE_REF_7B_PREFIX="${TAG_GATE_REF_7B_PREFIX:-$POOLS/clean_ref/delta_hat_7b_prefix.pt}"
 export TAG_GATE_CACHE_PREFIX="${TAG_GATE_CACHE_PREFIX:-$POOLS/composite20/tag_gate_qwen2.5-7b_prefix.pt}"
+
+# The CLEAN-pool control pair (configs/experiments/clean/). Same corpus the
+# calibration reference is fit on — bootstrap already emits pool.json and
+# counterfactual.json there, so nothing new has to be generated — but its own
+# gate cache, because G is a function of the pool and this is a different one
+# from composite20. No dedup file: the legacy arm has none, so threading one
+# into the TAG arm would make the pair differ by more than G.
+export TAG_CLEAN_POOL="${TAG_CLEAN_POOL:-$POOLS/clean_ref/pool.json}"
+export TAG_CLEAN_CF="${TAG_CLEAN_CF:-$POOLS/clean_ref/counterfactual.json}"
+export TAG_GATE_CACHE_CLEAN="${TAG_GATE_CACHE_CLEAN:-$POOLS/clean_ref/tag_gate_qwen2.5-7b_prefix.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub
 # fallback is how you end up training on a different pool than you think.
@@ -193,16 +219,24 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] outputs   : $OUTPUT_ROOT"
   echo "[tag-env] eval out  : $EVAL_RESULTS_ROOT"
   echo "[tag-env] fwd batch : 0.5b=$TAG_EPISODE_BS  7b=$TAG_EPISODE_BS_7B"
-  _tag_missing_bench=""
-  for _v in MMLU_DATA_DIR GSM8K_DATA_DIR HUMANEVAL_DATA_DIR TYDIQA_DATA_DIR BBH_DATA_DIR; do
-    [ -d "${!_v}" ] || _tag_missing_bench="$_tag_missing_bench ${_v%%_DATA_DIR}"
+  # The paper's Table 2 is these eight, in this order.
+  _tag_have=""; _tag_missing=""
+  for _pair in mmlu:MMLU_DATA_DIR bbh:BBH_DATA_DIR svamp:SVAMP_DATA_DIR \
+               gsm8k:GSM8K_DATA_DIR mbpp:MBPP_DATA_DIR \
+               humaneval:HUMANEVAL_DATA_DIR tydiqa:TYDIQA_DATA_DIR \
+               xquad:XQUAD_DATA_DIR; do
+    _b="${_pair%%:*}"; _v="${_pair##*:}"
+    if [ -d "${!_v}" ]; then _tag_have="$_tag_have $_b"
+    else _tag_missing="$_tag_missing $_b"; fi
   done
-  if [ -n "$_tag_missing_bench" ]; then
-    echo "[tag-env] benchmarks:$_tag_missing_bench MISSING (eval will fail on those)"
-  else
-    echo "[tag-env] benchmarks: mmlu gsm8k humaneval tydiqa bbh found"
+  echo "[tag-env] benchmarks:${_tag_have:- none} found"
+  if [ -n "$_tag_missing" ]; then
+    echo "[tag-env]   MISSING:$_tag_missing — eval will refuse to start on these"
+    echo "[tag-env]   try:  bash scripts/gpu_cloud/n9_discover.sh --write"
+    echo "[tag-env]   then re-source; scripts/download_*.sh fetches what is"
+    echo "[tag-env]   genuinely absent (svamp, mbpp, humaneval, tydiqa, xquad)."
   fi
-  unset _v _tag_missing_bench
+  unset _pair _b _v _tag_have _tag_missing
   if command -v nvidia-smi >/dev/null 2>&1; then
     echo "[tag-env] gpus      : $(nvidia-smi --query-gpu=name --format=csv,noheader | tr '\n' ',' | sed 's/,$//')"
   fi
