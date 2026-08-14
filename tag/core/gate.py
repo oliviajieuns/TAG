@@ -103,7 +103,7 @@ logger = logging.getLogger(__name__)
 CACHE_FILENAME = "tag_gate_cache.pt"
 CACHE_VERSION = 2
 
-_TAIL_MODES = ("min", "quantile")
+_TAIL_MODES = ("min", "quantile", "none")
 _TAU_MODES = ("per_token", "absolute")
 _UNDEFINED_POLICIES = ("pass", "neutral", "zero")
 
@@ -843,10 +843,26 @@ def tail_gain(
     for being short; passing unconditionally would blind the gate. See docs
     item P3.
 
+    ``mode="none"`` disables the tail test entirely: the tail abstains for
+    every sample, so ``Delta_hat = min(Delta_bar, +inf) = Delta_bar`` and the
+    gate reduces to the overall relative gain of Eq. 3. This is not a
+    degenerate setting to be avoided — measured on the 7B composite-20 pool,
+    the span minimum carried no signal on ANY corruption type while
+    ``Delta_bar`` reached 13.8x the base rate on instruction-response
+    mismatch, and because ``Delta_hat`` is a MINIMUM the noisy tail destroyed
+    80% of that signal (AP 0.817 -> 0.170). Where that holds, ``none`` is the
+    correct configuration and the span machinery of Eqs. 4-5 should be
+    reported as not earning its place. See docs/tag-paper-deltas.md A6.
+
     Returns ``(tail, used_fallback)``.
     """
     if mode not in _TAIL_MODES:
         raise ValueError(f"tail_gain: mode must be one of {_TAIL_MODES}, got {mode!r}")
+    if mode == "none":
+        # Abstain everywhere; the caller's min() then yields `fallback`.
+        return fallback.float().clone(), torch.ones(
+            gains.size(0), dtype=torch.bool,
+        )
     has_valid = mask.any(dim=1)
     if mode == "min":
         big = torch.full_like(gains, float("inf"))

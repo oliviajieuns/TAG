@@ -47,6 +47,7 @@ _ARMS_7B = [
     "random_7b",
     "full_polluted_7b",
     "tag_nonull_7b",
+    "tag_bar_7b",
 ]
 
 

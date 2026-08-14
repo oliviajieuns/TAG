@@ -235,6 +235,97 @@ add:
 
 ---
 
+### A6. MEASURED: the span minimum carries no signal, and the `min` destroys what \(\bar\Delta\) has
+
+**This supersedes B2's recommendation and is the largest single change to the
+method.**
+
+**Paper.** Eqs. 4-5 partition the response into spans and take the worst one,
+justified by: *"the mean alone can be diluted by localized corruption — a
+response that is correct for ninety tokens and wrong for five keeps a healthy
+\(\bar\Delta\) while \(\Delta^{\min}\) collapses."* Eq. 6 then consumes
+\(\hat\Delta = \min(\bar\Delta, \Delta^{\min})\).
+
+**Measured.** Qwen2.5-7B-Instruct, composite-20 pool (59 516 records, 30.4%
+dirty), W=16, Eq. 5\('\) null correction on. AP of each statistic as a
+detector of one corruption type against clean only
+(`scripts/gate_report.py`):
+
+| type | base | AP \(\bar\Delta\) | AP \(\Delta^{\min}\) | AP \(\hat\Delta\) |
+|---|---|---|---|---|
+| mismatch | 0.059 | **0.8170** (13.8×) | 0.0873 (1.5×) | **0.1697** |
+| noisy | 0.059 | **0.4507** (7.6×) | 0.0574 (≈0) | **0.0719** |
+| duplicate | 0.158 | 0.2387 | 0.1714 | 0.1808 |
+| wrong_answer | 0.059 | 0.0876 | 0.0903 | 0.0779 |
+| truncated | 0.059 | 0.0445 | 0.0505 | 0.0614 |
+
+Three readings, in order of importance:
+
+1. **\(\bar\Delta\) (Eq. 3) is a strong detector** — 13.8× the base rate on
+   instruction-response mismatch, 7.6× on injected noise. The counterfactual
+   contrast works.
+2. **\(\Delta^{\min}\) (Eq. 5) carries no signal on ANY corruption type**,
+   including the localized ones it was introduced for.
+3. **Because \(\hat\Delta\) is a MINIMUM, the noisy tail does not merely fail
+   to help — it destroys \(\bar\Delta\)'s signal.** Mismatch AP falls
+   \(0.817 \to 0.170\); noisy falls \(0.451 \to 0.072\). Roughly 80% of the
+   available signal is thrown away by the \(\min\).
+
+The pool-level consequence: the shipped gate reaches only AP 0.418 against a
+0.304 base (1.37×), and its \(G=0\) block is just 43.8% dirty — barely
+1.44× enriched.
+
+**Why the span argument failed.** It was never wrong that a localized
+corruption depresses one span; it is that the *clean* span minimum is just as
+depressed, because it is a minimum over \(M\) noisy ratios. Eq. 5\('\) fixed
+the resulting *rate* (5%, uniform in length) but could not manufacture
+*separation* between distributions that genuinely overlap — exactly the limit
+item B2 recorded, now realised in its strongest form.
+
+**The corruption the spans were for is not caught by anything.**
+`wrong_answer` scores 0.0876 / 0.0903 / 0.0779 — all ≈ the 0.059 base. A
+fluent wrong answer *is* well explained by its instruction, so the likelihood
+contrast has little to see. This is an honest limitation of the whole
+counterfactual approach, not of the span mechanism specifically, and should
+be stated as such rather than quietly dropped.
+
+**`truncated` is caught entirely by \(c_i\), not by the contrast.** Its
+\(G=0\) rate is 4.6%, statistically identical to clean's 4.7%, while its mean
+\(G\) is 0.227 — the suppression is the completeness heuristic
+(\(\bar c = 0.30\)) alone. \(\bar\Delta\)'s AP of 0.0445 is *below* the base
+rate, i.e. mildly anti-correlated: a truncated response is a prefix of a
+correct one and therefore slightly *more* predictable from its instruction.
+The paper must not credit Eqs. 2-6 with catching T3.
+
+**Code.** `tail_mode: none` makes the tail abstain everywhere, so
+\(\hat\Delta = \bar\Delta\). `configs/experiments/lowq/tag_bar_7b.yaml` is
+that arm; it differs from `tag_7b` in exactly one field.
+
+**Suggested paper changes.**
+1. Report the per-type AP table above. It is the strongest evidence in the
+   paper that the contrast works, and it is also the evidence that Eqs. 4-5
+   do not.
+2. **Demote Eqs. 4-5 from the method to an ablation.** The main method
+   becomes \(\hat\Delta_i = \bar\Delta_i - \mu(M_i)\) — Eq. 3 with the
+   Eq. 5\('\) centring — with the span minimum reported as a variant that was
+   measured and rejected. Which configuration is "main" is settled by the
+   end-to-end numbers (`tag_bar_7b` vs `tag_7b`), not by this table alone,
+   but the table already rules out presenting the span minimum as a
+   contribution.
+3. State the `wrong_answer` limitation explicitly, and attribute T3 detection
+   to \(c_i\) rather than to the contrast.
+
+> The span minimum of Eqs. 4-5 was evaluated and did not earn its place: on
+> our pool it detected no corruption type above the base rate, and because
+> \(\hat\Delta\) is a minimum it suppressed the overall gain's own signal
+> (mismatch AP \(0.82 \to 0.17\)). We therefore gate on \(\bar\Delta\) alone
+> and report the span variant as an ablation. We attribute this to the clean
+> span minimum being an order statistic over \(M\) noisy ratios, whose
+> distribution overlaps the corrupted one regardless of where the threshold
+> is placed.
+
+---
+
 ## B. Recommended — experiment robustness
 
 ### B2. \(\Delta^{\min}\) has an order-statistic bias in the response length, and \(W\) is a first-order hyper-parameter
@@ -617,6 +708,8 @@ token counts in the paper match a reimplementation.
 ## Checklist before submission
 
 - [ ] A1-A4 folded into the equations (these are correctness fixes)
+- [ ] A6 per-type AP table reported; Eqs. 4-5 demoted to an ablation;
+      wrong_answer limitation and c_i's role in T3 stated
 - [ ] A5 Eq. 5\('\) added; \(\alpha\) stated; per-length-bin clean zero-weight rates
       reported; the `tag_nonull_7b` ablation in the results table
 - [ ] B1 \(\mathcal{C}_i\) redefined on the per-token mean

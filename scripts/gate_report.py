@@ -148,6 +148,46 @@ def main() -> None:
         print("  floor block (G==0)  : EMPTY — the gate refuses nothing.")
     print()
 
+    # ---- which statistic is actually carrying the gate? -----------------
+    # Delta_hat is what Eq. 6 consumes, but it is min(Delta_bar, Delta^min),
+    # so if the tail term is noise the minimum ACTIVELY DESTROYS whatever
+    # Delta_bar had. Comparing the three as whole-pool dirty detectors says
+    # whether that is happening, and it is the number that decides whether
+    # tail_mode should be "min" or "none".
+    _db = cache.get("delta_bar")
+    _dm = cache.get("delta_min")
+    _dh = cache.get("delta_hat")
+    if _db is not None and _dm is not None and _dh is not None:
+        print("Which statistic carries the signal (whole pool, AP of -stat)")
+        rows = [
+            ("Delta_bar  (Eq. 3)", _db), ("Delta^min  (Eq. 5)", _dm),
+            ("Delta_hat  (Eq. 6 input)", _dh),
+        ]
+        best_name, best_ap = None, -1.0
+        for name, v in rows:
+            a = average_precision(-v.float().view(-1), dirty)
+            if a > best_ap:
+                best_name, best_ap = name, a
+            print(f"  {name:<26} AP={a:.4f}   lift {a/base:.2f}x")
+        print(f"  base rate                  AP={base:.4f}   (no signal)")
+        ap_db = average_precision(-_db.float().view(-1), dirty)
+        ap_dh = average_precision(-_dh.float().view(-1), dirty)
+        if ap_db > ap_dh + 0.02:
+            print()
+            print(f"  ** Delta_bar ALONE beats Delta_hat ({ap_db:.4f} vs "
+                  f"{ap_dh:.4f}). Delta_hat is a MINIMUM, so the tail term is")
+            print(f"     not merely useless here — it is destroying signal.")
+            print(f"     Set selection.tag.tail_mode: none to gate on Eq. 3 alone.")
+        # Caveat worth stating: delta_hat in the cache is already null-centred
+        # per span count while the other two are raw, and AP is not invariant
+        # to a per-bin shift. The comparison is still informative when the gap
+        # is this large, but it is not exact.
+        print()
+        print("  (note: delta_hat is null-centred per span count, the other two")
+        print("   are raw. AP is not invariant to a per-bin shift, so read this")
+        print("   as a large-effect comparison, not a precise one.)")
+        print()
+
     # ---- what a G-only selection would pick -----------------------------
     print("Selecting by G alone (training ranks by G . R, so this is the gate's"
           " own contribution, not the arm's result)")

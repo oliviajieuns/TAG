@@ -106,6 +106,11 @@ export TAG_GATE_REF_7B="${TAG_GATE_REF_7B:-$POOLS/clean_ref/delta_hat_7b.pt}"
 # null correction, and its own gate cache, because G differs.
 export TAG_GATE_REF_7B_NONULL="${TAG_GATE_REF_7B_NONULL:-$POOLS/clean_ref/delta_hat_7b_nonull.pt}"
 export TAG_GATE_CACHE_NONULL="${TAG_GATE_CACHE_NONULL:-$POOLS/composite20/tag_gate_qwen2.5-7b_nonull.pt}"
+# The Delta_bar-only arm (tag_bar_7b, tail_mode: none) — s is a quantile of
+# Delta_hat and tail_mode changes its distribution, so it needs its own
+# reference and its own gate.
+export TAG_GATE_REF_7B_BAR="${TAG_GATE_REF_7B_BAR:-$POOLS/clean_ref/delta_hat_7b_bar.pt}"
+export TAG_GATE_CACHE_BAR="${TAG_GATE_CACHE_BAR:-$POOLS/composite20/tag_gate_qwen2.5-7b_bar.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub
 # fallback is how you end up training on a different pool than you think.

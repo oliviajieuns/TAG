@@ -1,0 +1,64 @@
+# Lowq arm at 7B: TAG gated on the OVERALL relative gain alone (Eq. 3),
+# with the span machinery of Eqs. 4-5 switched off.
+#
+#   Delta_hat_i = Delta_bar_i - mu(M_i)        (tail_mode: none)
+#   G_i         = c_i * (2*sigma(Delta_hat_i/s) - 1)_+
+#
+# WHY THIS ARM EXISTS. Measured on the composite-20 pool with Qwen2.5-7B
+# (scripts/gate_report.py, span-ablation table), per-type AP against clean:
+#
+#   type           base    AP Delta_bar   AP Delta^min   AP Delta_hat
+#   mismatch      0.059         0.8170         0.0873         0.1697
+#   noisy         0.059         0.4507         0.0574         0.0719
+#   wrong_answer  0.059         0.0876         0.0903         0.0779
+#   truncated     0.059         0.0445         0.0505         0.0614
+#
+# Delta_bar is a strong detector of instruction-response mismatch (13.8x the
+# base rate) and of injected noise (7.6x). Delta^min carries no signal on ANY
+# corruption type. And because Eq. 6 consumes min(Delta_bar, Delta^min), the
+# noisy tail does not merely fail to help — it DESTROYS what Delta_bar had,
+# dropping mismatch AP from 0.817 to 0.170.
+#
+# This is the failure mode docs/tag-paper-deltas.md B2 warned about in its
+# strongest form: the Eq. 5' null correction fixed the zero-weight RATE (5%,
+# uniform in length) but could not manufacture separation between clean and
+# dirty span-minima that genuinely overlap.
+#
+# So this arm is not an ablation of a working component — it is the candidate
+# for the MAIN configuration, and tag_7b (tail_mode: min) becomes the arm that
+# shows why the span minimum was dropped. Which is which in the paper depends
+# on the end-to-end numbers; both are run.
+#
+# It needs its own calibration reference, because tail_mode is one of the
+# calibration-bound fields (s is a quantile of Delta_hat, whose distribution
+# changes with the tail statistic). No GPU — re-derived from the token losses
+# already stored in the W=16 reference:
+#
+#   python scripts/sweep_gate_config.py --ref $TAG_GATE_REF_7B \
+#       --span-tokens 16 --tail-modes none \
+#       --refit-out $POOLS/clean_ref/delta_hat_7b_bar.pt
+#   export TAG_GATE_REF_7B_BAR=$POOLS/clean_ref/delta_hat_7b_bar.pt
+#
+# ...and its own gate cache, because G differs (this one does need the GPU):
+#
+#   export TAG_GATE_CACHE_BAR=$POOLS/composite20/tag_gate_qwen2.5-7b_bar.pt
+#   bash scripts/precompute_gate.sh configs/experiments/lowq/tag_bar_7b.yaml \
+#       $TAG_GATE_CACHE_BAR
+#
+# Everything else — optimizer, precision, schedule, batch, epochs, tau,
+# min_span, c_trunc — is inherited unchanged, so this differs from tag_7b in
+# exactly one field.
+defaults:
+  - configs/methods/tag.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq/tag_bar_7b
+selection:
+  tag:
+    # The one bit that differs from tag_7b.
+    tail_mode: none
+    gate_ref_file: ${oc.env:TAG_GATE_REF_7B_BAR,}
+    gate_cache_file: ${oc.env:TAG_GATE_CACHE_BAR,}
+    # Keep the token losses this time: with them, trying another tail
+    # statistic (quantile at 0.1 / 0.25) costs no forward pass at all.
+    store_token_losses: true
