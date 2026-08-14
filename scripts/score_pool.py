@@ -524,36 +524,99 @@ def main() -> None:
             else f"W{g_null.span_tokens}/v{g_null.target_zero_rate:.2f}/{g_null.digest()}",
             1 + len(cf_datasets),
         )
-        tok_true, n_true = gatelib.compute_pool_token_losses(
-            model, dataset,
-            batch_size=int(cfg.get("episode_batch_size", 1)),
-            device=str(args.device), tag="true",
-            eos_token_id=tokenizer.eos_token_id,
-            drop_trailing_eos=not gcfg.include_eos,
-        )
+        # Reuse the precomputed shared cache when one is configured.
+        # scripts/precompute_gate.sh already paid for the gate (1+K full pool
+        # forwards, sharded across every GPU), and G is a function of the DATA
+        # and the base checkpoint only — so recomputing it here would double
+        # this script's GPU time for a byte-identical result.
+        #
+        # Three tiers, cheapest first, mirroring pipelines.selection._prepare_tag:
+        #   1. cache whose config MATCHES -> take G and the deltas straight out
+        #      of it; no token losses needed and no forward pass at all;
+        #   2. cache with per-token losses but a different config -> re-derive
+        #      (still no forward). Needs store_token_losses: true;
+        #   3. no usable cache -> the full 1+K forwards.
+        tag_components = None
+        tok_true = n_true = None
         tok_cf, n_cf_list = [], []
-        for k_cf, one_ds in enumerate(cf_datasets, start=1):
-            tc, nc = gatelib.compute_pool_token_losses(
-                model, one_ds,
+        _cache_path = str(gcfg_params.get("gate_cache_file") or "").strip()
+        _cached = (
+            gatelib.load_gate_cache(None, path=Path(_cache_path))
+            if _cache_path else None
+        )
+        if _cache_path and _cached is None:
+            logger.warning(
+                "gate_cache_file=%s could not be read — computing the gate.",
+                _cache_path,
+            )
+        if _cached is not None and int(_cached["gate"].numel()) != len(dataset):
+            logger.warning(
+                "gate_cache_file=%s covers %d records but this pool has %d — "
+                "ignoring it rather than scoring a different pool.",
+                _cache_path, int(_cached["gate"].numel()), len(dataset),
+            )
+            _cached = None
+        if _cached is not None:
+            if (_cached.get("config") or {}) == gcfg.identity():
+                tag_components = {
+                    k: _cached[k]
+                    for k in ("gate", "delta_bar", "delta_min", "delta_hat",
+                              "n_spans", "n_common", "undefined", "empty_c",
+                              "completeness")
+                    if k in _cached
+                }
+                logger.info(
+                    "TAG gate: cache hit on %s (config unchanged) — no forward "
+                    "pass.", _cache_path,
+                )
+            else:
+                redone = gatelib.recompute_gate_from_cache(_cached, gcfg)
+                if redone is not None:
+                    tag_components = redone
+                    logger.info(
+                        "TAG gate: re-derived from the cached token losses "
+                        "under this script's config — no forward pass.",
+                    )
+                else:
+                    logger.warning(
+                        "gate_cache_file=%s was written under a different "
+                        "config and carries no per-token losses to re-derive "
+                        "from — computing the gate. Set "
+                        "selection.tag.store_token_losses: true when "
+                        "precomputing to make config changes free here.",
+                        _cache_path,
+                    )
+
+        if tag_components is None:
+            tok_true, n_true = gatelib.compute_pool_token_losses(
+                model, dataset,
                 batch_size=int(cfg.get("episode_batch_size", 1)),
-                device=str(args.device),
-                tag=f"cf_tokens_{k_cf}" if len(cf_datasets) > 1 else "cf_tokens",
+                device=str(args.device), tag="true",
                 eos_token_id=tokenizer.eos_token_id,
                 drop_trailing_eos=not gcfg.include_eos,
             )
-            tok_cf.append(tc)
-            n_cf_list.append(nc)
-        if gcfg.scale is None:
-            probe = gatelib.gate_components(
-                tok_true, n_true, tok_cf[0], n_cf_list[0], cfg=gcfg,
+            for k_cf, one_ds in enumerate(cf_datasets, start=1):
+                tc, nc = gatelib.compute_pool_token_losses(
+                    model, one_ds,
+                    batch_size=int(cfg.get("episode_batch_size", 1)),
+                    device=str(args.device),
+                    tag=f"cf_tokens_{k_cf}" if len(cf_datasets) > 1 else "cf_tokens",
+                    eos_token_id=tokenizer.eos_token_id,
+                    drop_trailing_eos=not gcfg.include_eos,
+                )
+                tok_cf.append(tc)
+                n_cf_list.append(nc)
+            if gcfg.scale is None:
+                probe = gatelib.gate_components(
+                    tok_true, n_true, tok_cf[0], n_cf_list[0], cfg=gcfg,
+                )
+                gcfg = _build_gate_cfg(
+                    gcfg_params, gatelib.resolve_scale(gcfg, probe["delta_hat"]),
+                    g_null,
+                )
+            tag_components = gatelib.compute_gate(
+                tok_true, n_true, tok_cf, n_cf_list, completeness, cfg=gcfg,
             )
-            gcfg = _build_gate_cfg(
-                gcfg_params, gatelib.resolve_scale(gcfg, probe["delta_hat"]),
-                g_null,
-            )
-        tag_components = gatelib.compute_gate(
-            tok_true, n_true, tok_cf, n_cf_list, completeness, cfg=gcfg,
-        )
         tag_components["scale_used"] = gcfg.scale
         g_i = tag_components["gate"]
         signals["delta_bar"] = tag_components["delta_bar"]
