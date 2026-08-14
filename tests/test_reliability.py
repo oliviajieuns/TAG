@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 import torch
 
 from tag.core.reliability import (
@@ -242,3 +243,82 @@ def test_cache_roundtrip(tmp_path):
 
 def test_cache_missing_returns_none(tmp_path):
     assert load_reliability_cache(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# compute_pool_loss: the fast paths must be arithmetically neutral
+# ---------------------------------------------------------------------------
+
+class _VarLenDataset(torch.utils.data.Dataset):
+    """Right-padded records of DIFFERENT real lengths, as tokenize_alpaca emits."""
+
+    def __init__(self, n=11, T=24, vocab=96, seed=0):
+        g = torch.Generator().manual_seed(seed)
+        self.input_ids = torch.zeros(n, T, dtype=torch.long)
+        self.attention_mask = torch.zeros(n, T, dtype=torch.long)
+        self.labels = torch.full((n, T), -100, dtype=torch.long)
+        self.real_len = []
+        for i in range(n):
+            L = 6 + (i * 5) % (T - 6)
+            p = max(2, L // 3)
+            ids = torch.randint(0, vocab, (L,), generator=g)
+            self.input_ids[i, :L] = ids
+            self.attention_mask[i, :L] = 1
+            self.labels[i, p:L] = ids[p:]
+            self.real_len.append(L)
+
+    def __len__(self):
+        return self.input_ids.size(0)
+
+    def __getitem__(self, i):
+        return {
+            "input_ids": self.input_ids[i],
+            "attention_mask": self.attention_mask[i],
+            "labels": self.labels[i],
+        }
+
+
+def _reference_pool_loss(model, ds):
+    """One unpadded record at a time — no batching, no cropping, no split head."""
+    import torch.nn.functional as F
+
+    out = torch.zeros(len(ds), dtype=torch.float32)
+    with torch.no_grad():
+        for i in range(len(ds)):
+            it = ds[i]
+            L = int(it["attention_mask"].sum())
+            logits = model(input_ids=it["input_ids"][:L].unsqueeze(0)).logits[0, :-1, :]
+            lab = it["labels"][:L][1:]
+            sel = lab != -100
+            ce = F.cross_entropy(logits[sel].float(), lab[sel], reduction="none")
+            out[i] = ce.mean()
+    return out
+
+
+@pytest.mark.parametrize(
+    "sort_by_length,split_lm_head,batch_size",
+    [(False, False, 4), (True, False, 4), (False, True, 4), (True, True, 4), (True, True, 3)],
+)
+def test_pool_loss_is_invariant_to_batching_cropping_and_head_split(
+    sort_by_length, split_lm_head, batch_size,
+):
+    """Padding, batch composition and where the vocab projection happens are
+    scheduling choices — none of them may move a per-sample loss, and the
+    result must come back in DATASET order however the batches were run."""
+    transformers = pytest.importorskip("transformers")
+    from tag.core.reliability import compute_pool_loss
+
+    torch.manual_seed(1234)
+    model = transformers.GPT2LMHeadModel(
+        transformers.GPT2Config(
+            vocab_size=96, n_positions=64, n_embd=32, n_layer=2, n_head=2,
+        )
+    ).eval()
+    ds = _VarLenDataset()
+
+    got = compute_pool_loss(
+        model, ds, batch_size=batch_size, device="cpu",
+        sort_by_length=sort_by_length, split_lm_head=split_lm_head,
+    )
+    assert got.shape == (len(ds),)
+    assert torch.allclose(got, _reference_pool_loss(model, ds), atol=2e-5, rtol=0)

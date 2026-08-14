@@ -55,6 +55,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+from . import forward as fwd
 from .scorer import rank01
 from .utils import cuda_mem_str
 
@@ -144,43 +145,80 @@ def compute_pool_loss(
     progress_interval: int = 200,
     empty_cache_interval: int = 10,
     tag: str = "",
+    sort_by_length: bool = True,
+    split_lm_head: bool = True,
+    head_chunk_tokens: int = fwd.DEFAULT_HEAD_CHUNK,
 ) -> torch.Tensor:
     """Per-sample mean CE loss over response tokens for the whole pool.
 
     One forward pass, loss only — used for the counterfactual pool, where
-    entropy/hidden states are not needed. Roughly half the memory of
-    ``collect_episode`` per batch (no entropy log-softmax, no
-    output_hidden_states).
+    entropy/hidden states are not needed.
+
+    The pass is scheduled by :mod:`tag.core.forward`: padding is cropped per
+    batch, records of similar length share a batch, and only response
+    positions are projected to the vocabulary. All three are arithmetically
+    neutral for a right-padded causal LM — see that module — and the result
+    is in dataset order regardless of the order the batches ran in. Set
+    ``sort_by_length=False`` / ``split_lm_head=False`` to run the plain path.
     """
     was_training = model.training
     model.eval()
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False,
-        num_workers=0, pin_memory=True, drop_last=False,
+
+    n_records = len(dataset)
+    plan = (
+        fwd.length_sorted_batches(dataset, batch_size)
+        if sort_by_length and n_records > batch_size
+        else None
     )
-    losses = []
+    if plan is None:
+        loader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=False,
+            num_workers=0, pin_memory=True, drop_last=False,
+        )
+        emit_order = list(range(n_records))
+    else:
+        batches, emit_order = plan
+        loader = DataLoader(
+            dataset, batch_sampler=batches, num_workers=0, pin_memory=True,
+        )
+
+    response_ce = fwd.ResponseCE(
+        model, split_head=split_lm_head, chunk=head_chunk_tokens, tag=tag,
+    )
+
+    out_loss = torch.zeros(n_records, dtype=torch.float32)
     t0 = time.time()
     total_batches = len(loader)
+    cursor = 0
     for step, batch in enumerate(loader, start=1):
         input_ids = batch["input_ids"].to(device, non_blocking=True)
         attention_mask = batch["attention_mask"].to(device, non_blocking=True)
         labels = batch["labels"].to(device, non_blocking=True)
-        out = model(input_ids=input_ids, attention_mask=attention_mask)
-        shift_logits = out.logits[:, :-1, :]
+        B = input_ids.size(0)
+        input_ids, attention_mask, labels, t_eff = fwd.crop_padded_batch(
+            input_ids, attention_mask, labels,
+        )
         shift_labels = labels[:, 1:]
-        resp_mask = (shift_labels != -100).float()
-        n_resp = resp_mask.sum(dim=-1).clamp(min=1)
-        B = shift_logits.size(0)
-        batch_loss = torch.empty(B, dtype=torch.float32, device=input_ids.device)
+        sel = shift_labels != -100
+        tgt = shift_labels[sel]
+        counts = sel.sum(dim=1)
+
+        ce_all = response_ce(input_ids, attention_mask, sel, tgt)
+
+        # Per-row mean over that row's response positions. segment_reduce
+        # would need a fixed layout; the flattened CE is already row-major,
+        # so a padded scatter-add is both exact and one kernel.
+        row_of = torch.repeat_interleave(
+            torch.arange(B, device=ce_all.device), counts,
+        )
+        sums = torch.zeros(B, dtype=torch.float32, device=ce_all.device)
+        sums.scatter_add_(0, row_of, ce_all)
+        means = (sums / counts.clamp(min=1).float()).cpu()
         for i in range(B):
-            ce = F.cross_entropy(
-                shift_logits[i].float(),
-                shift_labels[i].clamp(min=0),
-                reduction="none",
-            )
-            batch_loss[i] = (ce * resp_mask[i]).sum() / n_resp[i]
-        losses.append(batch_loss.detach().cpu())
-        del out, input_ids, attention_mask, labels, shift_logits, shift_labels
+            out_loss[emit_order[cursor]] = means[i]
+            cursor += 1
+
+        del input_ids, attention_mask, labels, shift_labels, sel, tgt, counts, ce_all
         if (
             torch.cuda.is_available()
             and empty_cache_interval > 0
@@ -189,13 +227,14 @@ def compute_pool_loss(
             torch.cuda.empty_cache()
         if step == 1 or step % progress_interval == 0 or step == total_batches:
             logger.info(
-                "compute_pool_loss%s | batch=%d/%d | elapsed=%.1fmin | %s",
-                f" [{tag}]" if tag else "", step, total_batches,
+                "compute_pool_loss%s | batch=%d/%d | bs=%d | T=%d | "
+                "elapsed=%.1fmin | %s",
+                f" [{tag}]" if tag else "", step, total_batches, B, t_eff,
                 (time.time() - t0) / 60, cuda_mem_str(),
             )
     if was_training:
         model.train()
-    return torch.cat(losses, dim=0)
+    return out_loss
 
 
 # ---------------------------------------------------------------------------

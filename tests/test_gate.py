@@ -648,3 +648,247 @@ def test_prefix_tokens_replaces_the_sequence_leg_and_is_calibration_bound():
     # value must not be reused at another.
     from tag.pipelines.selection import _CALIBRATION_BOUND_FIELDS
     assert "prefix_tokens" in _CALIBRATION_BOUND_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# compute_pool_token_losses: the fast paths must be arithmetically neutral
+# ---------------------------------------------------------------------------
+
+class _VarLenDataset(torch.utils.data.Dataset):
+    """Right-padded records of DIFFERENT real lengths, as tokenize_alpaca emits.
+
+    Every record is padded to the same ``T``; that padding is exactly what
+    the cropping and length-sorting optimisations are meant to skip, so a
+    fixed-length fixture would not exercise them.
+    """
+
+    def __init__(self, n=11, T=24, vocab=96, seed=0):
+        g = torch.Generator().manual_seed(seed)
+        self.T = T
+        self.input_ids = torch.zeros(n, T, dtype=torch.long)
+        self.attention_mask = torch.zeros(n, T, dtype=torch.long)
+        self.labels = torch.full((n, T), -100, dtype=torch.long)
+        self.real_len = []
+        for i in range(n):
+            L = 6 + (i * 5) % (T - 6)          # 6 .. T-1, deliberately unsorted
+            p = max(2, L // 3)                  # prompt length
+            ids = torch.randint(0, vocab, (L,), generator=g)
+            self.input_ids[i, :L] = ids
+            self.attention_mask[i, :L] = 1
+            self.labels[i, p:L] = ids[p:]
+            self.real_len.append(L)
+
+    def __len__(self):
+        return self.input_ids.size(0)
+
+    def __getitem__(self, i):
+        return {
+            "input_ids": self.input_ids[i],
+            "attention_mask": self.attention_mask[i],
+            "labels": self.labels[i],
+        }
+
+
+def _reference_token_losses(model, ds, *, eos_token_id, drop_trailing_eos):
+    """One unpadded record at a time — no batching, no cropping, no split head."""
+    import torch.nn.functional as F
+
+    rows = []
+    with torch.no_grad():
+        for i in range(len(ds)):
+            it = ds[i]
+            L = int(it["attention_mask"].sum())
+            ids = it["input_ids"][:L].unsqueeze(0)
+            lab = it["labels"][:L]
+            logits = model(input_ids=ids).logits[0, :-1, :]
+            sel = lab[1:] != -100
+            tgt = lab[1:][sel]
+            ce = F.cross_entropy(logits[sel].float(), tgt, reduction="none")
+            if drop_trailing_eos and tgt.numel() and int(tgt[-1]) == int(eos_token_id):
+                ce = ce[:-1]
+            rows.append(ce)
+    n = torch.tensor([r.numel() for r in rows], dtype=torch.long)
+    out = torch.zeros(len(rows), max(1, int(n.max())), dtype=torch.float32)
+    for i, r in enumerate(rows):
+        out[i, : r.numel()] = r
+    return out, n
+
+
+@pytest.mark.parametrize(
+    "sort_by_length,split_lm_head,batch_size,head_chunk_tokens",
+    [
+        (False, False, 4, 4096),   # closest to the pre-optimisation path
+        (True, False, 4, 4096),    # length-sorted batching only
+        (False, True, 4, 4096),    # response-only lm_head only
+        (True, True, 4, 4096),     # both, as shipped
+        (True, True, 3, 5),        # chunked head, ragged final batch
+        (True, True, 32, 4096),    # one batch holding every record
+    ],
+)
+def test_token_losses_are_invariant_to_batching_cropping_and_head_split(
+    sort_by_length, split_lm_head, batch_size, head_chunk_tokens,
+):
+    """Padding, batch composition and where the vocab projection happens are
+    scheduling choices. If any of them moves a single per-token NLL, every
+    gate number downstream moves with it."""
+    transformers = pytest.importorskip("transformers")
+    from tag.core.gate import compute_pool_token_losses
+
+    torch.manual_seed(1234)
+    model = transformers.GPT2LMHeadModel(
+        transformers.GPT2Config(
+            vocab_size=96, n_positions=64, n_embd=32, n_layer=2, n_head=2,
+        )
+    ).eval()
+    ds = _VarLenDataset()
+
+    ref_tok, ref_n = _reference_token_losses(
+        model, ds, eos_token_id=0, drop_trailing_eos=False,
+    )
+    tok, n = compute_pool_token_losses(
+        model, ds, batch_size=batch_size, device="cpu",
+        eos_token_id=0, drop_trailing_eos=False,
+        sort_by_length=sort_by_length, split_lm_head=split_lm_head,
+        head_chunk_tokens=head_chunk_tokens,
+    )
+    # Row ORDER is dataset order regardless of the order the batches ran in.
+    assert torch.equal(n, ref_n)
+    assert tok.shape == ref_tok.shape
+    assert torch.allclose(tok, ref_tok, atol=2e-4, rtol=0)
+
+
+def test_length_sorted_batching_keeps_rows_with_their_own_records():
+    """The failure mode of sorted batching is a permuted result that still
+    looks plausible. Pin it with per-record lengths, which are unique here."""
+    transformers = pytest.importorskip("transformers")
+    from tag.core.gate import compute_pool_token_losses
+
+    torch.manual_seed(7)
+    model = transformers.GPT2LMHeadModel(
+        transformers.GPT2Config(
+            vocab_size=96, n_positions=64, n_embd=32, n_layer=2, n_head=2,
+        )
+    ).eval()
+    ds = _VarLenDataset(n=9, T=30)
+    expect = torch.tensor(
+        [L - max(2, L // 3) for L in ds.real_len], dtype=torch.long,
+    )
+    _, n = compute_pool_token_losses(
+        model, ds, batch_size=2, device="cpu",
+        eos_token_id=0, drop_trailing_eos=False, sort_by_length=True,
+    )
+    assert torch.equal(n, expect)
+
+
+def test_split_head_falls_back_when_the_model_post_processes_logits(caplog):
+    """A family that transforms logits after the head (Cohere's ``logit_scale``,
+    Gemma-2's soft-capping) would make the response-only projection wrong. The
+    first-batch check has to catch that rather than silently return different
+    numbers."""
+    import logging
+
+    transformers = pytest.importorskip("transformers")
+    from tag.core.gate import compute_pool_token_losses
+
+    torch.manual_seed(21)
+    base = transformers.GPT2LMHeadModel(
+        transformers.GPT2Config(
+            vocab_size=96, n_positions=64, n_embd=32, n_layer=2, n_head=2,
+        )
+    ).eval()
+
+    # A multiplicative scale would be invisible on a randomly-initialised
+    # model, whose logits are ~0 and whose softmax is near-uniform either
+    # way. A per-vocabulary bias moves the CE by order 1 regardless.
+    class _LogitBiased(type(base)):
+        def forward(self, *a, **kw):
+            out = super().forward(*a, **kw)
+            out.logits = out.logits + torch.linspace(0.0, 4.0, out.logits.size(-1))
+            return out
+
+    base.__class__ = _LogitBiased
+    ds = _VarLenDataset(n=6, T=20)
+
+    with caplog.at_level(logging.WARNING, logger="tag.core.gate"):
+        tok, n = compute_pool_token_losses(
+            base, ds, batch_size=3, device="cpu",
+            eos_token_id=0, drop_trailing_eos=False, split_lm_head=True,
+        )
+    assert any("full logits" in r.getMessage() for r in caplog.records)
+
+    ref_tok, ref_n = compute_pool_token_losses(
+        base, ds, batch_size=3, device="cpu",
+        eos_token_id=0, drop_trailing_eos=False, split_lm_head=False,
+    )
+    assert torch.equal(n, ref_n)
+    assert torch.allclose(tok, ref_tok, atol=1e-5, rtol=0)
+
+
+def test_trailing_eos_is_dropped_per_row_not_per_batch():
+    """The vectorised EOS test replaced a per-row ``.item()``. Rows that end
+    in EOS and rows that do not have to be distinguished inside one batch."""
+    transformers = pytest.importorskip("transformers")
+    from tag.core.gate import compute_pool_token_losses
+
+    torch.manual_seed(3)
+    model = transformers.GPT2LMHeadModel(
+        transformers.GPT2Config(
+            vocab_size=96, n_positions=64, n_embd=32, n_layer=2, n_head=2,
+        )
+    ).eval()
+    ds = _VarLenDataset(n=8, T=24)
+    eos = 5
+    ends_with_eos = []
+    for i in range(len(ds)):
+        L = ds.real_len[i]
+        if i % 2 == 0:
+            ds.input_ids[i, L - 1] = eos
+            ds.labels[i, L - 1] = eos
+        ends_with_eos.append(int(ds.labels[i, L - 1]) == eos)
+
+    _, n_keep = compute_pool_token_losses(
+        model, ds, batch_size=4, device="cpu",
+        eos_token_id=eos, drop_trailing_eos=False, sort_by_length=True,
+    )
+    _, n_drop = compute_pool_token_losses(
+        model, ds, batch_size=4, device="cpu",
+        eos_token_id=eos, drop_trailing_eos=True, sort_by_length=True,
+    )
+    expect = n_keep - torch.tensor([int(b) for b in ends_with_eos])
+    assert torch.equal(n_drop, expect)
+
+
+def test_split_head_falls_back_when_the_bare_decoder_call_raises(caplog):
+    """Some wrappers only work through ``forward`` — the submodule alone
+    raises. On a cluster run that must degrade to the slow path, not die."""
+    import logging
+
+    transformers = pytest.importorskip("transformers")
+    from tag.core.gate import compute_pool_token_losses
+
+    torch.manual_seed(11)
+    model = transformers.GPT2LMHeadModel(
+        transformers.GPT2Config(
+            vocab_size=96, n_positions=64, n_embd=32, n_layer=2, n_head=2,
+        )
+    ).eval()
+
+    class _Hostile(torch.nn.Module):
+        def forward(self, *a, **kw):
+            raise RuntimeError("this submodule is not callable directly")
+
+    model.get_decoder = lambda: _Hostile()
+    ds = _VarLenDataset(n=6, T=20)
+
+    with caplog.at_level(logging.WARNING, logger="tag.core.forward"):
+        tok, n = compute_pool_token_losses(
+            model, ds, batch_size=3, device="cpu",
+            eos_token_id=0, drop_trailing_eos=False, split_lm_head=True,
+        )
+    assert any("could not run" in r.getMessage() for r in caplog.records)
+
+    ref_tok, ref_n = _reference_token_losses(
+        model, ds, eos_token_id=0, drop_trailing_eos=False,
+    )
+    assert torch.equal(n, ref_n)
+    assert torch.allclose(tok, ref_tok, atol=2e-4, rtol=0)

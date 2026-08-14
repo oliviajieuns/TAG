@@ -96,6 +96,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+from . import forward as fwd
 from .utils import cuda_mem_str
 
 logger = logging.getLogger(__name__)
@@ -602,6 +603,13 @@ class GateConfig:
 # ---------------------------------------------------------------------------
 # Per-token forward (the only GPU work the gate does)
 # ---------------------------------------------------------------------------
+#
+# The scheduling of this pass — batch composition, how much padding is fed
+# to the model, where the vocabulary projection happens — lives in
+# tag.core.forward and is shared with compute_pool_loss. Every choice there
+# is arithmetically neutral for a right-padded causal LM, which is the only
+# reason it is acceptable here: the gate's numbers are the paper's numbers,
+# and a faster forward that moves them is not a faster forward.
 
 @torch.no_grad()
 def compute_pool_token_losses(
@@ -615,6 +623,9 @@ def compute_pool_token_losses(
     tag: str = "",
     eos_token_id: Optional[int] = None,
     drop_trailing_eos: bool = True,
+    sort_by_length: bool = True,
+    split_lm_head: bool = True,
+    head_chunk_tokens: int = 2048,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Per-token NLL over response tokens for the whole pool.
 
@@ -627,6 +638,15 @@ def compute_pool_token_losses(
             appended EOS token (``GateConfig.include_eos = False``). The
             check is on the label id, so a budget-truncated response — whose
             EOS was cut off — keeps all of its tokens.
+        sort_by_length: group records of similar length into the same batch
+            so per-batch cropping removes more padding. Pure scheduling;
+            the returned tensors are in dataset order either way.
+        split_lm_head: project only the response positions to the
+            vocabulary instead of all of them. Verified against the
+            full-logits path on the first batch and switched off if the two
+            disagree (see ``tag.core.forward.SPLIT_HEAD_TOL``).
+        head_chunk_tokens: rows of the vocabulary projection to hold at
+            once. The fp32 CE block is ``chunk * vocab * 4`` bytes.
 
     Returns:
         ``(token_loss, n_tokens)`` where ``token_loss`` is a padded
@@ -638,39 +658,88 @@ def compute_pool_token_losses(
         raise ValueError(
             "compute_pool_token_losses: drop_trailing_eos=True requires eos_token_id"
         )
+    if head_chunk_tokens < 1:
+        raise ValueError(
+            f"compute_pool_token_losses: head_chunk_tokens must be >= 1, "
+            f"got {head_chunk_tokens}"
+        )
     was_training = model.training
     model.eval()
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False,
-        num_workers=0, pin_memory=True, drop_last=False,
+
+    n_records = len(dataset)
+    plan = (
+        fwd.length_sorted_batches(dataset, batch_size)
+        if sort_by_length and n_records > batch_size
+        else None
     )
-    rows: List[torch.Tensor] = []
+    if plan is None:
+        loader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=False,
+            num_workers=0, pin_memory=True, drop_last=False,
+        )
+        emit_order = list(range(n_records))
+    else:
+        batches, emit_order = plan
+        loader = DataLoader(
+            dataset, batch_sampler=batches, num_workers=0, pin_memory=True,
+        )
+
+    response_ce = fwd.ResponseCE(
+        model, split_head=split_lm_head, chunk=head_chunk_tokens, tag=tag,
+    )
+
+    rows: List[torch.Tensor] = [torch.zeros(0, dtype=torch.float32)] * n_records
     t0 = time.time()
     total_batches = len(loader)
     n_dropped_eos = 0
+    cursor = 0
+    tokens_seen = 0
+    padded_seen = 0
     for step, batch in enumerate(loader, start=1):
         input_ids = batch["input_ids"].to(device, non_blocking=True)
         attention_mask = batch["attention_mask"].to(device, non_blocking=True)
         labels = batch["labels"].to(device, non_blocking=True)
-        out = model(input_ids=input_ids, attention_mask=attention_mask)
-        shift_logits = out.logits[:, :-1, :]
+
+        B, T = input_ids.shape
+        input_ids, attention_mask, labels, t_eff = fwd.crop_padded_batch(
+            input_ids, attention_mask, labels,
+        )
+        tokens_seen += B * t_eff
+        padded_seen += B * T
+
         shift_labels = labels[:, 1:]
-        resp_mask = shift_labels != -100
-        B = shift_logits.size(0)
+        sel = shift_labels != -100
+        tgt = shift_labels[sel]
+        counts = sel.sum(dim=1)
+
+        ce_all = response_ce(input_ids, attention_mask, sel, tgt)
+
+        # Vectorised trailing-EOS test: one transfer per batch instead of
+        # one ``.item()`` per row.
+        if drop_trailing_eos and tgt.numel():
+            ends = counts.cumsum(0) - 1
+            is_eos = (tgt[ends.clamp(min=0)] == int(eos_token_id)) & (counts > 0)
+        else:
+            is_eos = torch.zeros_like(counts, dtype=torch.bool)
+
+        counts_cpu = counts.cpu().tolist()
+        is_eos_cpu = is_eos.cpu().tolist()
+        ce_cpu = ce_all.detach().cpu().float()
+        off = 0
         for i in range(B):
-            sel = resp_mask[i]
-            if not bool(sel.any()):
-                rows.append(torch.zeros(0, dtype=torch.float32))
-                continue
-            tgt = shift_labels[i][sel]
-            ce = F.cross_entropy(
-                shift_logits[i][sel].float(), tgt, reduction="none",
-            )
-            if drop_trailing_eos and int(tgt[-1].item()) == int(eos_token_id):
-                ce = ce[:-1]
+            k = int(counts_cpu[i])
+            r = ce_cpu[off : off + k]
+            off += k
+            if k and is_eos_cpu[i]:
+                r = r[:-1]
                 n_dropped_eos += 1
-            rows.append(ce.detach().cpu().float())
-        del out, input_ids, attention_mask, labels, shift_logits, shift_labels, resp_mask
+            rows[emit_order[cursor]] = r.clone()
+            cursor += 1
+
+        del (
+            input_ids, attention_mask, labels, shift_labels, sel, tgt,
+            counts, is_eos, ce_all, ce_cpu,
+        )
         if (
             torch.cuda.is_available()
             and empty_cache_interval > 0
@@ -679,8 +748,9 @@ def compute_pool_token_losses(
             torch.cuda.empty_cache()
         if step == 1 or step % progress_interval == 0 or step == total_batches:
             logger.info(
-                "compute_pool_token_losses%s | batch=%d/%d | elapsed=%.1fmin | %s",
-                f" [{tag}]" if tag else "", step, total_batches,
+                "compute_pool_token_losses%s | batch=%d/%d | bs=%d | T=%d | "
+                "elapsed=%.1fmin | %s",
+                f" [{tag}]" if tag else "", step, total_batches, B, t_eff,
                 (time.time() - t0) / 60, cuda_mem_str(),
             )
     if was_training:
@@ -691,10 +761,12 @@ def compute_pool_token_losses(
     for i, r in enumerate(rows):
         if r.numel():
             token_loss[i, : r.numel()] = r
+    saved = 1.0 - tokens_seen / max(padded_seen, 1)
     logger.info(
-        "compute_pool_token_losses%s | done | n=%d | T_max=%d | dropped_eos=%d | %.1fmin",
+        "compute_pool_token_losses%s | done | n=%d | T_max=%d | dropped_eos=%d "
+        "| padding skipped=%.0f%% | split_head=%s | %.1fmin",
         f" [{tag}]" if tag else "", len(rows), t_max, n_dropped_eos,
-        (time.time() - t0) / 60,
+        100.0 * saved, response_ce.use_split, (time.time() - t0) / 60,
     )
     return token_loss, n_tokens
 

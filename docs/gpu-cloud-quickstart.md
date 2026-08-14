@@ -270,6 +270,37 @@ The shards are independent processes pinned to one GPU each, not torchrun —
 no process group, no rendezvous, so one dead shard is re-runnable on its own
 (the merge step prints the exact command) and the job survives pre-emption.
 
+### How fast the pass should be
+
+Each shard's per-batch line reports the batch size and the sequence length it
+actually ran, and the closing line reports how much padding was skipped:
+
+```
+compute_pool_token_losses [true[0]] | batch=1/465 | bs=32 | T=496 | ...
+compute_pool_token_losses [true[0]] | done | n=3720 | padding skipped=74% | split_head=True | 4.6min
+```
+
+Three things to check when a pass is slower than expected:
+
+* **`bs=` is not 32.** `_shared_7b.yaml` defaults `episode_batch_size` to
+  `${oc.env:TAG_EPISODE_BS_7B,8}` — the small-GPU value. `env.sh` now exports
+  32, but only into the shell that sourced it; launching from a different
+  tmux pane picks up the 8 and takes four times as long. The script warns
+  when the batch is under 16 on a >40 GB card.
+* **`padding skipped=` is near 0%.** Records are padded to `max_seq_len`
+  (512) and cropped per batch, so a healthy Alpaca-shaped pool skips 70-80%.
+  A low number means the length-sorted batching fell back to sequential
+  order — the pass still gives the same answer, just slowly.
+* **`split_head=False`.** The response-only vocabulary projection was
+  verified against the full-logits path on the first batch and rejected;
+  the preceding warning says why. Correct, but it gives up the memory
+  headroom that lets the batch size go up.
+
+None of these change the numbers — see `tag/core/forward.py` for why each
+one is arithmetically neutral, and
+`tests/test_gate.py::test_token_losses_are_invariant_to_batching_cropping_and_head_split`
+for the pin.
+
 Because a shared cache is reachable by runs it was never meant for, the
 producer stamps it with the pool and backbone it was computed on and the
 consumer refuses a mismatch:

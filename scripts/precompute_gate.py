@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -195,6 +196,27 @@ def run_shard(args, cfg) -> None:
     gcfg = _build_gate_cfg(tag_cfg, 1.0)   # scale is applied at merge time
     bs = int(args.batch_size or cfg.get("episode_batch_size", 1))
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # The batch size has silently fallen back to the small-GPU default twice,
+    # because TAG_EPISODE_BS_7B was exported in a different shell than the one
+    # that launched this. A 4x slowdown that only shows up as "why is this
+    # taking so long" deserves a line of its own, and a warning when the GPU
+    # is plainly bigger than the batch.
+    logger.info(
+        "batch_size=%d (source: %s) | shard records=%d",
+        bs, "--batch-size" if args.batch_size else
+        f"config episode_batch_size (TAG_EPISODE_BS_7B={os.environ.get('TAG_EPISODE_BS_7B', 'unset')})",
+        len(idx),
+    )
+    if device == "cuda" and bs < 16:
+        gib = torch.cuda.get_device_properties(0).total_memory / 2**30
+        if gib > 40:
+            logger.warning(
+                "batch_size=%d on a %.0f GB GPU — that is the small-GPU "
+                "default. Export TAG_EPISODE_BS_7B=32 (or pass --batch-size) "
+                "in THIS shell before launching, or the pass runs ~%.0fx "
+                "longer than it needs to.",
+                bs, gib, 32.0 / max(bs, 1),
+            )
     t0 = time.time()
 
     tok_true, n_true = gatelib.compute_pool_token_losses(

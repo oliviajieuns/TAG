@@ -126,6 +126,14 @@ export HF_HOME="${HF_HOME:-$TAG_WORKSPACE/hf_home}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-$TAG_WORKSPACE/runs}"
 export DATA_CACHE="${DATA_CACHE:-$TAG_WORKSPACE/cache}"
 
+# Forward-only batch size for the pool scoring passes. The config default
+# (_shared_7b.yaml: ${oc.env:TAG_EPISODE_BS_7B,8}) is sized for a small GPU,
+# and until now the 32 was set only in n9_env.sh — so a shell that sourced
+# THIS file directly silently ran the gate precompute at bs=8 and took four
+# times as long. Twice. The default belongs where every entry point sees it.
+export TAG_EPISODE_BS="${TAG_EPISODE_BS:-64}"        # 0.5B
+export TAG_EPISODE_BS_7B="${TAG_EPISODE_BS_7B:-32}"  # 7B
+
 # The PCA in TrajectoryAnchor.update runs torch.linalg.eigh per layer; on
 # hosts with many cores each call spawns OMP_NUM_THREADS workers in tight
 # succession and can blow past the container's pids limit.
@@ -154,6 +162,7 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] gate ref 0.5b: $TAG_GATE_REF  [$(_tag_mark "$TAG_GATE_REF")]"
   echo "[tag-env] gate ref 7b  : $TAG_GATE_REF_7B  [$(_tag_mark "$TAG_GATE_REF_7B")]"
   echo "[tag-env] outputs   : $OUTPUT_ROOT"
+  echo "[tag-env] fwd batch : 0.5b=$TAG_EPISODE_BS  7b=$TAG_EPISODE_BS_7B"
   if command -v nvidia-smi >/dev/null 2>&1; then
     echo "[tag-env] gpus      : $(nvidia-smi --query-gpu=name --format=csv,noheader | tr '\n' ',' | sed 's/,$//')"
   fi
