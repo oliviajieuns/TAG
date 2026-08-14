@@ -30,7 +30,12 @@ selection:
     # TAG_GATE_REF across scales made picking the wrong one silent.
     gate_ref_file: ${oc.env:TAG_GATE_REF_7B,}
     gate_cache_file: ${oc.env:TAG_GATE_CACHE,}
-    # 7B pools are large and the token-loss tensors are fp16 but still ~2 x
-    # N x T_max bytes per pool; keep them only if you intend a W sweep at 7B
-    # (the sweep is normally done at 0.5B and the chosen W carried over).
-    store_token_losses: false
+    # Keep the per-token NLLs. They cost ~120 MB at this pool size (fp16,
+    # ~2 x N x T_max bytes per pool) and they are what makes every question
+    # about the support statistic answerable on CPU in seconds instead of
+    # another 4-GPU pass: the span-width sweep, the per-position profile
+    # (scripts/span_profile.py) and the statistic comparison
+    # (scripts/sweep_gate_statistic.py) all read them. Turning this off to
+    # save 120 MB cost a full recompute the first time a design question
+    # came up, which is a bad trade at any pool size.
+    store_token_losses: true

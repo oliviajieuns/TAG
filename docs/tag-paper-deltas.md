@@ -275,12 +275,44 @@ The pool-level consequence: the shipped gate reaches only AP 0.418 against a
 0.304 base (1.37×), and its \(G=0\) block is just 43.8% dirty — barely
 1.44× enriched.
 
-**Why the span argument failed.** It was never wrong that a localized
-corruption depresses one span; it is that the *clean* span minimum is just as
-depressed, because it is a minimum over \(M\) noisy ratios. Eq. 5\('\) fixed
-the resulting *rate* (5%, uniform in length) but could not manufacture
-*separation* between distributions that genuinely overlap — exactly the limit
-item B2 recorded, now realised in its strongest form.
+**Why the span argument failed — MEASURED** (`scripts/span_profile.py`, clean
+reference, W=16). The instruction's predictive contribution is concentrated
+almost entirely in the first response span. Mean per-token NLL by span index:
+
+| span \(m\) | \(\ell(y\mid u^+)\) | \(\ell(y\mid u^-)\) | gap |
+|---|---|---|---|
+| 0 | 1.455 | **5.835** | **4.380** |
+| 1 | 1.389 | 1.988 | 0.600 |
+| 2 | 1.336 | 1.632 | 0.296 |
+| ≥12 | 1.075 | 1.129 | **0.054** |
+
+The gap falls 7× from \(m=0\) to \(m=1\) and 80× by \(m\ge12\):
+\(\ell_k(y\mid u)\) conditions on the response prefix \(y_{<k}\) as well as on
+\(u\), so once the model has read the opening of \(y\) it infers the topic and
+predicts the remainder about as well under a wrong instruction as under the
+right one.
+
+A MINIMUM therefore never selects span 0 — it has the highest gain by
+construction. Among records with more than one span, \(\arg\min_m\) sits at
+span 0 about **1%** of the time (the 24.4% raw rate at \(m=0\) is almost
+entirely single-span records, where the minimum is forced). **Eq. 5 reads only
+the spans that carry no signal**, which is why its \(P_{05}\) is negative at
+every \(m\ge1\) (−0.19 to −0.33) for perfectly clean data.
+
+This also explains why \(\bar\Delta\) works: the sum is dominated by span 0
+(4.38 nats × 16 tokens ≈ 70 nats, against ~0.05 nats/token over the rest).
+
+**Per-position centring is not sufficient.** Subtracting a per-position null
+\(\mu(m)\) moves the clean tail's \(P_{05}\) only from −0.565 to −0.324, for
+two compounding reasons: a minimum over \(M\) positions each calibrated at
+\(\alpha\) still falls below zero with probability \(1-(1-\alpha)^M\), and —
+more fundamentally — centring spans that contain no signal yields unbiased
+noise, and *the minimum of noise is still noise*. Eq. 5\('\)'s \(M\)-centring
+handles the first; nothing handles the second.
+
+So this is B2's recorded limit in its strongest form, with the mechanism now
+identified: not "the distributions happen to overlap" but "the statistic is
+computed where there is nothing to see".
 
 **The corruption the spans were for is not caught by anything.**
 `wrong_answer` scores 0.0876 / 0.0903 / 0.0779 — all ≈ the 0.059 base. A
@@ -305,10 +337,18 @@ that arm; it differs from `tag_7b` in exactly one field.
 1. Report the per-type AP table above. It is the strongest evidence in the
    paper that the contrast works, and it is also the evidence that Eqs. 4-5
    do not.
-2. **Demote Eqs. 4-5 from the method to an ablation.** The main method
-   becomes \(\hat\Delta_i = \bar\Delta_i - \mu(M_i)\) — Eq. 3 with the
-   Eq. 5\('\) centring — with the span minimum reported as a variant that was
-   measured and rejected. Which configuration is "main" is settled by the
+2. **Replace the minimum, do not merely delete it.** The paper's intuition —
+   "a sequence average can hide a locally unsupported segment" — is sound; what
+   is wrong is *where* Eq. 5 looks. Since support is a prefix phenomenon, the
+   candidates worth measuring are the contrast restricted to the first \(n\)
+   response tokens, span 0 alone, and \(\bar\Delta\) itself;
+   `scripts/sweep_gate_statistic.py` evaluates all of them against the
+   corruption labels at once. On synthetic data with the measured decay
+   profile the ordering is prefix-8 (AP 0.921) > span-0 (0.906) >
+   \(\bar\Delta\) (0.392) > position-centred min (0.490) > raw min (0.306
+   ≈ base) — the real pool decides which holds here.
+   A prefix statistic would also be length-robust in a way \(\bar\Delta\) is
+   not, since \(\bar\Delta\) dilutes span 0's contribution as responses grow. Which configuration is "main" is settled by the
    end-to-end numbers (`tag_bar_7b` vs `tag_7b`), not by this table alone,
    but the table already rules out presenting the span minimum as a
    contribution.
