@@ -57,15 +57,23 @@ Exit code 0 means nothing failed; `--strict` also fails on warnings.
 
 ## Calibration is not optional
 
-The bootstrap's `calibrate` step derives the gate scale `s` from a **clean**
-reference pool. Skipping it makes the gate self-calibrate in-pool, which
-reintroduces exactly the pool dependence that anchoring at `Δ̂ = 0` removes —
-`G` then depends on how dirty a sample's neighbours are. The code warns
-loudly, preflight warns, and the smoke report warns, but nothing stops you:
-it is fine for a smoke test and wrong for a reported run.
+The bootstrap's `calibrate` step derives **two** things from a **clean**
+reference pool, and they are not interchangeable:
 
-If `TADS_GATE_REF` names a file that does not exist, the run fails with the
-exact command to generate it rather than silently falling back.
+- the gate scale `s` (Eq. 6). Skipping it makes the gate self-calibrate
+  in-pool, which reintroduces the pool dependence that anchoring at `Δ̂ = 0`
+  removes — `G` then depends on how dirty a sample's neighbours are. The code
+  warns loudly at every layer but nothing stops you: fine for a smoke test,
+  wrong for a reported run.
+- the null curve `μ(M)` (Eq. 5′). This one has **no** in-pool fallback and no
+  warning path — a missing curve is a hard error. Fitting `μ` on a 30%-dirty
+  candidate pool would absorb the exact signal the gate looks for, so the
+  only options the code offers are a clean reference or
+  `null_correction: false` (the declared ablation).
+
+If `TADS_GATE_REF_7B` names a file that does not exist, or one written before
+the null curve existed, the run fails with the exact command to regenerate it
+rather than silently falling back.
 
 ## Reading the smoke report
 
@@ -133,10 +141,20 @@ checkpoint. Either restore `tag_gate_cache.pt` into the run dir, or start a
 fresh run. `tads.tag.allow_late_gate: true` accepts a wrong-checkpoint `G`
 explicitly, which is a deliberate escape hatch, not a fix.
 
-**Over 90% of the pool vetoed** — almost always an uncalibrated scale. Check
-that `TADS_GATE_REF` exists and that the calibration reported a healthy
-fraction of positive Δ̂ (it warns below 80%). A genuinely low fraction on a
-*clean* pool means the counterfactuals are not actually unrelated.
+**Over 90% of the pool vetoed** — with `null_correction: true` this cannot be
+a scale problem, because the veto is decided at `Δ̂ ≤ 0`, before `s` is
+consulted. Check in this order: (1) is the reference from THIS backbone and
+THIS pool? (2) does the calibration's per-bin table read ~`target_veto`
+everywhere? (3) is `Δ̄` mean positive? A negative `Δ̄` means the reference is
+contaminated or the counterfactuals are not actually unrelated, which no
+correction fixes. `compute_gate` warns when the pool rate exceeds 50% or
+falls below half of `target_veto`.
+
+**Most of the pool demoted to `c_trunc`** — the completeness heuristic
+misfiring, not the gate. Run `scripts/audit_completeness.py --ablate`: if the
+false-positive rate on the uncorrupted subset exceeds the true truncation
+rate, the view is costing more than it buys (see `docs/tag-paper-deltas.md`
+item B4).
 
 **OOM during the gate forward** — lower `episode_batch_size`; the token-level
 pass keeps a per-token vector per sample rather than a scalar.
@@ -158,6 +176,22 @@ bash   scripts/gpu_cloud/bootstrap.sh all7b      # +Qwen2.5-7B (~15 GB), 7B cali
 # backbone's calibration silent.
 export TADS_EPISODE_BS_7B=32
 
+# Pick W from the calibration, on CPU, in seconds. The calibrate step keeps
+# the per-token NLLs, so every W is re-derived without a forward pass.
+python scripts/sweep_gate_config.py --ref $TADS_GATE_REF_7B \
+    --span-tokens 16,32,64,128
+# If the winner is not the config's W, refit the reference at that W (still
+# no GPU) and edit tads.tag.span_tokens in configs/methods/tag.yaml to match:
+#   python scripts/sweep_gate_config.py --ref $TADS_GATE_REF_7B \
+#       --span-tokens 32 --refit-out $POOLS/clean_ref/delta_hat_7b_W32.pt
+#   export TADS_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b_W32.pt
+
+# Completeness is a five-fold demotion decided by a string heuristic; check
+# its false-positive rate on THIS pool before running four arms on it.
+python scripts/audit_completeness.py --ablate \
+    --pool $POOLS/composite20/pool.json \
+    --manifest $POOLS/composite20/manifest.json
+
 python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml
 
 bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml
@@ -165,6 +199,35 @@ export TADS_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt
 
 SCALE=7b bash scripts/run_lowq_all_arms.sh 42
 ```
+
+## Reading the calibration output
+
+The calibrate step prints two veto rates and they mean different things.
+
+```
+RAW  Δ̂ = min(Δ̄, Δ^min):  39.6% positive | Δ̄ mean +0.1083 | Δ^min mean -0.2653
+  ^ Δ̄ is healthy but the RAW tail min is not: that is Eq. 5's
+    order-statistic drift (min over M spans), not a contaminated reference.
+Eq.5' null correction ON (target_veto=0.050): clean veto rate 5.0%
+per-bin clean veto rate (should all be ~5.0%):
+  M in [1, 3]  | n=  8123 | mu=+0.0412 | veto=5.0%
+  ...
+```
+
+The **raw** line diagnoses the data: a healthy `Δ̄` with a deeply negative
+`Δ^min` is the length artifact Eq. 5′ exists to remove. A *negative* `Δ̄`
+would be a different problem entirely — a contaminated reference pool or
+counterfactuals that are not actually unrelated — and no correction fixes
+that.
+
+The **per-bin** table is the check that the correction worked. All bins
+should read ~`target_veto`; a bin that drifts is under-resolved, which means
+the reference pool is too small at that length.
+
+`target_veto` is the dial for "how much should the gate reject". It applies
+to the *clean reference*; the candidate pool's veto rate will be higher by
+roughly its dirty fraction, and `compute_gate` warns if it lands far outside
+that expectation.
 
 ## Why one arm per GPU, not one arm across four
 

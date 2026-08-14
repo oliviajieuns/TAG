@@ -33,8 +33,13 @@ from tads.core.gate import (
 
 
 def _cfg(**kw):
+    # null_correction is OFF by default here so that each test below pins the
+    # property it is actually about (Eqs. 3-6 on the raw statistic) rather
+    # than the interaction of that property with Eq. 5' centring. The
+    # correction has its own section at the bottom of this file, and the
+    # PRODUCTION default is on — see test_gate_config_defaults_to_corrected.
     base = dict(span_tokens=4, tau=0.5, scale=0.2, min_span_tokens=2,
-                min_common_tokens=4)
+                min_common_tokens=4, null_correction=False)
     base.update(kw)
     return GateConfig(**base)
 
@@ -417,3 +422,187 @@ def test_shared_cache_round_trips_through_an_explicit_path(tmp_path):
     assert back is not None
     assert back["identity"] == ident
     assert torch.allclose(back["gate"], res["gate"])
+
+
+# ---------------------------------------------------------------------------
+# Eq. 5' — length-conditional null correction
+# ---------------------------------------------------------------------------
+
+def _length_varying_pool(n=6000, seed=0):
+    """A CLEAN pool whose only structure is that responses vary in length.
+
+    Every sample has the same per-token instruction dependency (the
+    counterfactual costs 12.5% more per token) and the same per-token noise.
+    Any length dependence in the veto rate is therefore an artifact of the
+    statistic, not of the data — which is exactly what Eq. 5' is about.
+    """
+    g = torch.Generator().manual_seed(seed)
+    lens = torch.clamp(
+        torch.distributions.LogNormal(4.3, 0.9).sample((n,)).long(), 16, 400,
+    )
+    t_max = int(lens.max())
+    mask = torch.arange(t_max).unsqueeze(0) < lens.unsqueeze(1)
+    base = torch.rand(n, t_max, generator=g) * 1.5 + 1.0
+    noise_a = 0.35 * torch.randn(n, t_max, generator=g)
+    noise_b = 0.35 * torch.randn(n, t_max, generator=g)
+    true = torch.where(mask, base + noise_a, torch.zeros(1)).clamp(min=0.01)
+    cf = torch.where(mask, base * 1.125 + noise_b, torch.zeros(1)).clamp(min=0.01)
+    return true, lens, cf
+
+
+def test_raw_tail_min_veto_rate_drifts_with_response_length():
+    """The pathology, pinned. Without this the correction has no motivation.
+
+    Same per-token dependency at every length, yet the uncorrected Eq. 5
+    vetoes the longest quintile several times more often than the shortest —
+    because Delta^min is a minimum over M = ceil(n/W) spans and M grows.
+    """
+    from tads.core.gate import GateConfig, gate_components
+
+    true, lens, cf = _length_varying_pool()
+    cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
+    raw = gate_components(true, lens, cf, lens, cfg=cfg)["delta_hat"]
+    quint = torch.tensor_split(torch.argsort(lens.float()), 5)
+    short = float((raw[quint[0]] <= 0).float().mean())
+    long_ = float((raw[quint[-1]] <= 0).float().mean())
+    assert long_ > 2.5 * short, (short, long_)
+
+
+def test_null_correction_pins_the_clean_veto_rate_in_every_length_bin():
+    from tads.core.gate import GateConfig, fit_calibration, gate_components
+
+    true, lens, cf = _length_varying_pool()
+    cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
+    comp = gate_components(true, lens, cf, lens, cfg=cfg)
+    fit = fit_calibration(
+        comp["delta_hat"], comp["n_spans"], span_tokens=16, target_veto=0.05,
+    )
+    centered = fit["delta_hat"]
+    assert fit["veto_rate"] == pytest.approx(0.05, abs=0.01)
+    quint = torch.tensor_split(torch.argsort(lens.float()), 5)
+    rates = [float((centered[q] <= 0).float().mean()) for q in quint]
+    # Uniform in length is the whole claim.
+    assert max(rates) - min(rates) < 0.03, rates
+    # ...and s is now derivable, where the uncorrected statistic fell back to
+    # the diagnostic-only s = 1.0.
+    assert fit["scale"] > 0
+
+
+def test_null_correction_preserves_detection_of_localized_corruption():
+    """Centering must not launder corruption: mu is fit on CLEAN data only.
+
+    A sample with one span the instruction no longer explains still lands
+    below the clean null at its own length, so it is still vetoed.
+    """
+    from tads.core.gate import GateConfig, fit_calibration, gate_components
+
+    true, lens, cf = _length_varying_pool()
+    cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
+    comp = gate_components(true, lens, cf, lens, cfg=cfg)
+    fit = fit_calibration(
+        comp["delta_hat"], comp["n_spans"], span_tokens=16, target_veto=0.05,
+    )
+    null = fit["null"]
+
+    dirty = true.clone()
+    hit = torch.arange(1000)
+    for i in hit.tolist():
+        L = int(lens[i])
+        a = L // 2
+        dirty[i, a: min(a + 16, L)] = cf[i, a: min(a + 16, L)] * 1.6
+    comp_d = gate_components(dirty, lens, cf, lens, cfg=cfg)
+    veto_dirty = float(
+        (null.apply(comp_d["delta_hat"], comp_d["n_spans"])[hit] <= 0).float().mean()
+    )
+    veto_clean = float((fit["delta_hat"][hit] <= 0).float().mean())
+    assert veto_dirty > 0.9, veto_dirty
+    assert veto_clean < 0.1, veto_clean
+
+
+def test_null_curve_is_nonincreasing_in_span_count():
+    """mu(M) is projected onto the monotone cone; a rise would be noise."""
+    from tads.core.gate import GateConfig, fit_null_calibration, gate_components
+
+    true, lens, cf = _length_varying_pool()
+    cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
+    comp = gate_components(true, lens, cf, lens, cfg=cfg)
+    cal = fit_null_calibration(
+        comp["delta_hat"], comp["n_spans"], target_veto=0.05, span_tokens=16,
+    )
+    assert len(cal.bin_edges) > 1
+    assert all(a >= b - 1e-9 for a, b in zip(cal.mu, cal.mu[1:])), cal.mu
+
+
+def test_null_curve_cannot_be_reused_at_a_different_span_width():
+    """M is a span COUNT; mu(M) means something else at another W."""
+    from tads.core.gate import GateConfig, NullCalibration
+
+    cal = NullCalibration(
+        bin_edges=(4, 100), mu=(0.1, -0.2), counts=(500, 500),
+        target_veto=0.05, span_tokens=16, n_ref=1000,
+    )
+    GateConfig(span_tokens=16, target_veto=0.05, null=cal, scale=1.0)
+    with pytest.raises(ValueError, match="span_tokens"):
+        GateConfig(span_tokens=32, target_veto=0.05, null=cal, scale=1.0)
+    with pytest.raises(ValueError, match="target_veto"):
+        GateConfig(span_tokens=16, target_veto=0.10, null=cal, scale=1.0)
+
+
+def test_gate_config_defaults_to_corrected_and_says_so_when_uncalibrated():
+    """The production default is ON, and a missing curve is a loud error."""
+    from tads.core.gate import GateConfig, gate_components
+
+    cfg = GateConfig(span_tokens=4, scale=0.2)
+    assert cfg.null_correction is True
+    assert cfg.target_veto == 0.05
+    tok_true, n, tok_cf, n_cf = _three_samples()
+    with pytest.raises(ValueError, match="null_correction"):
+        gate_components(tok_true, n, tok_cf, n_cf, cfg=cfg)
+
+
+def test_scale_calibration_rejects_a_target_pct_below_the_veto_target():
+    """Centering puts the target_veto quantile at exactly 0, so a target_pct
+    at or below it derives s from a non-positive quantile — a config error
+    with an exact fix, not something to paper over with the median."""
+    from tads.core.gate import calibrate_gate_scale, fit_calibration
+
+    ref = torch.linspace(-1.0, 1.0, 500)
+    with pytest.raises(ValueError, match="target_pct"):
+        fit_calibration(
+            ref, torch.ones(500, dtype=torch.long), span_tokens=16,
+            target_veto=0.10, target_pct=0.10,
+        )
+    with pytest.raises(ValueError, match="NULL-CORRECTED"):
+        calibrate_gate_scale(
+            torch.linspace(-1.0, 0.0, 500), target_pct=0.10, null_corrected=True,
+        )
+
+
+def test_null_calibration_survives_a_cache_round_trip(tmp_path):
+    from tads.core.gate import (
+        GateConfig, NullCalibration, cache_identity, load_gate_cache,
+        save_gate_cache,
+    )
+
+    cal = NullCalibration(
+        bin_edges=(4, 100), mu=(0.1, -0.2), counts=(500, 500),
+        target_veto=0.05, span_tokens=4, n_ref=1000,
+    )
+    cfg = _cfg(null_correction=True, null=cal)
+    tok_true, n, tok_cf, n_cf = _three_samples()
+    res = compute_gate(tok_true, n, [tok_cf], [n_cf], torch.ones(3), cfg=cfg)
+    path = tmp_path / "gate.pt"
+    save_gate_cache(
+        None, result=res, cfg=cfg, epoch=1, path=path,
+        identity=cache_identity(model_path="/m", pool_files="/p", n_pool=3),
+    )
+    back = load_gate_cache(None, path=path)
+    assert NullCalibration.from_dict(back["null"]) == cal
+    # identity() carries a digest, not the raw curve — but it still changes
+    # when the curve does, so a cache from another calibration cannot hit.
+    other = NullCalibration(
+        bin_edges=(4, 100), mu=(0.1, -0.3), counts=(500, 500),
+        target_veto=0.05, span_tokens=4, n_ref=1000,
+    )
+    assert back["config"] == cfg.identity()
+    assert back["config"] != _cfg(null_correction=True, null=other).identity()

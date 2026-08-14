@@ -46,6 +46,7 @@ _ARMS_7B = [
     "tads_legacy_7b",
     "random_7b",
     "full_polluted_7b",
+    "tag_nonull_7b",
 ]
 
 
@@ -205,11 +206,34 @@ def test_gate_scale_unset_env_resolves_empty_and_means_unset(monkeypatch):
     cfg = _load("light_tag_05b")
     assert cfg["tads"]["tag"]["gate_scale"] == ""
     assert cfg["tads"]["tag"]["gate_ref_file"] == ""
-    assert _resolve_gate_scale({"gate_scale": ""}) is None
-    assert _resolve_gate_scale({"gate_scale": "  "}) is None
-    assert _resolve_gate_scale({"gate_scale": None}) is None
+    # null_correction off: this test is about the empty-string trap in the
+    # SCALE, and with the correction on an absent reference is a hard error
+    # by design (pinned separately below).
+    off = {"null_correction": False}
+    assert _resolve_gate_scale({"gate_scale": "", **off}) is None
+    assert _resolve_gate_scale({"gate_scale": "  ", **off}) is None
+    assert _resolve_gate_scale({"gate_scale": None, **off}) is None
     # An empty gate_ref_file must not be treated as a path to torch.load.
-    assert _resolve_gate_scale({"gate_scale": "", "gate_ref_file": ""}) is None
+    assert _resolve_gate_scale({"gate_scale": "", "gate_ref_file": "", **off}) is None
+
+
+def test_null_correction_without_a_reference_is_a_hard_error():
+    """mu(M) is measured on a CLEAN pool; there is no in-pool fallback for it.
+
+    Self-calibrating the null on the candidate pool would fit the curve to
+    data that is 30% corrupted, so the correction would absorb exactly the
+    signal the gate exists to find. Silently skipping it instead would give
+    back the 60%-clean-veto behaviour under a config that claims otherwise.
+    Neither is acceptable, so this fails loudly with the command that fixes it.
+    """
+    from tads.pipelines.selection import _resolve_gate_calibration
+
+    with pytest.raises(FileNotFoundError, match="null_correction"):
+        _resolve_gate_calibration({"gate_scale": "", "gate_ref_file": ""})
+    # Even a PINNED scale does not stand in for the curve — they are separate
+    # halves of the calibration.
+    with pytest.raises(FileNotFoundError, match="null_correction"):
+        _resolve_gate_calibration({"gate_scale": "0.2"})
 
 
 def test_gate_scale_set_env_resolves_to_float(monkeypatch):
@@ -219,7 +243,7 @@ def test_gate_scale_set_env_resolves_to_float(monkeypatch):
     cfg = _load("light_tag_05b")
     assert cfg["tads"]["tag"]["gate_scale"] == "0.15"
     assert _resolve_gate_scale(
-        {"gate_scale": cfg["tads"]["tag"]["gate_scale"]}
+        {"gate_scale": cfg["tads"]["tag"]["gate_scale"], "null_correction": False}
     ) == pytest.approx(0.15)
 
 
@@ -239,12 +263,13 @@ def test_unpinned_gate_scale_is_adopted_from_the_cache(tmp_path, monkeypatch):
     from tads.pipelines.selection import _prepare_tag
 
     n = 6
-    cfg_used = GateConfig(span_tokens=4, scale=0.0123)
+    cfg_used = GateConfig(span_tokens=4, scale=0.0123, null_correction=False)
     result = {
         "gate": torch.full((n,), 0.5),
         "completeness": torch.ones(n),
         "delta_bar": torch.zeros(n), "delta_min": torch.zeros(n),
-        "delta_hat": torch.zeros(n), "n_spans": torch.ones(n, dtype=torch.long),
+        "delta_hat": torch.zeros(n), "delta_hat_raw": torch.zeros(n),
+        "n_spans": torch.ones(n, dtype=torch.long),
         "n_common": torch.full((n,), 8, dtype=torch.long),
         "undefined": torch.zeros(n, dtype=torch.bool),
         "empty_c": torch.zeros(n, dtype=torch.bool),
@@ -256,7 +281,8 @@ def test_unpinned_gate_scale_is_adopted_from_the_cache(tmp_path, monkeypatch):
     tag_ctx = {
         "completeness": torch.ones(n),
         "cf_datasets": [],                    # must not be needed: cache hit
-        "params": {"span_tokens": 4, "gate_scale": "", "gate_ref_file": ""},
+        "params": {"span_tokens": 4, "gate_scale": "", "gate_ref_file": "",
+                   "null_correction": False},
     }
     tag = _prepare_tag(
         tag_ctx, model=None, cfg={"output_dir": str(tmp_path)},
@@ -308,18 +334,21 @@ def test_gate_ref_with_a_different_span_config_is_rejected(tmp_path):
     torch.save(
         {
             "delta_hat": torch.linspace(0.05, 0.95, 200),
-            "gate_config": GateConfig(span_tokens=16, scale=1.0).identity(),
+            "gate_config": GateConfig(
+                span_tokens=16, scale=1.0, null_correction=False,
+            ).identity(),
         },
         ref,
     )
+    off = {"null_correction": False}
     # Same partition: accepted.
     assert _resolve_gate_scale(
-        {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 16}
+        {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 16, **off}
     ) > 0
     # Different W: rejected.
     with pytest.raises(ValueError, match="different span configuration"):
         _resolve_gate_scale(
-            {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 32}
+            {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 32, **off}
         )
 
 
@@ -422,3 +451,89 @@ def test_7b_gate_ref_is_backbone_specific(monkeypatch):
     for name in ("tag_7b", "tag_static_7b"):
         assert _load(name)["tads"]["tag"]["gate_ref_file"] == "/ref/delta_hat_7b.pt"
     assert _load("light_tag_05b")["tads"]["tag"]["gate_ref_file"] == "/ref/delta_hat_05b.pt"
+
+
+# --------------------------------------------------------------------------
+# Eq. 5' null correction: config wiring
+# --------------------------------------------------------------------------
+
+def test_tag_arms_default_to_the_null_correction():
+    for name in ("tag_7b", "tag_static_7b", "light_tag_05b"):
+        cfg = _load(name)
+        tag = cfg["tads"]["tag"]
+        assert tag["null_correction"] is True, name
+        assert tag["target_veto"] == 0.05, name
+        # Centring puts the target_veto quantile at exactly 0, so s must be
+        # derived from a strictly larger one.
+        assert tag["target_veto"] < tag["calibration_target_pct"], name
+
+
+def test_nonull_ablation_arm_differs_in_exactly_one_bit(monkeypatch):
+    """The Eq. 5 ablation must be comparable to tag_7b: same optimizer, same
+    schedule, same span config — only the correction flipped. It also needs
+    its OWN reference and cache, since both s and G differ."""
+    for v in ("TADS_GATE_REF_7B", "TADS_GATE_REF_7B_NONULL",
+              "TADS_GATE_CACHE", "TADS_GATE_CACHE_NONULL"):
+        monkeypatch.delenv(v, raising=False)
+    on = _load("tag_7b")
+    off = _load("tag_nonull_7b")
+    assert on["tads"]["tag"]["null_correction"] is True
+    assert off["tads"]["tag"]["null_correction"] is False
+    for k in ("batch_size", "grad_accum", "train_epochs", "selection_ratio",
+              "training_mode", "model_key", "episode_batch_size"):
+        assert on[k] == off[k], k
+    for k in ("span_tokens", "tau", "tau_mode", "min_span_tokens",
+              "tail_mode", "include_eos", "c_trunc", "undefined_policy"):
+        assert on["tads"]["tag"][k] == off["tads"]["tag"][k], k
+    assert on["output_subdir"] != off["output_subdir"]
+    # Distinct artifacts, so the two arms cannot silently share a gate.
+    monkeypatch.setenv("TADS_GATE_REF_7B", "/tmp/on_ref.pt")
+    monkeypatch.setenv("TADS_GATE_REF_7B_NONULL", "/tmp/off_ref.pt")
+    monkeypatch.setenv("TADS_GATE_CACHE", "/tmp/on_gate.pt")
+    monkeypatch.setenv("TADS_GATE_CACHE_NONULL", "/tmp/off_gate.pt")
+    assert _load("tag_7b")["tads"]["tag"]["gate_ref_file"] == "/tmp/on_ref.pt"
+    assert _load("tag_nonull_7b")["tads"]["tag"]["gate_ref_file"] == "/tmp/off_ref.pt"
+    assert _load("tag_7b")["tads"]["tag"]["gate_cache_file"] == "/tmp/on_gate.pt"
+    assert _load("tag_nonull_7b")["tads"]["tag"]["gate_cache_file"] == "/tmp/off_gate.pt"
+
+
+def test_gate_ref_carrying_a_null_curve_calibrates_s_on_the_centred_statistic(tmp_path):
+    """s is a quantile of what Eq. 6 SEES. Deriving it from the uncentred
+    reference and then centring at gate time would shift every value by mu
+    while leaving the scale that interprets them put."""
+    import torch
+    from tads.core.gate import GateConfig, fit_calibration
+    from tads.pipelines.selection import _resolve_gate_calibration
+
+    g = torch.Generator().manual_seed(0)
+    n_spans = torch.randint(1, 30, (4000,), generator=g)
+    # A raw statistic that drifts down with span count, like the real one.
+    raw = 0.3 - 0.02 * n_spans.float() + 0.15 * torch.randn(4000, generator=g)
+    fit = fit_calibration(raw, n_spans, span_tokens=16, target_veto=0.05)
+
+    ref = tmp_path / "delta_hat.pt"
+    torch.save(
+        {
+            "delta_hat": raw,
+            "n_spans": n_spans,
+            "null": fit["null"].to_dict(),
+            "gate_config": GateConfig(
+                span_tokens=16, scale=1.0, null=fit["null"], target_veto=0.05,
+            ).identity(),
+        },
+        ref,
+    )
+    params = {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 16,
+              "target_veto": 0.05}
+    scale, null = _resolve_gate_calibration(params)
+    assert null == fit["null"]
+    assert scale == pytest.approx(fit["scale"], rel=1e-6)
+
+    # A reference with no curve is refused rather than silently uncorrected.
+    bare = tmp_path / "bare.pt"
+    torch.save({"delta_hat": raw}, bare)
+    with pytest.raises(ValueError, match="no null curve"):
+        _resolve_gate_calibration({**params, "gate_ref_file": str(bare)})
+    # ...and one fit at another target_veto is refused too.
+    with pytest.raises(ValueError, match="target_veto"):
+        _resolve_gate_calibration({**params, "target_veto": 0.10})

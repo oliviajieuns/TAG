@@ -59,7 +59,7 @@ def _shard_path(out: Path, shard: int, num_shards: int) -> Path:
     return out.parent / f"{out.stem}.shard{shard}of{num_shards}.pt"
 
 
-def _build_gate_cfg(params, scale):
+def _build_gate_cfg(params, scale, null=None):
     from tads.core.gate import GateConfig
 
     return GateConfig(
@@ -75,6 +75,9 @@ def _build_gate_cfg(params, scale):
         min_common_tokens=int(params.get("min_common_tokens", 8)),
         undefined_policy=str(params.get("undefined_policy", "neutral")),
         undefined_gate_value=float(params.get("undefined_gate_value", 0.6)),
+        null_correction=bool(params.get("null_correction", True)),
+        target_veto=float(params.get("target_veto", 0.05)),
+        null=null,
         scale=scale,
         dispersion_discount=bool(params.get("dispersion_discount", True)),
     )
@@ -145,10 +148,18 @@ def preflight_scale(cfg) -> None:
     twice. Resolving it up front is free and turns an 18-minute failure into
     an instant one.
     """
-    from tads.pipelines.selection import _resolve_gate_scale
+    from tads.pipelines.selection import _resolve_gate_calibration
 
     tag_cfg = (cfg.get("tads") or {}).get("tag") or {}
-    scale = _resolve_gate_scale(tag_cfg)   # raises with the fix if absent
+    # Raises with the exact fix when the reference is missing, unreadable, or
+    # was fit at a different W / target_veto.
+    scale, null = _resolve_gate_calibration(tag_cfg)
+    if null is not None:
+        logger.info(
+            "Eq. 5' null curve: %d bin(s), target_veto=%.3f, fit on n=%d at "
+            "W=%d (%s)", len(null.bin_edges), null.target_veto, null.n_ref,
+            null.span_tokens, null.digest(),
+        )
     if scale is None:
         logger.warning(
             "no gate_scale and no gate_ref_file: the gate will self-calibrate "
@@ -290,12 +301,14 @@ def run_merge(args, cfg) -> None:
         c_trunc=float(tag_cfg.get("c_trunc", 0.2)),
     )
 
-    from tads.pipelines.selection import _resolve_gate_scale
-    scale = _resolve_gate_scale(tag_cfg)
-    gcfg = _build_gate_cfg(tag_cfg, scale)
+    from tads.pipelines.selection import _resolve_gate_calibration
+    scale, null = _resolve_gate_calibration(tag_cfg)
+    gcfg = _build_gate_cfg(tag_cfg, scale, null)
     if gcfg.scale is None:
         probe = gatelib.gate_components(tok_true, n_true, tok_cf[0], n_cf[0], cfg=gcfg)
-        gcfg = _build_gate_cfg(tag_cfg, gatelib.resolve_scale(gcfg, probe["delta_hat"]))
+        gcfg = _build_gate_cfg(
+            tag_cfg, gatelib.resolve_scale(gcfg, probe["delta_hat"]), null,
+        )
 
     result = gatelib.compute_gate(
         tok_true, n_true, tok_cf, n_cf, completeness, cfg=gcfg,

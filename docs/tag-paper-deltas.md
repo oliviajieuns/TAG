@@ -140,11 +140,118 @@ remaining slots, not unconditionally.)*
 
 ---
 
+### A5. Eq. 5 tests a length-dependent statistic against a length-independent threshold
+
+**This is the item that decides whether the method works at all at 7B.**
+
+**Paper.** \(\hat\Delta_i = \min(\bar\Delta_i, \Delta^{\min}_i)\), and Eq. 6
+vetoes exactly when \(\hat\Delta_i \le 0\).
+
+**Problem — measured, not simulated.** \(\Delta^{\min}\) is a minimum over
+\(M_i = \lceil n_i/W \rceil\) spans, so its null *location* falls as
+responses get longer. Zero is therefore the wrong threshold for it at every
+length but one. On Qwen2.5-7B-Instruct over the 51 760-response clean
+reference pool at \(W=16\):
+
+| statistic | mean | reading |
+|---|---|---|
+| \(\bar\Delta\) (Eq. 3) | **+0.108** | healthy — the instruction explains the response |
+| \(\Delta^{\min}\) (Eq. 5) | **−0.265** | 60% of *clean* responses have a span the counterfactual "explains better" |
+| \(\hat\Delta > 0\) | **39.6%** | the gate would veto **60.4% of clean data** |
+
+\(P_{10}(\hat\Delta_{\text{clean}}) = -0.410\) and even the median is
+\(-0.084\), so `calibrate_gate_scale` could not derive \(s\) at all and fell
+back to the diagnostic \(s = 1\). Because Eq. 6 zeroes *exactly* at
+\(\hat\Delta \le 0\), **no choice of \(s\) can rescue this** — the veto is
+decided before \(s\) is consulted. The two readings that matter are that the
+overall gain is fine (so the reference pool is not contaminated and the
+counterfactuals are genuinely unrelated) and that the damage is confined to
+the tail statistic.
+
+**Amendment.** Recentre the tail test on where the null actually sits at that
+span count:
+
+\[
+\hat\Delta_i \;=\; \min(\bar\Delta_i, \Delta^{\min}_i) \;-\; \mu(M_i)
+\tag{5$'$}
+\]
+
+with \(\mu(M)\) the \(\alpha\)-quantile of the uncorrected statistic on a
+**clean reference pool** restricted to span count \(M\), estimated in
+count-balanced bins and projected onto the non-increasing cone (the
+mechanism is monotone; a rise is noise). Eq. 6 is untouched: \(\sigma(0)=1/2\)
+still makes \(\hat\Delta \le 0 \Rightarrow G = 0\) exactly, so the fusion
+stays non-compensatory. Only the origin moves.
+
+**Two properties follow by construction**, and both are printed by the
+calibration rather than asserted:
+
+1. the clean veto rate *is* \(\alpha\) — a dial the experimenter sets
+   (`tads.tag.target_veto`, 0.05) instead of an emergent 60%; and
+2. it is \(\alpha\) in **every** length bin, which is what removes the
+   confound that item B2 raises.
+
+**Why this does not launder corruption.** \(\mu\) is fit on clean data only.
+A dirty sample is not compared against its own pool's null but against where
+*clean* samples of the same length sit, so a genuinely bad span still lands
+negative. Fitting \(\mu\) on the candidate pool would absorb the signal, so
+the code refuses to: `null_correction: true` with no `gate_ref_file` is a
+hard error with no in-pool fallback, unlike \(s\).
+
+**Measured on a controlled reproduction** (`tests/test_gate.py`, 6 000
+synthetic responses with identical per-token dependency at every length):
+the uncorrected veto rate runs 11% → 55% from the shortest to the longest
+length quintile; after Eq. 5\('\) it is 5% in all five. Injecting one
+corrupted span per response then vetoes 100% of the corrupted rows at a 5.4%
+clean rate.
+
+**Interaction with \(s\).** \(s\) must be calibrated on the *centred*
+statistic, since that is what Eq. 6 sees. Centring puts
+\(Q_\alpha(\hat\Delta_{\text{clean}}) = 0\) exactly, so
+`calibration_target_pct` must be strictly greater than `target_veto` or
+\(s\) is derived from a non-positive quantile; the code raises with that
+exact message rather than silently falling back. With
+\(\alpha = 0.05,\ \text{target\_pct} = 0.10\) the derived gate is genuinely
+graded — on the reproduction above, 5% vetoed, 47% in the soft interior,
+48% at the ceiling — not the binary mask a broken calibration produces.
+
+**Ablation arm.** `configs/experiments/lowq/tag_nonull_7b.yaml` runs the
+literal Eq. 5 with its own reference and gate cache, so the amendment is
+justified by a number in the results table rather than by this argument.
+
+**Suggested text.** Replace Eq. 5's consumption in Eq. 6 with Eq. 5\('\) and
+add:
+
+> The span minimum is an order statistic over \(M_i = \lceil n_i/W\rceil\)
+> spans, so its null distribution depends on response length; comparing it
+> against a fixed zero threshold would veto long responses far more often
+> than short ones for reasons unrelated to instruction dependency. We
+> therefore recentre \(\hat\Delta_i\) on \(\mu(M_i)\), the \(\alpha\)-quantile
+> of the uncentred statistic among clean reference responses with the same
+> span count. This makes the clean-reference veto rate equal to \(\alpha\)
+> uniformly in length by construction; we set \(\alpha = 0.05\) and report
+> the realised per-bin rates. Because \(\mu\) is estimated on clean data
+> only, it cannot absorb corruption signal.
+
+---
+
 ## B. Recommended — experiment robustness
 
 ### B2. \(\Delta^{\min}\) has an order-statistic bias in the response length, and \(W\) is a first-order hyper-parameter
 
 **This is the most important item in this document.**
+
+> **Update.** Item A5 supersedes the framing below in one respect and
+> confirms it in another. The *veto-rate* half of this problem is solved by
+> the Eq. 5\('\) null correction, which pins the clean rate at \(\alpha\)
+> uniformly in length. The *detection* half is not: re-centring moves the
+> threshold, it does not create separation where the clean and dirty minima
+> genuinely overlap. That is what the "correcting the null per \(M\)" bullet
+> below measured, and it still holds — at large \(M\) with a weak, diluted
+> corruption, no threshold separates the two. \(W\) therefore remains a
+> first-order choice, because it is the only knob that acts on the
+> separation itself rather than on the threshold. Read this section as the
+> argument for the \(W\) sweep, not as an argument against A5.
 
 **Paper.** Note (e) in the source comments says the token-level bottom-\(\rho\)
 variant "was discarded for order-statistic bias". The span-level minimum has
@@ -182,6 +289,13 @@ axis, and a reviewer will read the result as a length filter.
   of \(\Delta^{\min}\)) flattens the clean rate to 2-9% but collapses
   detection to 3.3% at \(M \ge 16\), because by then the clean minimum and
   the dirty minimum genuinely overlap. No threshold separates them.
+  **This measured the correction as a *detection* fix, which it is not.**
+  As a *calibration* fix it is necessary and is now shipped as Eq. 5\('\)
+  (item A5) — with two changes: the offset is the \(\alpha\)-quantile, not
+  the median (the median puts half the clean pool below zero), and \(s\) is
+  recalibrated on the centred statistic. What survives from this bullet is
+  the honest limit: at large \(M\) with a diluted corruption the statistic
+  has little to separate, and only \(W\) changes that.
 
 **What does work.** Per-span noise is an average over \(W\) tokens and so
 shrinks like \(1/\sqrt{W}\), while dilution of a fixed-size corrupted region
@@ -246,6 +360,50 @@ is to skip *boilerplate*, a content property).
 > \ell_k(y_i|x_i^-) \ge \tau \Bigr\}\]
 > i.e. the threshold applies to the span's mean counterfactual NLL, so that
 > the admissibility of a span depends on its content rather than its length.
+
+### B4. \(c_i\) is a five-fold demotion decided by a string heuristic — measure its error rate
+
+**Paper.** \(c_i \in \{1, c_{\text{trunc}}\}\) is described as a completeness
+factor, with no statement of how completeness is decided or how often it is
+decided wrongly.
+
+**Problem.** The decision is a text heuristic, and the first version of it
+(ends with terminal punctuation, a digit, or a closed code fence) flagged
+**14.6% of the composite20 pool** incomplete — against a T3 corruption rate
+of roughly 4%. The excess was structural: bulleted lists, numbered steps,
+markdown tables, `Key: value` blocks and one-word answers routinely end
+without a period. Each of those clean samples had its score multiplied by
+0.2. A view introduced to catch truncation was demoting more clean data than
+there was truncation in the pool.
+
+**Code.** `text_is_complete` now accepts a structured final line (bullet,
+numbered item, table row, `Key: value`) and a terse answer of at most three
+words that does not end on a dangling function word, before falling back to
+the punctuation test. `scripts/audit_completeness.py` scores the heuristic
+against the pool manifest — precision, recall on T3, false-positive rate on
+the uncorrupted subset, and the ratio of clean demotions to true catches —
+with `--ablate` to attribute each rule.
+
+**One caveat to state rather than bury.** The list rule measures as nearly
+free of false negatives on this pool partly for a synthetic reason:
+`corruption.truncate_text` rebuilds the response with `" ".join(words)`,
+collapsing newlines, so a T3-truncated list arrives as a single line and
+cannot end on line 2+. Against naturally truncated text the rule would be
+weaker. The short-answer rule is a genuine trade: a 30% cut of a ten-word
+response lands in the window and escapes.
+
+**Suggested text.** One sentence in the setup and one number in the results:
+
+> Completeness \(c_i\) is decided by a text heuristic that accepts terminal
+> punctuation, closed code fences, structured final lines (list items, table
+> rows, field labels) and short answers. On our pool it flags \(X\%\) of
+> responses, with recall \(R\) on injected truncations and a false-positive
+> rate of \(F\) on uncorrupted ones.
+
+*(Substitute the measured \(X, R, F\) from `scripts/audit_completeness.py`.
+If \(F\) exceeds the true truncation rate, lower \(c_{\text{trunc}}\)'s
+severity or report \(c_i \equiv 1\) as an ablation — do not ship a view whose
+false positives outnumber its catches.)*
 
 ### B3. State which statistic \(s\) is calibrated on
 
@@ -399,9 +557,13 @@ token counts in the paper match a reimplementation.
 ## Checklist before submission
 
 - [ ] A1-A4 folded into the equations (these are correctness fixes)
+- [ ] A5 Eq. 5\('\) added; \(\alpha\) stated; per-length-bin clean veto rates
+      reported; the `tag_nonull_7b` ablation in the results table
 - [ ] B1 \(\mathcal{C}_i\) redefined on the per-token mean
 - [ ] B2 \(W\) sweep run and reported; length-bias profile reported
-- [ ] B3 calibration statistic named as \(\hat\Delta\)
+- [ ] B3 calibration statistic named as the CENTRED \(\hat\Delta\)
+- [ ] B4 completeness heuristic's precision / recall / FP rate measured with
+      `scripts/audit_completeness.py` and reported
 - [ ] C1 "single forward pass" -> "one forward pass per pool, then cached"
 - [ ] C2 non-compensation split into the exact-zero case and the
       small-gate ratio, with the measured reward ratio

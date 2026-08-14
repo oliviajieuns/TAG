@@ -398,9 +398,18 @@ def make_gate_ref_check(cfg_path):
         tag = (cfg.get("tads") or {}).get("tag") or {}
         scale = str(tag.get("gate_scale") or "").strip()
         ref = str(tag.get("gate_ref_file") or "").strip()
-        if scale:
+        want_null = bool(tag.get("null_correction", True))
+        if scale and not want_null:
             return _OK, f"gate_scale pinned explicitly to {scale}"
         if not ref:
+            if want_null:
+                return _FAIL, (
+                    "null_correction is on but gate_ref_file is empty. mu(M) "
+                    "is measured on a CLEAN pool and has no in-pool fallback "
+                    "— fitting it on a 30%-dirty pool would absorb the signal "
+                    "the gate looks for. Run: bash "
+                    "scripts/gpu_cloud/bootstrap.sh calibrate7b"
+                )
             return _WARN, (
                 "neither gate_scale nor gate_ref_file is set — the gate will "
                 "self-calibrate IN-POOL, which makes G depend on how dirty its "
@@ -412,7 +421,9 @@ def make_gate_ref_check(cfg_path):
                 f"gate_ref_file {ref} does not exist — "
                 f"bash scripts/gpu_cloud/bootstrap.sh calibrate"
             )
-        d = torch.load(ref, map_location="cpu", weights_only=True)
+        # weights_only=False: the artifact carries the null curve as a plain
+        # dict alongside its tensors.
+        d = torch.load(ref, map_location="cpu", weights_only=False)
         if not isinstance(d, dict) or "delta_hat" not in d:
             return _FAIL, (
                 f"{ref} has no 'delta_hat' key — this looks like an MVF "
@@ -436,16 +447,50 @@ def make_gate_ref_check(cfg_path):
                 f"distribution depends on the partition — recalibrate."
             )
         dh = d["delta_hat"]
+        null = d.get("null")
+        if want_null:
+            if null is None:
+                return _FAIL, (
+                    f"{Path(ref).name} carries no Eq. 5' null curve — it "
+                    f"predates the correction. Refit with no GPU: "
+                    f"scripts/sweep_gate_config.py --ref {ref} --span-tokens "
+                    f"{tag.get('span_tokens', 16)} --refit-out {ref} "
+                    f"(or regenerate: bootstrap.sh calibrate7b)."
+                )
+            tv = float(tag.get("target_veto", 0.05))
+            if abs(float(null["target_veto"]) - tv) > 1e-9:
+                return _FAIL, (
+                    f"{Path(ref).name} was fit at target_veto="
+                    f"{null['target_veto']} but the arm asks for {tv}. mu(M) "
+                    f"IS that quantile — refit."
+                )
+            if int(null["span_tokens"]) != int(tag.get("span_tokens", 16)):
+                return _FAIL, (
+                    f"{Path(ref).name} fit mu(M) at W={null['span_tokens']} "
+                    f"but the arm uses W={tag.get('span_tokens', 16)}. M is a "
+                    f"span COUNT — refit at the arm's W."
+                )
+
         pos = float((dh > 0).float().mean().item())
         detail = (
-            f"{Path(ref).name}: n={dh.numel()}, {100 * pos:.1f}% positive, "
+            f"{Path(ref).name}: n={dh.numel()}, raw {100 * pos:.1f}% positive, "
             f"s={d.get('scale'):.6g}"
         )
+        if want_null:
+            # With the correction on, the clean veto rate is the target by
+            # construction — that is the number to report, and the raw one is
+            # context for how much correcting was needed.
+            detail += (
+                f", clean veto pinned at {100 * float(null['target_veto']):.1f}%"
+                f" over {len(null['bin_edges'])} length bin(s)"
+            )
+            return _OK, detail
         if pos < 0.8:
             return _WARN, detail + (
-                " — under 80% of the CLEAN reference has Delta_hat > 0; the "
-                "reference may be contaminated or the counterfactuals not "
-                "unrelated. Inspect before trusting the calibration."
+                " — under 80% of the CLEAN reference has Delta_hat > 0. With "
+                "null_correction off that is expected on long-response pools "
+                "(Eq. 5's order-statistic drift); this arm is the ablation, "
+                "so the number is the finding, not a fault."
             )
         return _OK, detail
     return _fn

@@ -15,12 +15,22 @@
 #   Δ̄_i    = 1 − L(y_i|x_i) / L(y_i|x_i⁻)                           (Eq. 3)
 #   Δ_{i,m} = 1 − Σ_{k∈S_m} ℓ_k(y_i|x_i) / Σ_{k∈S_m} ℓ_k(y_i|x_i⁻)  (Eq. 4)
 #   Δ^min_i = min_{m : S_m ∈ C_i} Δ_{i,m}                            (Eq. 5)
-#   G_i     = c_i · (2σ(Δ̂_i/s) − 1)₊ ,  Δ̂_i = min(Δ̄_i, Δ^min_i)     (Eq. 6)
+#   Δ̂_i     = min(Δ̄_i, Δ^min_i) − μ(M_i)                            (Eq. 5′)
+#   G_i     = c_i · (2σ(Δ̂_i/s) − 1)₊                                 (Eq. 6)
 #
 # Ratio (not raw ΔL) so the statistic is scale-free; span-min so localized
 # corruption (wrong final answer, spliced sentence) cannot hide behind a
 # healthy mean; σ(0) = ½ so Δ̂ ≤ 0 maps to G = 0 EXACTLY — the veto that
 # makes the fusion non-compensatory.
+#
+# Eq. 5′ is an amendment the implementation forced (docs/tag-paper-deltas.md
+# A5). Δ^min is a MINIMUM over M = ⌈n/W⌉ spans, so its null location depends
+# on response length; measured on Qwen2.5-7B over 51 760 CLEAN responses, the
+# uncorrected Eq. 5 passed only 39.6 % of them — while Δ̄ averaged a healthy
+# +0.108. μ(M) is the target_veto-quantile of the uncorrected statistic on a
+# CLEAN reference pool at span count M, so the clean veto rate becomes a dial
+# (target_veto, 5 % by default) and is uniform in length. μ is fit on clean
+# data only and therefore cannot absorb corruption signal.
 method: tads
 episode_batch_size: 16
 tads:
@@ -57,8 +67,29 @@ tads:
     tail_quantile: 0.0     # used only when tail_mode: quantile
     include_eos: false     # EOS excluded: termination is c_i's job, not the contrast's
 
+    # ---- null correction (Eq. 5′) ----
+    # true = recentre Δ̂ on the clean-reference null at the same span count.
+    # false is the ABLATION arm reproducing the literal Eq. 5; report it as
+    # such, do not use it to escape a calibration problem.
+    null_correction: true
+    # The dial: what fraction of the CLEAN reference the gate should veto.
+    # It is pinned exactly, and uniformly across response lengths, by
+    # construction. Must be strictly below calibration_target_pct — centring
+    # puts this quantile at 0, so s would otherwise be derived from a
+    # non-positive quantile. The curve lives in gate_ref_file alongside s;
+    # changing this value requires refitting (no GPU):
+    #   python scripts/sweep_gate_config.py --ref <ref> --span-tokens <W> \
+    #       --target-veto <new> --refit-out <ref>
+    target_veto: 0.05
+
     # ---- gate (Eq. 6) ----
-    c_trunc: 0.2           # completeness assigned to non-terminating responses
+    # Completeness assigned to responses that read as cut off. This is a
+    # five-fold demotion decided by a string heuristic
+    # (tads.data.sft_prompts.text_is_complete), so measure the heuristic's
+    # false-positive rate on YOUR pool before trusting it:
+    #   python scripts/audit_completeness.py --pool <pool>.json \
+    #       --manifest <manifest>.json --ablate
+    c_trunc: 0.2
     eps_den: 0.001         # denominator floor in Eqs. 3-4
     # A sample whose true/counterfactual responses share fewer than this
     # many token positions has no usable evidence (the two prompts differ in
@@ -81,8 +112,12 @@ tads:
     # NOT interchangeable with the MVF reliability_ref_file — that stores
     # raw ΔL in nats, this stores the Δ̂ ratio. Generate with
     #   python scripts/calibrate_reliability.py --mode tag ...
-    # Leaving both empty falls back to in-pool self-calibration with a loud
-    # warning — diagnostics only, never for reported runs.
+    # gate_ref_file also carries the Eq. 5′ null curve, so with
+    # null_correction: true it is REQUIRED — there is no in-pool fallback for
+    # μ(M) (fitting it on a 30 %-dirty pool would absorb the very signal the
+    # gate looks for). With null_correction: false, leaving both empty falls
+    # back to in-pool self-calibration of s with a loud warning —
+    # diagnostics only, never for reported runs.
     gate_scale: ${oc.env:TADS_GATE_SCALE,}
     gate_ref_file: ${oc.env:TADS_GATE_REF,}
     calibration_target_pct: 0.10

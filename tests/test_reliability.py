@@ -79,6 +79,62 @@ def test_text_is_complete_heuristic():
     assert not text_is_complete("The capital of France is Paris and the")
 
 
+def test_structured_endings_are_complete():
+    """c_i multiplies the score by c_trunc (0.2), so a false positive is a
+    five-fold demotion. The punctuation-only heuristic flagged 14.6% of
+    alpaca-cleaned incomplete — far above the true truncation rate — and the
+    excess was almost all lists, tables and one-word answers. Structured
+    content is written without terminal punctuation as a matter of style."""
+    assert text_is_complete("Three tips:\n- Sleep well\n- Eat greens\n- Walk")
+    assert text_is_complete("Steps:\n1. Preheat the oven\n2. Mix the batter")
+    assert text_is_complete("| Name | Age |\n| --- | --- |\n| Ann | 30 |")
+    assert text_is_complete("Name: Ann\nAge: 30")
+    # A single line that merely CONTAINS a dash is not a list.
+    assert not text_is_complete("The plan - which we discussed - is to")
+
+
+def test_terse_answers_are_complete_but_dangling_words_are_not():
+    """A one- or two-word answer is the dataset's style, not a truncation.
+    The guard is the trailing word: a cut lands on whatever was there, very
+    often a function word; a deliberate terse answer essentially never does."""
+    assert text_is_complete("Paris")
+    assert text_is_complete("Blue whale")
+    assert text_is_complete("Highly recommended")
+    assert not text_is_complete("and then the")
+    assert not text_is_complete("It was")
+    assert not text_is_complete("because of")
+    # Past the short-answer window the rule does not apply at all.
+    assert not text_is_complete("One two three four five six seven")
+
+
+def test_truncated_corruption_is_still_caught_after_the_new_rules():
+    """The rules added for precision must not cost the recall they exist to
+    protect. Run T3 over realistic responses and check the flag rate."""
+    import random
+
+    from tads.data.corruption import truncate_text
+
+    rng = random.Random(0)
+    originals = [
+        "The mitochondria is the powerhouse of the cell. It generates most "
+        "of the chemical energy needed to power the cell's biochemical "
+        "reactions, which is stored in ATP.",
+        "To bake bread you need flour, water, yeast and salt. Mix them "
+        "together, knead for ten minutes, let the dough rise, then bake at "
+        "220 degrees for half an hour.",
+        "Machine learning models learn patterns from data rather than being "
+        "explicitly programmed. The quality of the training data therefore "
+        "bounds the quality of the model.",
+        "Photosynthesis converts light energy into chemical energy. Plants "
+        "use sunlight, water and carbon dioxide to produce glucose and "
+        "release oxygen as a by-product.",
+    ]
+    for text in originals:
+        assert text_is_complete(text), text
+        cut = truncate_text(text, rng)
+        assert not text_is_complete(cut), cut
+
+
 def test_completeness_validates_c_trunc():
     ds = _FakeDataset([[5, EOS]])
     for bad in (0.0, -1.0, 1.5):

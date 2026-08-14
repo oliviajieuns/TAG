@@ -79,6 +79,14 @@ def main() -> None:
     p.add_argument("--target-pct", type=float, default=0.10)
     p.add_argument("--target-q", type=float, default=0.8)
     p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--target-veto", type=float, default=None,
+                   help="tag mode: clean-reference veto rate for the Eq. 5' "
+                        "null correction. Default: tads.tag.target_veto from "
+                        "the config (0.05). Must be < --target-pct.")
+    p.add_argument("--no-null-correction", action="store_true",
+                   help="tag mode: fit s on the RAW Delta_hat, the literal "
+                        "Eq. 5. This is the ablation arm — on the 7B backbone "
+                        "it vetoes ~60%% of clean data.")
     p.add_argument("--no-token-losses", action="store_true",
                    help="tag mode: omit the per-token NLLs from the artifact. "
                         "Saves disk, but makes the W/tau sweep cost a full "
@@ -145,6 +153,19 @@ def main() -> None:
         from tads.core import gate as gatelib
 
         tag_cfg = _tads_cfg.get("tag", {}) or {}
+        target_veto = (
+            float(args.target_veto)
+            if args.target_veto is not None
+            else float(tag_cfg.get("target_veto", 0.05))
+        )
+        fit_null = not args.no_null_correction
+        if fit_null and target_veto >= args.target_pct:
+            sys.exit(
+                f"--target-veto ({target_veto}) must be strictly below "
+                f"--target-pct ({args.target_pct}): the Eq. 5' centring puts "
+                f"the target_veto quantile at exactly 0, so the scale "
+                f"calibration would derive s from a non-positive quantile."
+            )
         gcfg = gatelib.GateConfig(
             span_tokens=int(tag_cfg.get("span_tokens", 16)),
             tau=float(tag_cfg.get("tau", 0.5)),
@@ -158,7 +179,10 @@ def main() -> None:
             min_common_tokens=int(tag_cfg.get("min_common_tokens", 8)),
             undefined_policy=str(tag_cfg.get("undefined_policy", "neutral")),
             undefined_gate_value=float(tag_cfg.get("undefined_gate_value", 0.6)),
-            # The scale is what we are about to derive.
+            # Both halves of the calibration are what we are about to derive,
+            # so the components pass runs uncorrected and unit-scaled.
+            null_correction=False,
+            target_veto=target_veto,
             scale=1.0,
         )
         tok, n_tok = {}, {}
@@ -171,19 +195,33 @@ def main() -> None:
         comp = gatelib.gate_components(
             tok["orig"], n_tok["orig"], tok["cf"], n_tok["cf"], cfg=gcfg,
         )
-        stat = comp["delta_hat"]
-        s = gatelib.calibrate_gate_scale(
-            stat, target_pct=args.target_pct, target_q=args.target_q,
+        # gcfg above ran uncorrected, so comp["delta_hat"] IS the raw
+        # min(Delta_bar, Delta_min) the null curve must be fit on.
+        raw = comp["delta_hat"]
+        fit = gatelib.fit_calibration(
+            raw, comp["n_spans"],
+            span_tokens=gcfg.span_tokens,
+            target_veto=target_veto,
+            target_pct=args.target_pct,
+            target_q=args.target_q,
+            null_correction=fit_null,
         )
+        stat, s = fit["delta_hat"], fit["scale"]
         payload = {
-                "delta_hat": stat.cpu(),
+                # delta_hat is the RAW statistic: it is what a later refit
+                # (a different W, a different target_veto) needs, and the
+                # centred version is one lookup away given "null".
+                "delta_hat": raw.cpu(),
+                "delta_hat_centered": stat.cpu(),
                 "delta_bar": comp["delta_bar"].cpu(),
                 "delta_min": comp["delta_min"].cpu(),
                 "n_spans": comp["n_spans"].cpu(),
                 "n_common": comp["n_common"].cpu(),
+                "null": fit["null"].to_dict() if fit["null"] is not None else None,
                 "scale": s,
                 "target_pct": args.target_pct,
                 "target_q": args.target_q,
+                "target_veto": target_veto,
                 "gate_config": gcfg.identity(),
                 "model_path": str(cfg["model_path"]),
                 "pool": str(args.pool),
@@ -200,24 +238,65 @@ def main() -> None:
             payload["token_cf"] = [tok["cf"].to(torch.float16)]
             payload["n_cf"] = [n_tok["cf"]]
         torch.save(payload, out)
-        frac_pos = float((stat > 0).float().mean().item())
         logger.info(
-            "Saved clean-reference Δ̂ (n=%d, %.1f%% positive; Δ̄ mean %.4f, "
-            "Δ^min mean %.4f) to %s | calibrated s = %.6f  →  "
-            "export TADS_GATE_SCALE=%.6f",
-            stat.numel(), 100.0 * frac_pos,
+            "Saved clean reference (n=%d) to %s", raw.numel(), out,
+        )
+        raw_pos = float((raw > 0).float().mean().item())
+        logger.info(
+            "  RAW  Δ̂ = min(Δ̄, Δ^min):  %.1f%% positive | Δ̄ mean %+.4f | "
+            "Δ^min mean %+.4f",
+            100.0 * raw_pos,
             float(comp["delta_bar"].mean().item()),
             float(comp["delta_min"].mean().item()),
-            out, s, s,
         )
+        if raw_pos < 0.8 and float(comp["delta_bar"].mean().item()) > 0:
+            # Diagnose the two failure modes apart. A healthy Δ̄ with a deeply
+            # negative Δ^min is the order-statistic drift of Eq. 5, not a
+            # dirty reference — the distinction decides whether the fix is
+            # the null correction or regenerating the pool.
+            logger.info(
+                "  ^ Δ̄ is healthy but the RAW tail min is not: that is Eq. 5's "
+                "order-statistic drift (min over M spans), not a contaminated "
+                "reference. It is what the Eq. 5' null correction removes.",
+            )
+        if fit["null"] is not None:
+            logger.info(
+                "  Eq.5' null correction ON (target_veto=%.3f): clean veto "
+                "rate %.1f%%, %.1f%% positive",
+                target_veto, 100.0 * fit["veto_rate"],
+                100.0 * fit["frac_positive"],
+            )
+            # Length-uniformity is the entire claim of the correction, so it
+            # is printed rather than assumed. A bin whose rate drifts far from
+            # the target means the curve is under-resolved there.
+            logger.info("  per-bin clean veto rate (should all be ~%.1f%%):",
+                        100.0 * target_veto)
+            for row in fit["report"]:
+                logger.info(
+                    "    M in [%d, %d] | n=%6d | mu=%+.4f | veto=%.1f%%",
+                    int(row["m_lo"]), int(row["m_hi"]), int(row["n"]),
+                    row["mu"], 100.0 * row["veto_rate"],
+                )
+        else:
+            logger.warning(
+                "  Eq.5' null correction OFF — this is the ablation arm. The "
+                "clean veto rate below is what the uncorrected Eq. 5 gives: "
+                "%.1f%%.", 100.0 * fit["veto_rate"],
+            )
+        logger.info("  calibrated s = %.6f  →  export TADS_GATE_SCALE=%.6f", s, s)
         logger.info(
             "Gate config used for calibration MUST match the training config "
-            "(W=%d, tau=%.3f/%s, min_span=%d, tail=%s, include_eos=%s) — a "
-            "different span partition yields a different Δ̂ distribution and "
-            "silently mis-scales the gate.",
+            "(W=%d, tau=%.3f/%s, min_span=%d, tail=%s, include_eos=%s, "
+            "target_veto=%.3f) — a different span partition yields a different "
+            "Δ̂ distribution and silently mis-scales the gate.",
             gcfg.span_tokens, gcfg.tau, gcfg.tau_mode, gcfg.min_span_tokens,
-            gcfg.tail_mode, gcfg.include_eos,
+            gcfg.tail_mode, gcfg.include_eos, target_veto,
         )
+        # The generic contamination check below judges what Eq. 6 will
+        # actually see, which is the CENTRED statistic when the correction is
+        # on. With it off, this is the raw fraction and the check fires — as
+        # it should, since that arm really does veto most of a clean pool.
+        frac_pos = fit["frac_positive"]
         stat_name = "Δ̂"
     else:
         losses = {

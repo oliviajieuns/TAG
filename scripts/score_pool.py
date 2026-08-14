@@ -223,61 +223,16 @@ def length_bias_report(
     return out
 
 
-def _build_gate_cfg(params: Dict, scale: Optional[float]):
-    """GateConfig from a tads.tag block — mirrors the training-side builder
-    in tads.pipelines.selection so a diagnostic run and a training run
-    compute the SAME G from the same YAML."""
-    from tads.core.gate import GateConfig
-
-    return GateConfig(
-        span_tokens=int(params.get("span_tokens", 16)),
-        tau=float(params.get("tau", 0.5)),
-        tau_mode=str(params.get("tau_mode", "per_token")),
-        min_span_tokens=int(params.get("min_span_tokens", 4)),
-        tail_mode=str(params.get("tail_mode", "min")),
-        tail_quantile=float(params.get("tail_quantile", 0.0)),
-        include_eos=bool(params.get("include_eos", False)),
-        c_trunc=float(params.get("c_trunc", 0.2)),
-        eps_den=float(params.get("eps_den", 1e-3)),
-        min_common_tokens=int(params.get("min_common_tokens", 8)),
-        undefined_policy=str(params.get("undefined_policy", "neutral")),
-        undefined_gate_value=float(params.get("undefined_gate_value", 0.6)),
-        scale=scale,
-        dispersion_discount=bool(params.get("dispersion_discount", True)),
-    )
-
-
-def _resolve_gate_scale_cli(params: Dict) -> Optional[float]:
-    """Explicit gate_scale > gate_ref_file calibration > None (in-pool).
-
-    ``${oc.env:VAR,}`` resolves to the EMPTY STRING when unset, so the
-    strip() check is required — `or None` would additionally swallow a
-    legitimate 0.0 (which GateConfig rejects anyway, but the distinction
-    matters for the error message the user sees).
-    """
-    from tads.core import gate as gatelib
-
-    scale = params.get("gate_scale")
-    if scale is not None and str(scale).strip() != "":
-        return float(scale)
-    ref_file = params.get("gate_ref_file")
-    if ref_file and str(ref_file).strip() != "":
-        ref = torch.load(str(ref_file), map_location="cpu", weights_only=True)
-        if isinstance(ref, dict):
-            if "delta_hat" not in ref:
-                raise ValueError(
-                    f"gate_ref_file {ref_file} has no 'delta_hat' key (found "
-                    f"{sorted(ref.keys())}). The TAG gate calibrates on the "
-                    f"Delta_hat ratio, not the MVF raw ΔL — regenerate with "
-                    f"scripts/calibrate_reliability.py --mode tag."
-                )
-            ref = ref["delta_hat"]
-        return gatelib.calibrate_gate_scale(
-            ref,
-            target_pct=float(params.get("calibration_target_pct", 0.10)),
-            target_q=float(params.get("calibration_target_q", 0.8)),
-        )
-    return None
+# Both the GateConfig builder and the calibration resolver are IMPORTED from
+# the training pipeline rather than reimplemented here. This script exists to
+# answer "what would training's gate do to this pool", so a second copy that
+# drifts from the first makes the answer wrong in the one way that is hardest
+# to notice — it already happened once (score_pool ranked with plain topk
+# while training ranked with the gated key, measured AP 0.3341 vs 0.3468).
+from tads.pipelines.selection import (  # noqa: E402
+    _build_gate_config as _build_gate_cfg,
+    _resolve_gate_calibration,
+)
 
 
 def main() -> None:
@@ -533,7 +488,7 @@ def main() -> None:
         if args.span_tokens is not None or args.tau is not None:
             # A calibrated s is a quantile of Delta_hat under a SPECIFIC span
             # partition. Overriding W or tau here without recalibrating would
-            # mis-scale the gate — _resolve_gate_scale_cli would also reject
+            # mis-scale the gate — _resolve_gate_calibration would also reject
             # the mismatch, so say plainly what is happening.
             logger.warning(
                 "CLI override: span_tokens=%s tau=%s. If a gate_ref_file is "
@@ -545,17 +500,29 @@ def main() -> None:
             )
             if str(gcfg_params.get("gate_ref_file") or "").strip():
                 gcfg_params["gate_ref_file"] = ""
+                # The Eq. 5' null curve lives in that reference and is fit at
+                # a specific W, so dropping the reference necessarily drops
+                # the correction too. Say it, rather than failing later with
+                # "null_correction is on but no reference".
+                gcfg_params["null_correction"] = False
                 logger.warning(
                     "  -> dropping gate_ref_file for this sweep point; the "
-                    "gate will self-calibrate in-pool (diagnostic-only).",
+                    "gate will self-calibrate in-pool AND run without the "
+                    "Eq. 5' null correction (diagnostic-only). To sweep W "
+                    "with the correction intact, refit the reference per W: "
+                    "scripts/sweep_gate_config.py --span-tokens <W> "
+                    "--refit-out <ref_W>.",
                 )
-        g_scale = _resolve_gate_scale_cli(gcfg_params)
-        gcfg = _build_gate_cfg(gcfg_params, g_scale)
+        g_scale, g_null = _resolve_gate_calibration(gcfg_params)
+        gcfg = _build_gate_cfg(gcfg_params, g_scale, g_null)
         logger.info(
             "TAG gate | W=%d tau=%.3f(%s) min_span=%d tail=%s include_eos=%s "
-            "| scale=%s | token-level forwards: %d",
+            "| scale=%s | null=%s | token-level forwards: %d",
             gcfg.span_tokens, gcfg.tau, gcfg.tau_mode, gcfg.min_span_tokens,
-            gcfg.tail_mode, gcfg.include_eos, g_scale, 1 + len(cf_datasets),
+            gcfg.tail_mode, gcfg.include_eos, g_scale,
+            "off" if g_null is None
+            else f"W{g_null.span_tokens}/v{g_null.target_veto:.2f}/{g_null.digest()}",
+            1 + len(cf_datasets),
         )
         tok_true, n_true = gatelib.compute_pool_token_losses(
             model, dataset,
@@ -582,6 +549,7 @@ def main() -> None:
             )
             gcfg = _build_gate_cfg(
                 gcfg_params, gatelib.resolve_scale(gcfg, probe["delta_hat"]),
+                g_null,
             )
         tag_components = gatelib.compute_gate(
             tok_true, n_true, tok_cf, n_cf_list, completeness, cfg=gcfg,

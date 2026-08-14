@@ -1,0 +1,34 @@
+# Lowq ABLATION arm at 7B: TAG with the Eq. 5' null correction turned OFF,
+# i.e. the literal Eq. 5 tail test against a fixed zero threshold.
+#
+# This arm exists to justify Eq. 5' with a number instead of an argument.
+# On Qwen2.5-7B over 51 760 CLEAN alpaca responses the uncorrected statistic
+# passed only 39.6% (Delta_bar mean +0.108, Delta^min mean -0.265), and the
+# veto rate rose monotonically with response length — so this arm should show
+# TAG collapsing toward "select short responses", not toward the legacy score.
+#
+# It needs its OWN calibration reference, written with --no-null-correction:
+#   python scripts/calibrate_reliability.py --mode tag --no-null-correction \
+#       --config configs/experiments/lowq/tag_nonull_7b.yaml \
+#       --pool $POOLS/clean_ref/pool.json \
+#       --counterfactual $POOLS/clean_ref/counterfactual.json \
+#       --out $POOLS/clean_ref/delta_hat_7b_nonull.pt
+#   export TADS_GATE_REF_7B_NONULL=$POOLS/clean_ref/delta_hat_7b_nonull.pt
+#
+# ...and its own gate cache, because G differs:
+#   TADS_GATE_CACHE_NONULL=$POOLS/composite20/tag_gate_qwen2.5-7b_nonull.pt
+#
+# Everything else — optimizer, precision, schedule, batch, epochs, span
+# config — is inherited unchanged, so the arm differs from tag_7b in exactly
+# one bit.
+defaults:
+  - configs/methods/tag.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq/tag_nonull_7b
+tads:
+  tag:
+    null_correction: false
+    gate_ref_file: ${oc.env:TADS_GATE_REF_7B_NONULL,}
+    gate_cache_file: ${oc.env:TADS_GATE_CACHE_NONULL,}
+    store_token_losses: false

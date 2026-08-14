@@ -5,7 +5,7 @@
 #   ALPACA_DATA_FILES=$POOLS/composite20/pool.json
 #   TADS_CF_FILES=$POOLS/composite20/counterfactual.json
 #   TADS_DEDUP_FILE=$POOLS/composite20/dedup_clusters.json
-#   TADS_GATE_REF=$POOLS/clean_ref/delta_hat_7b.pt     # calibrated on 7B
+#   TADS_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b.pt  # calibrated on 7B
 #   TADS_GATE_CACHE=$POOLS/composite20/tag_gate_qwen2.5-7b.pt
 #
 # The gate is computed ONCE across all GPUs and shared by every arm and seed

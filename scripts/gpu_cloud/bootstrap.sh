@@ -194,6 +194,23 @@ CHK
   # defaults TADS_GATE_REF_7B to this path; the echo is just a reminder of
   # which variable the 7B arms actually read.
   log "7B gate reference -> $out   (read via TADS_GATE_REF_7B)"
+
+  # The Eq. 5' ablation arm needs a reference fit WITHOUT the correction.
+  # It costs no GPU: the artifact above kept the per-token NLLs, so the
+  # uncorrected calibration is re-derived from them.
+  local nonull="$POOLS/clean_ref/delta_hat_7b_nonull.pt"
+  if [ ! -f "$nonull" ]; then
+    log "deriving the no-correction ablation reference (CPU, no forward)"
+    python scripts/sweep_gate_config.py --ref "$out" \
+      --span-tokens "$(python - "$out" <<'W'
+import sys, torch
+print(int((torch.load(sys.argv[1], map_location="cpu", weights_only=False)
+           .get("gate_config") or {}).get("span_tokens", 16)))
+W
+)" --no-null-correction --refit-out "$nonull" >/dev/null \
+      && log "ablation reference -> $nonull   (read via TADS_GATE_REF_7B_NONULL)" \
+      || log "WARNING: ablation reference not written; tag_nonull_7b will not run"
+  fi
 }
 
 step_calibrate() {
@@ -236,6 +253,13 @@ if [ "$STEP" = "all7b" ]; then
   echo "Next (7B):"
   echo "  # env.sh already set TADS_GATE_REF_7B=$POOLS/clean_ref/delta_hat_7b.pt"
   echo "  export TADS_EPISODE_BS_7B=32"
+  echo "  # choose W from the calibration (CPU, seconds — no forward pass):"
+  echo "  python scripts/sweep_gate_config.py --ref \$TADS_GATE_REF_7B \\"
+  echo "      --span-tokens 16,32,64,128"
+  echo "  # check the completeness heuristic's false-positive rate on this pool:"
+  echo "  python scripts/audit_completeness.py --ablate \\"
+  echo "      --pool $POOLS/composite20/pool.json \\"
+  echo "      --manifest $POOLS/composite20/manifest.json"
   echo "  python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml"
   echo "  bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml"
   echo "      # ^ shards the gate across every GPU, once; then:"

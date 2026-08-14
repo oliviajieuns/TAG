@@ -136,7 +136,7 @@ def _resolve_reliability_scale(params: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def _build_gate_config(params: Dict[str, Any], scale: Optional[float]):
+def _build_gate_config(params: Dict[str, Any], scale: Optional[float], null=None):
     """Assemble a :class:`tads.core.gate.GateConfig` from the YAML subtree."""
     from ..core.gate import GateConfig
 
@@ -153,18 +153,30 @@ def _build_gate_config(params: Dict[str, Any], scale: Optional[float]):
         min_common_tokens=int(params.get("min_common_tokens", 8)),
         undefined_policy=str(params.get("undefined_policy", "neutral")),
         undefined_gate_value=float(params.get("undefined_gate_value", 0.6)),
+        null_correction=bool(params.get("null_correction", True)),
+        target_veto=float(params.get("target_veto", 0.05)),
+        null=null,
         scale=scale,
         dispersion_discount=bool(params.get("dispersion_discount", True)),
     )
 
 
-def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
-    """Resolve the TAG gate's sigmoid scale s (paper Eq. 6).
+def _resolve_gate_calibration(params: Dict[str, Any]):
+    """Resolve BOTH halves of the TAG calibration from one reference file.
 
-    Priority: explicit ``gate_scale`` > calibration from ``gate_ref_file``
-    (a .pt holding the clean-reference Delta_hat tensor, or a dict with key
-    'delta_hat') > None (in-pool fallback inside ``gate.resolve_scale``,
-    which warns loudly and is diagnostic-only).
+    Returns ``(scale, null)``:
+
+      * ``scale`` — the sigmoid scale s of Eq. 6. Priority: explicit
+        ``gate_scale`` > derived from ``gate_ref_file`` > None (the in-pool
+        fallback inside ``gate.resolve_scale``, which warns loudly and is
+        diagnostic-only).
+      * ``null`` — the length-conditional null curve mu(M) of Eq. 5', read
+        from the same ``gate_ref_file``. None when ``null_correction`` is off.
+
+    They resolve together because they are two quantiles of the SAME clean
+    reference and must come from the same fit: s is derived from the
+    already-centred statistic, so pairing a scale from one reference with a
+    null curve from another silently mis-scales every gate value.
 
     The reference statistic MUST be ``Delta_hat``, not the MVF module's raw
     ``ΔL``: they are different quantities (a ratio in [-inf, 1] versus a
@@ -173,12 +185,27 @@ def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
     """
     from ..core import gate as gatelib
 
-    scale = params.get("gate_scale")
+    want_null = bool(params.get("null_correction", True))
+    target_veto = float(params.get("target_veto", 0.05))
+    explicit = params.get("gate_scale")
     # ${oc.env:TADS_GATE_SCALE,} resolves to the EMPTY STRING when unset —
     # float('') would crash every TAG run at epoch-1 selection.
-    if scale is not None and str(scale).strip() != "":
-        return float(scale)
+    has_explicit = explicit is not None and str(explicit).strip() != ""
+
     ref_file = params.get("gate_ref_file")
+    if (not ref_file or str(ref_file).strip() == "") and want_null:
+        raise FileNotFoundError(
+            "tads.tag.null_correction is on but no tads.tag.gate_ref_file is "
+            "set. The null curve mu(M) is measured on a CLEAN reference pool "
+            "and cannot be derived from the candidate pool — self-calibrating "
+            "it there would absorb the very corruption the gate is meant to "
+            "find. Point gate_ref_file at a calibration artifact (bash "
+            "scripts/gpu_cloud/bootstrap.sh calibrate7b), or set "
+            "tads.tag.null_correction: false to run the uncorrected ablation."
+        )
+    if has_explicit and not want_null:
+        return float(explicit), None
+
     if ref_file and str(ref_file).strip() != "":
         if not Path(str(ref_file)).exists():
             # Deliberately NOT a silent fall-back to in-pool calibration: the
@@ -197,24 +224,82 @@ def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
                 f"To run without calibration anyway — diagnostics only — unset "
                 f"TADS_GATE_REF so the gate self-calibrates in-pool with a warning."
             )
-        ref = torch.load(str(ref_file), map_location="cpu", weights_only=True)
-        if isinstance(ref, dict):
-            if "delta_hat" not in ref:
+        # weights_only=False: the artifact carries the null curve as a plain
+        # dict alongside its tensors, which the weights-only unpickler rejects.
+        ref = torch.load(str(ref_file), map_location="cpu", weights_only=False)
+        if not isinstance(ref, dict):
+            # A bare tensor is the pre-null artifact format.
+            ref = {"delta_hat": ref}
+        if "delta_hat" not in ref:
+            raise ValueError(
+                f"gate_ref_file {ref_file} is a dict without a 'delta_hat' key "
+                f"(found {sorted(ref.keys())}). The TAG gate calibrates on "
+                f"Delta_hat; an MVF reliability reference (raw ΔL) is not "
+                f"interchangeable — regenerate with "
+                f"scripts/calibrate_reliability.py --mode tag.",
+            )
+        _warn_gate_ref_config_mismatch(ref.get("gate_config"), params, ref_file)
+
+        null = None
+        if want_null:
+            nd = ref.get("null")
+            if nd is None:
                 raise ValueError(
-                    f"gate_ref_file {ref_file} is a dict without a 'delta_hat' key "
-                    f"(found {sorted(ref.keys())}). The TAG gate calibrates on "
-                    f"Delta_hat; an MVF reliability reference (raw ΔL) is not "
-                    f"interchangeable — regenerate with "
-                    f"scripts/calibrate_reliability.py --mode tag.",
+                    f"tads.tag.null_correction is on but {ref_file} carries no "
+                    f"null curve — it predates Eq. 5'. Regenerate it:\n"
+                    f"    bash scripts/gpu_cloud/bootstrap.sh calibrate7b\n"
+                    f"(or scripts/calibrate_reliability.py --mode tag directly; "
+                    f"if the artifact already has token losses, "
+                    f"scripts/sweep_gate_config.py --refit-out re-fits it with "
+                    f"no GPU)."
                 )
-            _warn_gate_ref_config_mismatch(ref.get("gate_config"), params, ref_file)
-            ref = ref["delta_hat"]
-        return gatelib.calibrate_gate_scale(
-            ref,
-            target_pct=float(params.get("calibration_target_pct", 0.10)),
-            target_q=float(params.get("calibration_target_q", 0.8)),
+            null = gatelib.NullCalibration.from_dict(nd)
+            if abs(null.target_veto - target_veto) > 1e-9:
+                raise ValueError(
+                    f"{ref_file} was fit for target_veto={null.target_veto} but "
+                    f"this config asks for {target_veto}. mu(M) IS that "
+                    f"quantile, so it does not transfer — refit with "
+                    f"scripts/sweep_gate_config.py --target-veto {target_veto} "
+                    f"--refit-out {ref_file}."
+                )
+            if null.span_tokens != int(params.get("span_tokens", 16)):
+                raise ValueError(
+                    f"{ref_file} fit its null curve at span_tokens="
+                    f"{null.span_tokens} but this config uses "
+                    f"{params.get('span_tokens', 16)}. M is a span COUNT, so "
+                    f"mu(M) means something different at a different W."
+                )
+
+        if has_explicit:
+            return float(explicit), null
+        # s is derived from the statistic Eq. 6 actually sees, so it must be
+        # the CENTRED one whenever the correction is on. Deriving it from the
+        # uncentred reference and then centring at gate time would shift every
+        # value by mu without shifting the scale that interprets them.
+        stat = ref["delta_hat"]
+        if null is not None:
+            n_spans = ref.get("n_spans")
+            if n_spans is None:
+                raise ValueError(
+                    f"{ref_file} carries a null curve but no 'n_spans' — the "
+                    f"centring cannot be reproduced. Regenerate the reference."
+                )
+            stat = null.apply(stat, n_spans)
+        return (
+            gatelib.calibrate_gate_scale(
+                stat,
+                target_pct=float(params.get("calibration_target_pct", 0.10)),
+                target_q=float(params.get("calibration_target_q", 0.8)),
+                null_corrected=null is not None,
+            ),
+            null,
         )
-    return None
+    return None, None
+
+
+def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
+    """Back-compat shim: the scale half of :func:`_resolve_gate_calibration`."""
+    return _resolve_gate_calibration(params)[0]
 
 
 # Fields whose value changes the Delta_hat DISTRIBUTION, and therefore make a
@@ -286,8 +371,8 @@ def _prepare_tag(
     # checkpoint, gate config). Absent that, the cache is per-run.
     shared_cache = str(params.get("gate_cache_file") or "").strip() or None
     cache_path = Path(shared_cache) if shared_cache else None
-    scale = _resolve_gate_scale(params)
-    gcfg = _build_gate_config(params, scale)
+    scale, null = _resolve_gate_calibration(params)
+    gcfg = _build_gate_config(params, scale, null)
     completeness = tag_ctx["completeness"]
 
     tag: Dict[str, Any] = {
@@ -336,7 +421,7 @@ def _prepare_tag(
             # the cache at epoch 2 and then hit the base-checkpoint hard
             # error, killing every run that does not pin gate_scale (i.e. the
             # shipped default). Adopt the cached scale instead.
-            gcfg = _build_gate_config(params, float(cached_cfg["scale"]))
+            gcfg = _build_gate_config(params, float(cached_cfg["scale"]), null)
             tag["gate_config"] = gcfg
             tag["scale_used"] = gcfg.scale
             logger.info(
@@ -432,7 +517,7 @@ def _prepare_tag(
                 token_true, n_true, token_cf[0], n_cf[0], cfg=gcfg,
             )
             gcfg = _build_gate_config(
-                params, gatelib.resolve_scale(gcfg, probe["delta_hat"]),
+                params, gatelib.resolve_scale(gcfg, probe["delta_hat"]), null,
             )
             tag["gate_config"] = gcfg
             tag["scale_used"] = gcfg.scale

@@ -52,9 +52,9 @@ if ! python - "$CFG" <<'PRECHK'
 import sys
 sys.path.insert(0, ".")
 from tads.core.utils import load_config
-from tads.pipelines.selection import _resolve_gate_scale
+from tads.pipelines.selection import _resolve_gate_calibration
 cfg = load_config(sys.argv[1])
-_resolve_gate_scale((cfg.get("tads") or {}).get("tag") or {})
+_resolve_gate_calibration((cfg.get("tads") or {}).get("tag") or {})
 PRECHK
 then
   echo "[gate] calibration reference unusable — not launching shards." >&2

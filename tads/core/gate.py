@@ -16,8 +16,17 @@ into an absolute [0, 1] value.
 
     Delta_min_i  = min_{m : S_m in C_i} Delta_{i,m}                   (Eq. 5)
 
-    G_i          = c_i * (2*sigma(Delta_hat_i / s) - 1)_+ ,
-                   Delta_hat_i = min(Delta_bar_i, Delta_min_i)        (Eq. 6)
+    Delta_hat_i  = min(Delta_bar_i, Delta_min_i) - mu(M_i)            (Eq. 5')
+
+    G_i          = c_i * (2*sigma(Delta_hat_i / s) - 1)_+             (Eq. 6)
+
+Eq. 5' is an amendment the implementation forced (docs item A5). Eq. 5 is a
+minimum over ``M = ceil(n/W)`` spans, so its null LOCATION depends on the
+response length; testing it against a fixed zero vetoed 60 % of clean 7B
+data, almost all of it long. ``mu(M)`` is the ``target_veto``-quantile of the
+uncentred statistic on a CLEAN reference pool at span count ``M``, so the
+clean veto rate becomes a dial the experimenter sets (5 % by default) and is
+uniform in length. See :class:`NullCalibration`.
 
 Why the ratio and not the raw difference (Eq. 3 vs. the v3 ``reliability``
 module's ``ΔL``): the raw difference ``L(y|x^-) - L(y|x)`` is in nats and
@@ -57,6 +66,7 @@ cost, and no drift in what the view means across refreshes.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import time
@@ -73,11 +83,311 @@ from .utils import cuda_mem_str
 logger = logging.getLogger(__name__)
 
 CACHE_FILENAME = "tag_gate_cache.pt"
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 _TAIL_MODES = ("min", "quantile")
 _TAU_MODES = ("per_token", "absolute")
 _UNDEFINED_POLICIES = ("pass", "neutral", "veto")
+
+
+# ---------------------------------------------------------------------------
+# Length-conditional null calibration (paper Eq. 5', see docs item A5)
+# ---------------------------------------------------------------------------
+
+def _pava_nonincreasing(y: Sequence[float], w: Sequence[float]) -> List[float]:
+    """Weighted isotonic regression onto the non-increasing cone (PAVA).
+
+    Applied to the null curve because the mechanism is monotone: ``Delta^min``
+    is a minimum over ``M`` spans, so a lower quantile of it can only fall as
+    ``M`` grows. Any rise in the raw per-bin quantiles is estimation noise,
+    and projecting it out costs nothing while stabilising the small-count
+    bins at the long-response end.
+    """
+    # Non-increasing in x == non-decreasing in reversed x.
+    vals = [float(v) for v in reversed(list(y))]
+    wts = [float(v) for v in reversed(list(w))]
+    stack_v: List[float] = []
+    stack_w: List[float] = []
+    stack_c: List[int] = []
+    for v, wt in zip(vals, wts):
+        stack_v.append(v)
+        stack_w.append(max(wt, 1e-12))
+        stack_c.append(1)
+        while len(stack_v) > 1 and stack_v[-2] > stack_v[-1]:
+            v2, w2, c2 = stack_v.pop(), stack_w.pop(), stack_c.pop()
+            v1, w1, c1 = stack_v.pop(), stack_w.pop(), stack_c.pop()
+            wn = w1 + w2
+            stack_v.append((v1 * w1 + v2 * w2) / wn)
+            stack_w.append(wn)
+            stack_c.append(c1 + c2)
+    out: List[float] = []
+    for v, c in zip(stack_v, stack_c):
+        out.extend([v] * c)
+    return list(reversed(out))
+
+
+@dataclass(frozen=True)
+class NullCalibration:
+    """The clean-reference null of ``Delta_hat`` as a function of span count.
+
+    Why this exists. ``Delta^min`` (Eq. 5) is a MINIMUM over ``M = ceil(n/W)``
+    spans, so its distribution is an order statistic whose location depends on
+    ``M``. Testing it against the fixed threshold ``Delta_hat <= 0`` therefore
+    vetoes long responses far more often than short ones for a reason that has
+    nothing to do with instruction dependency. Measured on the 7B backbone
+    with W=16 over 51 760 CLEAN alpaca responses: only 39.6 % had
+    ``Delta_hat > 0``, i.e. the gate vetoed 60 % of data it should have passed
+    — while ``Delta_bar`` (Eq. 3, no order statistic) averaged a healthy
+    +0.108. The pathology is entirely in the tail statistic's null.
+
+    The fix is to compare ``Delta^min`` against where the null actually sits
+    at that ``M`` rather than against zero:
+
+        Delta_hat_i = min(Delta_bar_i, Delta_min_i) - mu(M_i)          (Eq. 5')
+
+    with ``mu(M)`` the ``target_veto``-quantile of the raw statistic on a
+    CLEAN reference pool restricted to span count ``M``. Two properties
+    follow by construction:
+
+      * the clean veto rate equals ``target_veto`` in EVERY bin, so it is a
+        dial the experimenter sets (0.05 by default) rather than an emergent
+        60 %; and
+      * it is length-uniform, which is what removes the bias.
+
+    ``mu`` is estimated on clean data ONLY. It cannot absorb corruption
+    signal: a dirty sample whose worst span sits far below where clean
+    samples of the same length sit still lands negative and is still vetoed.
+    That is the difference between this and self-calibrating on the candidate
+    pool, which would.
+
+    Eq. 6 is untouched: ``sigma(0) = 1/2`` still makes ``Delta_hat <= 0``
+    produce ``G == 0`` exactly, so the fusion stays non-compensatory. Only
+    the origin of ``Delta_hat`` moves.
+
+    Fields:
+        bin_edges: inclusive upper edges on ``M``; the last bin catches
+            everything above the second-to-last edge.
+        mu: one offset per bin, same length as ``bin_edges``.
+        counts: reference samples per bin (diagnostics, and PAVA weights).
+        target_veto: the clean-reference veto rate this curve targets.
+        span_tokens: the ``W`` the curve was fit at — ``M`` means nothing
+            without it, so a curve fit at one ``W`` must never be used at
+            another.
+    """
+
+    bin_edges: Tuple[int, ...]
+    mu: Tuple[float, ...]
+    counts: Tuple[int, ...]
+    target_veto: float
+    span_tokens: int
+    n_ref: int
+    monotone: bool = True
+
+    def __post_init__(self) -> None:
+        if len(self.bin_edges) != len(self.mu) or len(self.mu) != len(self.counts):
+            raise ValueError(
+                f"NullCalibration: bin_edges/mu/counts must be the same length, got "
+                f"{len(self.bin_edges)}/{len(self.mu)}/{len(self.counts)}"
+            )
+        if not self.bin_edges:
+            raise ValueError("NullCalibration: at least one bin is required")
+        if list(self.bin_edges) != sorted(set(self.bin_edges)):
+            raise ValueError(
+                f"NullCalibration: bin_edges must be strictly increasing, got {self.bin_edges}"
+            )
+        if not (0.0 < self.target_veto < 1.0):
+            raise ValueError(
+                f"NullCalibration: target_veto must be in (0,1), got {self.target_veto}"
+            )
+        if self.span_tokens < 1:
+            raise ValueError(
+                f"NullCalibration: span_tokens must be >= 1, got {self.span_tokens}"
+            )
+
+    def lookup(self, n_spans: torch.Tensor) -> torch.Tensor:
+        """``mu(M_i)`` for each sample, with the last bin absorbing the tail."""
+        edges = torch.as_tensor(self.bin_edges, dtype=torch.long)
+        mu = torch.as_tensor(self.mu, dtype=torch.float32)
+        # right=False: boundaries[i-1] < v <= boundaries[i], i.e. the edges
+        # are inclusive upper bounds. Values past the last edge clamp into it.
+        idx = torch.bucketize(n_spans.long(), edges, right=False)
+        idx = idx.clamp(max=len(self.mu) - 1)
+        return mu[idx]
+
+    def apply(self, delta_hat_raw: torch.Tensor, n_spans: torch.Tensor) -> torch.Tensor:
+        return delta_hat_raw.float() - self.lookup(n_spans)
+
+    def digest(self) -> str:
+        """Short content hash — the cache compares curves without printing them."""
+        payload = "|".join(
+            [
+                ",".join(str(int(e)) for e in self.bin_edges),
+                ",".join(f"{float(v):.8g}" for v in self.mu),
+                f"{float(self.target_veto):.8g}",
+                str(int(self.span_tokens)),
+            ]
+        )
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "bin_edges": list(int(e) for e in self.bin_edges),
+            "mu": list(float(v) for v in self.mu),
+            "counts": list(int(c) for c in self.counts),
+            "target_veto": float(self.target_veto),
+            "span_tokens": int(self.span_tokens),
+            "n_ref": int(self.n_ref),
+            "monotone": bool(self.monotone),
+        }
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "NullCalibration":
+        return NullCalibration(
+            bin_edges=tuple(int(e) for e in d["bin_edges"]),
+            mu=tuple(float(v) for v in d["mu"]),
+            counts=tuple(int(c) for c in d["counts"]),
+            target_veto=float(d["target_veto"]),
+            span_tokens=int(d["span_tokens"]),
+            n_ref=int(d["n_ref"]),
+            monotone=bool(d.get("monotone", True)),
+        )
+
+
+def fit_null_calibration(
+    delta_hat_raw: torch.Tensor,
+    n_spans: torch.Tensor,
+    *,
+    target_veto: float,
+    span_tokens: int,
+    min_bin_count: int = 400,
+    max_bins: int = 24,
+    monotone: bool = True,
+) -> NullCalibration:
+    """Fit ``mu(M)`` on a CLEAN reference pool (see :class:`NullCalibration`).
+
+    Bins are built by walking the distinct ``M`` values in order and closing a
+    bin once it holds ``min_bin_count`` samples, so short responses — where
+    the population is dense and the curve moves fastest — get fine bins and
+    the sparse long tail gets one wide one. A trailing bin below the minimum
+    is merged back into its predecessor rather than left to estimate a
+    quantile from a handful of points.
+    """
+    if not (0.0 < target_veto < 1.0):
+        raise ValueError(f"fit_null_calibration: target_veto in (0,1), got {target_veto}")
+    if min_bin_count < 1:
+        raise ValueError(f"fit_null_calibration: min_bin_count >= 1, got {min_bin_count}")
+    if max_bins < 1:
+        raise ValueError(f"fit_null_calibration: max_bins >= 1, got {max_bins}")
+    stat = delta_hat_raw.detach().float().view(-1)
+    m = n_spans.detach().long().view(-1)
+    if stat.numel() != m.numel():
+        raise ValueError(
+            f"fit_null_calibration: delta_hat_raw has {stat.numel()} entries but "
+            f"n_spans has {m.numel()}"
+        )
+    finite = torch.isfinite(stat)
+    if not bool(finite.all()):
+        logger.warning(
+            "fit_null_calibration: dropping %d non-finite reference values.",
+            int((~finite).sum().item()),
+        )
+    stat, m = stat[finite], m[finite]
+    if stat.numel() == 0:
+        raise ValueError("fit_null_calibration: reference contains no finite values")
+
+    uniq = torch.unique(m, sorted=True)
+    # Aim for max_bins even when the pool is small enough that min_bin_count
+    # alone would allow more.
+    per_bin = max(int(min_bin_count), int(math.ceil(stat.numel() / max_bins)))
+    edges: List[int] = []
+    acc = 0
+    for value in uniq.tolist():
+        acc += int((m == value).sum().item())
+        if acc >= per_bin:
+            edges.append(int(value))
+            acc = 0
+    last = int(uniq.max().item())
+    if not edges:
+        edges = [last]
+    elif edges[-1] != last:
+        # The leftover tail is below per_bin: widen the final bin instead of
+        # estimating a quantile from it.
+        edges[-1] = last
+
+    mus: List[float] = []
+    counts: List[int] = []
+    lo = -1
+    for hi in edges:
+        sel = (m > lo) & (m <= hi)
+        vals = stat[sel]
+        counts.append(int(vals.numel()))
+        mus.append(
+            float(torch.quantile(vals, float(target_veto)).item())
+            if vals.numel()
+            else float("nan")
+        )
+        lo = hi
+    # An empty interior bin cannot happen given how edges were built, but a
+    # NaN here would silently poison every gate downstream.
+    if any(math.isnan(v) for v in mus):
+        raise RuntimeError(f"fit_null_calibration: empty bin among edges {edges}")
+
+    raw = list(mus)
+    if monotone:
+        mus = _pava_nonincreasing(mus, counts)
+
+    cal = NullCalibration(
+        bin_edges=tuple(edges),
+        mu=tuple(mus),
+        counts=tuple(counts),
+        target_veto=float(target_veto),
+        span_tokens=int(span_tokens),
+        n_ref=int(stat.numel()),
+        monotone=bool(monotone),
+    )
+    logger.info(
+        "fit_null_calibration | n_ref=%d | W=%d | target_veto=%.3f | %d bin(s)",
+        stat.numel(), span_tokens, target_veto, len(edges),
+    )
+    for i, hi in enumerate(edges):
+        lo_i = 1 if i == 0 else edges[i - 1] + 1
+        logger.info(
+            "  M in [%d, %s] | n=%d | mu_raw=%+.4f | mu=%+.4f",
+            lo_i, "inf" if i == len(edges) - 1 else str(hi),
+            counts[i], raw[i], mus[i],
+        )
+    return cal
+
+
+def null_veto_report(
+    cal: NullCalibration,
+    delta_hat_raw: torch.Tensor,
+    n_spans: torch.Tensor,
+) -> List[Dict[str, float]]:
+    """Per-bin veto rate after centering — the check that the fix worked.
+
+    The point of the null correction is that the clean veto rate is uniform in
+    length. That is a claim about the data, so it gets measured and logged
+    rather than asserted.
+    """
+    centered = cal.apply(delta_hat_raw, n_spans)
+    m = n_spans.detach().long().view(-1)
+    rows: List[Dict[str, float]] = []
+    lo = -1
+    for i, hi in enumerate(cal.bin_edges):
+        sel = (m > lo) & (m <= hi) if i < len(cal.bin_edges) - 1 else (m > lo)
+        vals = centered[sel]
+        rows.append(
+            {
+                "m_lo": float(1 if i == 0 else cal.bin_edges[i - 1] + 1),
+                "m_hi": float(hi),
+                "n": float(vals.numel()),
+                "mu": float(cal.mu[i]),
+                "veto_rate": float((vals <= 0).float().mean().item()) if vals.numel() else float("nan"),
+            }
+        )
+        lo = hi
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +437,19 @@ class GateConfig:
         i.e. exactly what the default calibration target (90% of clean data
         at raw sigma >= 0.8) assigns to the clean reference's 10th
         percentile.
+    null_correction: whether to recentre Delta_hat on its clean-reference
+        null at the same span count (Eq. 5', :class:`NullCalibration`).
+        Default True: without it the tail min's order-statistic drift vetoed
+        60% of CLEAN 7B data and made the veto rate a function of response
+        length. False reproduces the literal Eq. 5 and is the ablation arm
+        that shows why the correction is needed.
+    target_veto: the clean-reference veto rate the correction targets. This
+        is the "how much should the gate reject" dial; it must be strictly
+        below ``calibration_target_pct`` (default 0.10), otherwise the
+        scale calibration's own quantile lands at or below zero.
+    null: the fitted curve itself, carried from the calibration artifact.
+        ``null_correction=True`` with ``null=None`` is an error at gate time,
+        exactly like an unresolved ``scale``.
     scale (s): sigmoid scale of Eq. 6, calibrated once per backbone on a
         clean reference pool via :func:`calibrate_gate_scale`. None triggers
         an in-pool fallback that is DIAGNOSTIC ONLY.
@@ -146,6 +469,9 @@ class GateConfig:
     min_common_tokens: int = 8
     undefined_policy: str = "neutral"
     undefined_gate_value: float = 0.6
+    null_correction: bool = True
+    target_veto: float = 0.05
+    null: Optional[NullCalibration] = None
     scale: Optional[float] = None
     dispersion_discount: bool = True
 
@@ -192,14 +518,54 @@ class GateConfig:
             )
         if self.scale is not None and self.scale <= 0:
             raise ValueError(f"GateConfig: scale must be > 0 or None, got {self.scale}")
+        if not (0.0 < self.target_veto < 1.0):
+            raise ValueError(
+                f"GateConfig: target_veto must be in (0,1), got {self.target_veto}"
+            )
+        if self.null is not None and self.null.span_tokens != self.span_tokens:
+            # M is a span COUNT, so mu(M) means a different thing at a
+            # different W. Reusing the curve across W would look fine and
+            # silently shift every gate value.
+            raise ValueError(
+                f"GateConfig: null calibration was fit at span_tokens="
+                f"{self.null.span_tokens} but this config uses "
+                f"{self.span_tokens}. Refit it at the new W with "
+                f"scripts/calibrate_reliability.py --mode tag (or "
+                f"scripts/sweep_gate_config.py to compare W first)."
+            )
+        if self.null is not None and abs(self.null.target_veto - self.target_veto) > 1e-9:
+            raise ValueError(
+                f"GateConfig: the null calibration was fit at target_veto="
+                f"{self.null.target_veto} but this config sets target_veto="
+                f"{self.target_veto}. mu(M) IS that quantile, so it cannot be "
+                f"reused at a different target — refit it with "
+                f"scripts/sweep_gate_config.py --target-veto {self.target_veto}."
+            )
 
     def identity(self) -> Dict[str, Any]:
         """The subset of fields that changes G — used for cache validation.
 
         ``scale`` is included: re-calibrating the backbone changes every
         gate value even though no forward pass is needed to redo it.
+
+        The null curve is reduced to a content digest. It changes G exactly
+        as much as any other field, so it must participate in the comparison,
+        but printing two dozen floats in every cache-mismatch message buries
+        the field that actually differs.
         """
-        return asdict(self)
+        d = asdict(self)
+        d["null"] = (
+            None
+            if self.null is None
+            else {
+                "digest": self.null.digest(),
+                "n_bins": len(self.null.bin_edges),
+                "target_veto": float(self.null.target_veto),
+                "span_tokens": int(self.null.span_tokens),
+                "n_ref": int(self.null.n_ref),
+            }
+        )
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +881,7 @@ def calibrate_gate_scale(
     *,
     target_pct: float = 0.10,
     target_q: float = 0.8,
+    null_corrected: bool = False,
 ) -> float:
     """Calibrate ``s`` on a CLEAN reference pool's ``Delta_hat``.
 
@@ -549,6 +916,18 @@ def calibrate_gate_scale(
     q = float(torch.quantile(ref, target_pct).item())
     if q <= 0:
         med = float(ref.median().item())
+        if null_corrected:
+            # After Eq. 5' centering, quantile_{target_veto} == 0 by
+            # construction, so a non-positive quantile at target_pct means
+            # target_pct <= target_veto. That is a config error with an exact
+            # fix, not something to paper over with the median.
+            raise ValueError(
+                f"calibrate_gate_scale: P{int(100 * target_pct)}(Delta_hat) = "
+                f"{q:.4f} on a NULL-CORRECTED reference. Centering puts the "
+                f"target_veto quantile at exactly 0, so calibration_target_pct "
+                f"must be strictly greater than target_veto. Raise "
+                f"calibration_target_pct or lower tads.tag.target_veto."
+            )
         logger.warning(
             "calibrate_gate_scale: P%d(Delta_hat_clean)=%.4f is not positive — the "
             "clean reference looks contaminated, or the counterfactual instructions "
@@ -570,6 +949,62 @@ def calibrate_gate_scale(
     return s
 
 
+def fit_calibration(
+    delta_hat_raw: torch.Tensor,
+    n_spans: torch.Tensor,
+    *,
+    span_tokens: int,
+    target_veto: float = 0.05,
+    target_pct: float = 0.10,
+    target_q: float = 0.8,
+    null_correction: bool = True,
+    min_bin_count: int = 400,
+    max_bins: int = 24,
+    monotone: bool = True,
+) -> Dict[str, Any]:
+    """Both halves of the clean-reference calibration, in the required order.
+
+    ``mu(M)`` first, then ``s`` from the ALREADY-CENTRED statistic. The order
+    matters: s is a quantile of whatever Eq. 6 will actually see, so deriving
+    it from the uncentred reference and then centring at gate time would
+    shift every value by mu while leaving the scale that interprets them put.
+
+    Returns ``{"null", "scale", "delta_hat", "report", "veto_rate",
+    "frac_positive"}``. ``delta_hat`` is the centred reference statistic —
+    the thing to inspect when asking "what will this gate do".
+    """
+    if null_correction and not (target_veto < target_pct):
+        raise ValueError(
+            f"fit_calibration: target_veto ({target_veto}) must be strictly "
+            f"below target_pct ({target_pct}) — centring puts the target_veto "
+            f"quantile at exactly 0, so s would be derived from a "
+            f"non-positive quantile."
+        )
+    null = (
+        fit_null_calibration(
+            delta_hat_raw, n_spans,
+            target_veto=target_veto, span_tokens=span_tokens,
+            min_bin_count=min_bin_count, max_bins=max_bins, monotone=monotone,
+        )
+        if null_correction
+        else None
+    )
+    stat = null.apply(delta_hat_raw, n_spans) if null is not None else delta_hat_raw.float()
+    s = calibrate_gate_scale(
+        stat, target_pct=target_pct, target_q=target_q,
+        null_corrected=null is not None,
+    )
+    report = null_veto_report(null, delta_hat_raw, n_spans) if null is not None else []
+    return {
+        "null": null,
+        "scale": s,
+        "delta_hat": stat,
+        "report": report,
+        "veto_rate": float((stat <= 0).float().mean().item()),
+        "frac_positive": float((stat > 0).float().mean().item()),
+    }
+
+
 # ---------------------------------------------------------------------------
 # End-to-end assembly
 # ---------------------------------------------------------------------------
@@ -587,6 +1022,11 @@ def gate_components(
     Returns ``delta_bar``, ``delta_min``, ``delta_hat`` plus the masks and
     counters the per-view attribution figures need. The gate itself (Eq. 6)
     is applied by :func:`compute_gate`, which also handles K > 1.
+
+    ``delta_hat`` is the value Eq. 6 consumes: ``min(Delta_bar, Delta_min)``
+    recentred on the clean-reference null when ``cfg.null`` is present
+    (Eq. 5'). ``delta_hat_raw`` is the uncentred quantity, kept because it is
+    what a null curve is fit on and what the ablation arm reports.
     """
     sp = spans_from_token_losses(
         token_true, n_true, token_cf, n_cf, span_tokens=cfg.span_tokens,
@@ -600,13 +1040,24 @@ def gate_components(
     d_min, empty_c = tail_gain(
         gains, mask, d_bar, mode=cfg.tail_mode, quantile=cfg.tail_quantile,
     )
-    d_hat = torch.minimum(d_bar, d_min)
+    d_hat_raw = torch.minimum(d_bar, d_min)
+    if cfg.null_correction and cfg.null is None:
+        raise ValueError(
+            "gate_components: null_correction is on but no null calibration was "
+            "supplied. Fit one on a CLEAN reference pool with "
+            "scripts/calibrate_reliability.py --mode tag and point "
+            "tads.tag.gate_ref_file at it, or set tads.tag.null_correction: "
+            "false to run the uncorrected Eq. 5 ablation (which vetoed 60% of "
+            "clean 7B data)."
+        )
+    d_hat = cfg.null.apply(d_hat_raw, sp["n_spans"]) if cfg.null_correction else d_hat_raw
 
     undefined = sp["n_common"] < int(cfg.min_common_tokens)
     return {
         "delta_bar": d_bar,
         "delta_min": d_min,
         "delta_hat": d_hat,
+        "delta_hat_raw": d_hat_raw,
         "span_gains": gains,
         "span_valid": mask,
         "n_spans": sp["n_spans"],
@@ -728,6 +1179,7 @@ def compute_gate(
         "delta_bar": _mean("delta_bar"),
         "delta_min": _mean("delta_min"),
         "delta_hat": _mean("delta_hat"),
+        "delta_hat_raw": _mean("delta_hat_raw"),
         "n_spans": per_k[0]["n_spans"],
         "n_valid_spans": _mean("n_valid_spans"),
         "n_common": per_k[0]["n_common"],
@@ -736,14 +1188,39 @@ def compute_gate(
         "completeness": completeness.float(),
     }
     logger.info(
-        "compute_gate | n=%d | K=%d | s=%.5f | G_mean=%.4f | G==0: %d (%.1f%%) | "
-        "undefined=%d | empty_C=%d | delta_bar=%.4f | delta_min=%.4f | delta_hat=%.4f",
-        n, len(token_cf), scale, float(gate.mean().item()),
+        "compute_gate | n=%d | K=%d | s=%.5f | null=%s | G_mean=%.4f | "
+        "G==0: %d (%.1f%%) | undefined=%d | empty_C=%d | delta_bar=%.4f | "
+        "delta_min=%.4f | delta_hat=%.4f",
+        n, len(token_cf), scale,
+        f"W{cfg.null.span_tokens}/v{cfg.null.target_veto:.2f}/{cfg.null.digest()}"
+        if (cfg.null_correction and cfg.null is not None) else "off",
+        float(gate.mean().item()),
         int((gate == 0).sum().item()), 100.0 * float((gate == 0).float().mean().item()),
         int(undefined_any.sum().item()), int(empty_c_any.sum().item()),
         float(out["delta_bar"].mean().item()), float(out["delta_min"].mean().item()),
         float(out["delta_hat"].mean().item()),
     )
+    if cfg.null_correction and cfg.null is not None:
+        # The candidate pool is dirtier than the reference, so its veto rate
+        # SHOULD exceed target_veto. A rate far below it means the reference
+        # does not describe this pool (wrong backbone, wrong W, wrong pool);
+        # far above it means the pool is much dirtier than expected. Both are
+        # worth seeing before a multi-hour run rather than after.
+        veto = float((gate == 0).float().mean().item())
+        if veto < 0.5 * cfg.null.target_veto:
+            logger.warning(
+                "compute_gate: pool veto rate %.1f%% is far BELOW the clean "
+                "reference target %.1f%% — the null curve may not describe "
+                "this pool (different backbone or pool than it was fit on).",
+                100.0 * veto, 100.0 * cfg.null.target_veto,
+            )
+        elif veto > 0.5:
+            logger.warning(
+                "compute_gate: pool veto rate %.1f%% — the gate is rejecting "
+                "more than half the pool. Expected roughly the dirty fraction "
+                "plus %.1f%%; check the calibration before trusting the run.",
+                100.0 * veto, 100.0 * cfg.null.target_veto,
+            )
     return out
 
 
@@ -892,6 +1369,16 @@ def save_gate_cache(
         "delta_bar": result["delta_bar"].cpu(),
         "delta_min": result["delta_min"].cpu(),
         "delta_hat": result["delta_hat"].cpu(),
+        # .get, and None rather than a fallback to delta_hat: with the
+        # correction on the two differ by mu, and storing the centred value
+        # under the raw key would corrupt any later refit that reads it.
+        "delta_hat_raw": (
+            result["delta_hat_raw"].cpu() if "delta_hat_raw" in result else None
+        ),
+        # The full curve, not just the digest identity() carries: a cache
+        # re-derived under a new W needs to know what the old one was, and a
+        # reader inspecting the cache should not have to find the reference.
+        "null": cfg.null.to_dict() if cfg.null is not None else None,
         "n_spans": result["n_spans"].cpu(),
         "n_common": result["n_common"].cpu(),
         "undefined": result["undefined"].cpu(),

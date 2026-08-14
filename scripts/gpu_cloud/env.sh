@@ -81,6 +81,10 @@ export TADS_DEDUP_FILE="${TADS_DEDUP_FILE:-$POOLS/composite20/dedup_clusters.jso
 # gets its own and the arm configs read the matching one.
 export TADS_GATE_REF="${TADS_GATE_REF:-$POOLS/clean_ref/delta_hat_05b.pt}"
 export TADS_GATE_REF_7B="${TADS_GATE_REF_7B:-$POOLS/clean_ref/delta_hat_7b.pt}"
+# The Eq. 5' ablation arm (tag_nonull_7b) needs a reference fit WITHOUT the
+# null correction, and its own gate cache, because G differs.
+export TADS_GATE_REF_7B_NONULL="${TADS_GATE_REF_7B_NONULL:-$POOLS/clean_ref/delta_hat_7b_nonull.pt}"
+export TADS_GATE_CACHE_NONULL="${TADS_GATE_CACHE_NONULL:-$POOLS/composite20/tag_gate_qwen2.5-7b_nonull.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub
 # fallback is how you end up training on a different pool than you think.

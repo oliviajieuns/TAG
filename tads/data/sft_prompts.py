@@ -203,6 +203,54 @@ _CLOSING_WRAPPERS = "\"')]}*_` \t"
 # many instruction datasets).
 _TERMINAL_CHARS = ".!?。！？…"
 
+# Markers that open a STRUCTURED line: a bullet, a numbered/lettered item, or
+# a markdown table row. Structured content is written without terminal
+# punctuation as a matter of style, so the punctuation test is the wrong test
+# for it. Measured on alpaca-cleaned, the punctuation-only rule flagged 14.6%
+# of the pool incomplete — several times the true truncation rate — and almost
+# all of the excess was lists and tables. See scripts/audit_completeness.py.
+_LIST_MARKERS = ("- ", "* ", "+ ", "• ", "– ", "— ")
+# A response this short or shorter is treated as a complete short answer
+# ("Paris", "42", "Yes, it is") rather than a cut-off long one. The T3
+# corruption is a no-op below 3 words and cuts at >=30% of the word count, so
+# reaching this few words requires an original of about ten — a thin tail
+# against a large population of genuinely terse answers.
+_SHORT_ANSWER_WORDS = 3
+# ...unless it ends on one of these. A cut lands on whatever word happened to
+# be there, which is very often a function word; a deliberate terse answer
+# essentially never ends on one. This is what keeps the short-answer rule from
+# passing "and then the".
+_DANGLING_WORDS = frozenset(
+    """a an the and or but nor for so yet of in on at to from by with without
+    into onto upon about as if then than that which who whom whose is are was
+    were be been being am do does did have has had will would shall should
+    can could may might must""".split()
+)
+
+
+def _is_structured_line(line: str) -> bool:
+    """Bullet, numbered item, table row, or ``Key: value`` — with content."""
+    s = line.strip()
+    if not s:
+        return False
+    # Markdown / pipe table row: | a | b |
+    if s.startswith("|") and s.endswith("|") and s.count("|") >= 2:
+        return True
+    for m in _LIST_MARKERS:
+        if s.startswith(m):
+            return len(s) > len(m)
+    # "1. text", "1) text", "a. text", "iv) text"
+    head, sep, rest = s.partition(" ")
+    if sep and head and head[-1] in ".)":
+        stem = head[:-1]
+        if stem and (stem.isdigit() or (len(stem) <= 4 and stem.isalpha())):
+            return bool(rest.strip())
+    # "Key: value" as a standalone line (field lists, definitions).
+    key, colon, val = s.partition(":")
+    if colon and val.strip() and 0 < len(key) <= 40 and "\n" not in key:
+        return True
+    return False
+
 
 def text_is_complete(text: str) -> bool:
     """Heuristic: does this response TEXT read as complete?
@@ -214,13 +262,31 @@ def text_is_complete(text: str) -> bool:
     1. empty/whitespace-only → incomplete;
     2. an odd number of \\`\\`\\` fences → an unclosed code block → incomplete;
     3. ends with a closed code fence → complete;
-    4. after stripping closing wrappers, ends with terminal punctuation
-       or a digit → complete; anything else (a bare word, a comma, an
-       opening bracket…) → incomplete.
+    4. the last non-empty LINE is a structured item — bullet, numbered
+       entry, table row, ``Key: value`` — → complete;
+    5. after stripping closing wrappers, ends with terminal punctuation
+       or a digit → complete;
+    6. the whole response is ``_SHORT_ANSWER_WORDS`` words or fewer AND does
+       not end on a dangling function word → complete (a terse answer, not a
+       cut-off one);
+    7. anything else (a bare word, a comma, an opening bracket…) →
+       incomplete.
 
-    Known limitation (documented in the paper): single-word or list-style
-    responses without terminal punctuation are flagged incomplete; they
-    receive the soft ``c_trunc`` factor, not a hard veto.
+    Rules 4 and 6 exist because the punctuation-only version of this test had
+    a false-positive rate several times its true-positive rate on
+    alpaca-cleaned: it flagged every bulleted list and every one-word answer.
+    Since ``c_i`` multiplies the score by ``c_trunc`` (0.2 by default), that
+    was a five-fold demotion applied to a tenth of the CLEAN pool.
+
+    Two caveats worth stating rather than burying. Rule 4 is measured as
+    nearly free of false negatives on this pool, but partly for a synthetic
+    reason: ``corruption.truncate_text`` rebuilds the response with
+    ``" ".join(words)``, which collapses newlines, so a T3-truncated list
+    arrives as a single line and can never end on line 2+. Against naturally
+    truncated text the rule would be weaker. Rule 6 is a genuine trade: a
+    30% cut of a ten-word response lands in this range and escapes.
+    ``scripts/audit_completeness.py`` measures both against a pool manifest;
+    run it before changing the thresholds.
     """
     t = text.rstrip()
     if not t:
@@ -229,11 +295,19 @@ def text_is_complete(text: str) -> bool:
         return False
     if t.endswith("```"):
         return True
+    lines = [ln for ln in t.splitlines() if ln.strip()]
+    if len(lines) > 1 and _is_structured_line(lines[-1]):
+        return True
     stripped = t.rstrip(_CLOSING_WRAPPERS)
     if not stripped:
         return False
     last = stripped[-1]
-    return last in _TERMINAL_CHARS or last.isdigit()
+    if last in _TERMINAL_CHARS or last.isdigit():
+        return True
+    words = t.split()
+    if len(words) > _SHORT_ANSWER_WORDS:
+        return False
+    return words[-1].strip(_CLOSING_WRAPPERS + ",;:").lower() not in _DANGLING_WORDS
 
 
 # =============================================================================
