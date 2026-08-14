@@ -167,15 +167,15 @@ def length_bias_report(
     the tail statistic drifts downward for long responses even when they are
     perfectly clean — an order-statistic bias the paper already acknowledges
     for the token-level variant it discarded. With a single global scale s
-    that drift turns into a length-dependent veto rate, which would (a)
+    that drift turns into a length-dependent zero-weight rate, which would (a)
     confound the corruption results and (b) invite the obvious reviewer
     objection, especially since truncated (T3) corruptions are SHORT and
-    would therefore be vetoed LESS than long clean responses on this axis.
+    would therefore be zeroed LESS than long clean responses on this axis.
 
     This reports, per response-length quantile bin: the mean gate, the exact
-    veto rate, and the dirty base rate. A gate that is doing its job shows a
-    flat-ish veto rate across bins with the dirty rate varying; a gate that
-    is length-confounded shows veto rate climbing monotonically with length.
+    zero-weight rate, and the dirty base rate. A gate that is doing its job shows a
+    flat-ish zero-weight rate across bins with the dirty rate varying; a gate that
+    is length-confounded shows zero-weight rate climbing monotonically with length.
     """
     g = gate.detach().float().view(-1)
     n_tok = n_tokens.detach().float().view(-1)
@@ -193,9 +193,9 @@ def length_bias_report(
             "tokens_max": float(n_tok[b].max().item()),
             "tokens_mean": float(n_tok[b].mean().item()),
             "gate_mean": float(g[b].mean().item()),
-            "veto_rate": float((g[b] == 0).float().mean().item()),
+            "zero_rate": float((g[b] == 0).float().mean().item()),
             "dirty_rate": float(lab[b].mean().item()),
-            "clean_veto_rate": (
+            "clean_zero_rate": (
                 float((g[b][lab[b] == 0] == 0).float().mean().item())
                 if int((lab[b] == 0).sum().item()) > 0 else None
             ),
@@ -211,13 +211,13 @@ def length_bias_report(
         out["spearman_gate_vs_length"] = (
             float((rg @ rl).item() / denom) if denom > 0 else 0.0
         )
-    # The honest headline: does the clean veto rate climb with length?
-    clean_rates = [b["clean_veto_rate"] for b in out["bins"]
-                   if b["clean_veto_rate"] is not None]
+    # The honest headline: does the clean zero-weight rate climb with length?
+    clean_rates = [b["clean_zero_rate"] for b in out["bins"]
+                   if b["clean_zero_rate"] is not None]
     if len(clean_rates) >= 2:
-        out["clean_veto_rate_first_bin"] = clean_rates[0]
-        out["clean_veto_rate_last_bin"] = clean_rates[-1]
-        out["clean_veto_length_ratio"] = (
+        out["clean_zero_rate_first_bin"] = clean_rates[0]
+        out["clean_zero_rate_last_bin"] = clean_rates[-1]
+        out["clean_zero_rate_length_ratio"] = (
             clean_rates[-1] / clean_rates[0] if clean_rates[0] > 0 else None
         )
     return out
@@ -521,7 +521,7 @@ def main() -> None:
             gcfg.span_tokens, gcfg.tau, gcfg.tau_mode, gcfg.min_span_tokens,
             gcfg.tail_mode, gcfg.include_eos, g_scale,
             "off" if g_null is None
-            else f"W{g_null.span_tokens}/v{g_null.target_veto:.2f}/{g_null.digest()}",
+            else f"W{g_null.span_tokens}/v{g_null.target_zero_rate:.2f}/{g_null.digest()}",
             1 + len(cf_datasets),
         )
         tok_true, n_true = gatelib.compute_pool_token_losses(
@@ -563,7 +563,7 @@ def main() -> None:
         # The RAW product, for reference...
         signals["tag_score_raw"] = g_i * legacy
         # ...but the headline row must rank the way TRAINING ranks. Every
-        # vetoed sample sits at exactly 0.0 in the raw product, and the
+        # zero-weight sample sits at exactly 0.0 in the raw product, and the
         # metrics here all resolve that tie with torch.topk/argsort, i.e. by
         # pool file order — so the diagnostic would report a dirty@K that the
         # trainer never produces. gated_selection_key is the shipped rule.
@@ -648,7 +648,7 @@ def main() -> None:
                 tag_components["n_valid_spans"].float().mean().item()
             ),
         }
-        # The veto only holds while the admissible set covers the budget —
+        # Non-compensation only holds while the admissible set covers the budget —
         # report the headroom so a shortfall cannot go unnoticed in the table.
         n_adm = int((tag_components["gate"] > 0).sum().item())
         report["tag"]["n_admissible"] = n_adm
@@ -661,11 +661,11 @@ def main() -> None:
         )
         _lb = report["tag"]["length_bias"]
         logger.info(
-            "TAG length bias | spearman(G, len)=%.3f | clean veto rate "
+            "TAG length bias | spearman(G, len)=%.3f | clean zero-weight rate "
             "shortest bin %.3f -> longest bin %.3f",
             _lb.get("spearman_gate_vs_length", float("nan")),
-            _lb.get("clean_veto_rate_first_bin", float("nan")),
-            _lb.get("clean_veto_rate_last_bin", float("nan")),
+            _lb.get("clean_zero_rate_first_bin", float("nan")),
+            _lb.get("clean_zero_rate_last_bin", float("nan")),
         )
 
     out_path = Path(args.out)

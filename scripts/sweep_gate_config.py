@@ -14,8 +14,8 @@ the calibration costs two full pool forwards per candidate; re-deriving it from
 the cached per-token NLLs costs seconds.
 
 The Eq. 5' null correction changes what this table is FOR. It pins the clean
-veto rate at ``--target-veto`` in every length bin by construction, so "%pos"
-and "veto" are no longer the discriminating columns — they are the same for
+zero-weight rate at ``--target-zero-rate`` in every length bin by construction, so "%pos"
+and "zero%" are no longer the discriminating columns — they are the same for
 every W that fits at all. What still differs across W is how much correction
 was needed and how well-separated the corrected statistic is:
 
@@ -25,13 +25,13 @@ was needed and how well-separated the corrected statistic is:
             itself natively, and the correction is then a small adjustment
             rather than the thing holding the gate up.
   sep       median(Delta_hat_c) / IQR(Delta_hat_c) on the CLEAN reference: how
-            far typical clean data sits above the veto boundary relative to its
+            far typical clean data sits above zero relative to its
             own scatter. Higher means a corrupted sample needs a smaller true
             effect to be pushed across zero, i.e. more detection headroom.
             It is a PROXY — it is computed without any dirty labels. Confirm
             the winner on a labelled pool with scripts/score_pool.py before
             committing to it.
-  bias      veto rate in the longest response quintile over the shortest.
+  bias      zero-weight rate in the longest response quintile over the shortest.
             Should be ~1.0 once the correction is on; it is printed as a CHECK
             on the correction, not as a criterion to optimise.
   raw%pos   fraction of the clean reference with UNCORRECTED Delta_hat > 0 —
@@ -68,8 +68,8 @@ def main() -> None:
     p.add_argument("--tail-quantile", type=float, default=0.25)
     p.add_argument("--target-pct", type=float, default=0.10)
     p.add_argument("--target-q", type=float, default=0.8)
-    p.add_argument("--target-veto", type=float, default=0.05,
-                   help="clean-reference veto rate the Eq. 5' correction pins")
+    p.add_argument("--target-zero-rate", type=float, default=0.05,
+                   help="clean-reference zero-weight rate the Eq. 5' correction pins")
     p.add_argument("--no-null-correction", action="store_true",
                    help="sweep the uncorrected Eq. 5 instead (ablation)")
     p.add_argument("--refit-out", default=None,
@@ -90,11 +90,11 @@ def main() -> None:
             f"them):\n  bash scripts/gpu_cloud/bootstrap.sh calibrate7b"
         )
     use_null = not args.no_null_correction
-    if use_null and not (args.target_veto < args.target_pct):
+    if use_null and not (args.target_zero_rate < args.target_pct):
         sys.exit(
-            f"--target-veto ({args.target_veto}) must be strictly below "
+            f"--target-zero-rate ({args.target_zero_rate}) must be strictly below "
             f"--target-pct ({args.target_pct}); the correction puts the "
-            f"target_veto quantile at exactly 0."
+            f"target_zero_rate quantile at exactly 0."
         )
 
     tok_true = ref["token_true"].float()
@@ -107,7 +107,7 @@ def main() -> None:
     print(f"samples   : {n}")
     print(f"as-built  : W={base.get('span_tokens')} tau={base.get('tau')}"
           f"({base.get('tau_mode')}) tail={base.get('tail_mode')}")
-    print(f"correction: {'Eq.5-prime null, target_veto=%.3f' % args.target_veto if use_null else 'OFF (literal Eq. 5)'}")
+    print(f"correction: {'Eq.5-prime null, target_zero_rate=%.3f' % args.target_zero_rate if use_null else 'OFF (literal Eq. 5)'}")
     print()
 
     resp_len = torch.minimum(n_true.long(), n_cf.long()).float()
@@ -127,7 +127,7 @@ def main() -> None:
         )
 
     print(f"{'W':>5} {'tau':>5} {'tail':>9} {'raw%pos':>8} {'mu-drift':>9} "
-          f"{'s':>9} {'veto':>7} {'bias':>6} {'sep':>6}  {'note':<30}")
+          f"{'s':>9} {'zero%':>7} {'bias':>6} {'sep':>6}  {'note':<30}")
     print("-" * 108)
     best = None
     winner = None
@@ -157,7 +157,7 @@ def main() -> None:
                 try:
                     fit = fit_calibration(
                         raw, comp["n_spans"], span_tokens=W,
-                        target_veto=args.target_veto,
+                        target_zero_rate=args.target_zero_rate,
                         target_pct=args.target_pct, target_q=args.target_q,
                         null_correction=use_null,
                     )
@@ -176,7 +176,7 @@ def main() -> None:
                     note = "P10<=0: s=1, UNCALIBRATED"
                     s_eff = 1.0
                 G = torch.clamp(2 * torch.sigmoid(dh / s_eff) - 1, min=0.0)
-                veto = float((G == 0).float().mean())
+                zero_frac = float((G == 0).float().mean())
                 v_first = float((G[quint[0]] == 0).float().mean())
                 v_last = float((G[quint[-1]] == 0).float().mean())
                 bias = (v_last / v_first) if v_first > 1e-6 else float("inf")
@@ -187,7 +187,7 @@ def main() -> None:
                 sep = (q2 / iqr) if iqr > 1e-9 else float("inf")
 
                 if not note:
-                    # Two-sided: the correction can also OVERSHOOT, vetoing
+                    # Two-sided: the correction can also OVERSHOOT, zeroing
                     # short responses more than long ones. That is just as
                     # much a length confound, and it reads as "safe" if only
                     # the upper tail is checked.
@@ -205,7 +205,7 @@ def main() -> None:
                             best = (cand, W, tau, tail)
                             winner = (cfg_raw, comp, fit)
                 print(f"{W:>5} {tau:>5.2f} {tail:>9} {100*raw_pos:>7.1f}% "
-                      f"{drift:>9.4f} {s:>9.4f} {100*veto:>6.1f}% {bias:>6.2f} "
+                      f"{drift:>9.4f} {s:>9.4f} {100*zero_frac:>6.1f}% {bias:>6.2f} "
                       f"{sep:>6.2f}  {note:<30}")
 
     print()
@@ -242,7 +242,7 @@ def main() -> None:
     print(f"  tads.tag.tau: {tau}")
     if tail != "min":
         print(f"  tads.tag.tail_mode: {tail}")
-    print(f"  tads.tag.target_veto: {args.target_veto}")
+    print(f"  tads.tag.target_zero_rate: {args.target_zero_rate}")
 
     if args.refit_out:
         _write_refit(args, ref, winner)
@@ -268,7 +268,7 @@ def _write_refit(args, ref, chosen) -> None:
             "scale": fit["scale"],
             "target_pct": args.target_pct,
             "target_q": args.target_q,
-            "target_veto": args.target_veto,
+            "target_zero_rate": args.target_zero_rate,
             # The identity a training run checks itself against. It must
             # describe the SWEPT configuration, not the one the original
             # forward pass happened to use.
@@ -280,7 +280,7 @@ def _write_refit(args, ref, chosen) -> None:
     print()
     print(f"Wrote refit reference -> {out}")
     print(f"  W = {cfg_raw.span_tokens} | s = {fit['scale']:.6f} | "
-          f"clean veto {100*fit['veto_rate']:.1f}% | "
+          f"clean zero-weight rate {100*fit['zero_rate']:.1f}% | "
           f"null {'off' if fit['null'] is None else 'on'}")
     print("Point the arm at it and recompute the gate:")
     print(f"  export TADS_GATE_REF_7B={out}")

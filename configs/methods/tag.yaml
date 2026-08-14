@@ -20,17 +20,24 @@
 #
 # Ratio (not raw ΔL) so the statistic is scale-free; span-min so localized
 # corruption (wrong final answer, spliced sentence) cannot hide behind a
-# healthy mean; σ(0) = ½ so Δ̂ ≤ 0 maps to G = 0 EXACTLY — the veto that
+# healthy mean; σ(0) = ½ so Δ̂ ≤ 0 maps to G = 0 EXACTLY — the exact zero that
 # makes the fusion non-compensatory.
 #
 # Eq. 5′ is an amendment the implementation forced (docs/tag-paper-deltas.md
 # A5). Δ^min is a MINIMUM over M = ⌈n/W⌉ spans, so its null location depends
 # on response length; measured on Qwen2.5-7B over 51 760 CLEAN responses, the
 # uncorrected Eq. 5 passed only 39.6 % of them — while Δ̄ averaged a healthy
-# +0.108. μ(M) is the target_veto-quantile of the uncorrected statistic on a
-# CLEAN reference pool at span count M, so the clean veto rate becomes a dial
-# (target_veto, 5 % by default) and is uniform in length. μ is fit on clean
-# data only and therefore cannot absorb corruption signal.
+# +0.108. μ(M) is the target_zero_rate-quantile of the uncorrected statistic
+# on a CLEAN reference pool at span count M, so the share of clean data at the
+# gate's floor becomes a dial (target_zero_rate, 5 % by default) and is uniform
+# in length. μ is fit on clean data only and therefore cannot absorb
+# corruption signal.
+#
+# G is a CONTINUOUS weight, not a binary gate: (·)₊ is a ReLU-style kink, not
+# a step, and about half the pool receives a value strictly inside (0, 1).
+# What is distinctive is that the floor is ATTAINABLE — an ordinary sigmoid
+# gate only approaches 0. That is what makes the fusion non-compensatory, and
+# also why an estimation error at the floor cannot be recovered.
 method: tads
 episode_batch_size: 16
 tads:
@@ -72,15 +79,15 @@ tads:
     # false is the ABLATION arm reproducing the literal Eq. 5; report it as
     # such, do not use it to escape a calibration problem.
     null_correction: true
-    # The dial: what fraction of the CLEAN reference the gate should veto.
-    # It is pinned exactly, and uniformly across response lengths, by
-    # construction. Must be strictly below calibration_target_pct — centring
+    # The dial: what fraction of the CLEAN reference lands at the gate's
+    # floor (G = 0). Pinned exactly, and uniformly across response lengths,
+    # by construction. Must be strictly below calibration_target_pct — centring
     # puts this quantile at 0, so s would otherwise be derived from a
     # non-positive quantile. The curve lives in gate_ref_file alongside s;
     # changing this value requires refitting (no GPU):
     #   python scripts/sweep_gate_config.py --ref <ref> --span-tokens <W> \
-    #       --target-veto <new> --refit-out <ref>
-    target_veto: 0.05
+    #       --target-zero-rate <new> --refit-out <ref>
+    target_zero_rate: 0.05
 
     # ---- gate (Eq. 6) ----
     # Completeness assigned to responses that read as cut off. This is a
@@ -102,7 +109,7 @@ tads:
     # c_i is a supremum no EVIDENCED sample can reach, so passing would rank
     # unjudgeable samples above every sample the gate actually examined —
     # short responses promoted precisely for being too short to judge.
-    # "pass" and "veto" remain as the two ablation arms.
+    # "pass" and "zero" remain as the two ablation arms.
     undefined_policy: neutral
     undefined_gate_value: 0.6   # = 2*calibration_target_q - 1
     # Calibrated scale s: set ONE of the two. gate_scale is the explicit

@@ -322,7 +322,7 @@ def main() -> None:
     # clean reference pool used to calibrate the gate must come from the same
     # corpus: s is a quantile of Delta_hat measured on the reference, so a
     # reference drawn from a different distribution mis-scales every gate
-    # value in the run — with no symptom other than a wrong veto rate. Only
+    # value in the run — with no symptom other than a wrong zero-weight rate. Only
     # the manifest can catch that later, so it has to be written here.
     def _corpus_id(path):
         h = hashlib.sha256()

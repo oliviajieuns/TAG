@@ -110,7 +110,7 @@ print(f"  admissible: {tag.get('n_admissible')}/{r['n']} "
 for k, v in tag.items():
     if k.startswith("budget_fits@") and not v:
         print(f"  !! {k} is FALSE — the budget exceeds the gated set; the "
-              f"veto cannot hold for every slot at that ratio.")
+              f"non-compensation cannot hold for every slot at that ratio.")
 rows = sorted(r["signals"].items(),
               key=lambda kv: kv[1]["ap_dirty_from_rejection"], reverse=True)
 print(f"\n  {'signal':<14} {'AP(dirty)':>10} {'dirty@0.1':>10}")
@@ -172,16 +172,16 @@ if m.exists():
     for r in rows:
         if r.get("score_mode") != "tag":
             continue
-        n_vet = r.get("n_vetoed_selected")
+        n_vet = r.get("n_zero_weight_selected")
         print(f"  ok    epoch {r.get('epoch')}: gate_mean={r.get('gate_mean'):.4f} "
               f"zero_frac={r.get('gate_zero_frac'):.3f} "
               f"admissible={r.get('n_admissible')}/{r.get('selection_budget')} "
-              f"vetoed_selected={n_vet}")
+              f"zero_weight_selected={n_vet}")
         if r.get("gate_zero_frac", 0) > 0.9:
-            print("  warn  over 90% of the pool is vetoed — the scale is almost "
+            print("  warn  over 90% of the pool is at zero weight — the scale is almost "
                   "certainly wrong (in-pool fallback?). Run the calibrate stage.")
         if n_vet:
-            print("  warn  vetoed samples entered the selection; the veto does not "
+            print("  warn  zero-weight samples entered the selection; non-compensation does not "
                   "hold for those slots. Report the count or lower selection_ratio.")
 else:
     print("  warn  no metrics.json")

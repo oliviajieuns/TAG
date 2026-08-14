@@ -140,7 +140,7 @@ def test_tau_per_token_is_length_independent():
 
 def test_empty_C_falls_back_to_delta_bar():
     """Every span excluded => Eq. 5 is undefined. The tail abstains rather
-    than vetoing (docs item P3)."""
+    than zeroing (docs item P3)."""
     gains = torch.tensor([[0.9, 0.9]])
     mask = torch.tensor([[False, False]])
     fallback = torch.tensor([0.42])
@@ -244,12 +244,12 @@ def test_compute_gate_separates_clean_from_both_corruption_types():
     res = compute_gate(tok_true, n, [tok_cf], [n_cf], torch.ones(3), cfg=_cfg())
     g = res["gate"]
     assert float(g[0]) > 0.5      # clean passes
-    assert float(g[1]) == 0.0     # mismatch vetoed
-    assert float(g[2]) == 0.0     # localized wrong answer vetoed
+    assert float(g[1]) == 0.0     # mismatch -> zero weight
+    assert float(g[2]) == 0.0     # localized wrong answer -> zero weight
 
 
-def test_undefined_policy_pass_does_not_veto_on_short_evidence():
-    """A sample whose common prefix is too short has NO evidence; vetoing it
+def test_undefined_policy_pass_does_not_zero_on_short_evidence():
+    """A sample whose common prefix is too short has NO evidence; zeroing it
     would punish a tokenisation artifact."""
     tok_true = torch.tensor([[0.5, 0.5, 9.0, 9.0]])
     tok_cf = torch.tensor([[3.0, 3.0, 0.0, 0.0]])
@@ -261,15 +261,15 @@ def test_undefined_policy_pass_does_not_veto_on_short_evidence():
     )
     assert bool(res["undefined"][0])
     assert float(res["gate"][0]) == pytest.approx(1.0)
-    res_veto = compute_gate(
-        tok_true, n_true, [tok_cf], [n_cf], c, cfg=_cfg(undefined_policy="veto"),
+    res_zero = compute_gate(
+        tok_true, n_true, [tok_cf], [n_cf], c, cfg=_cfg(undefined_policy="zero"),
     )
-    assert float(res_veto["gate"][0]) == 0.0
+    assert float(res_zero["gate"][0]) == 0.0
 
 
 def test_k_gt_1_averages_gates_and_discounts_dispersion():
     """Gate-then-average (not average-then-gate): evidence that straddles
-    zero must not collapse to an exact veto by Jensen."""
+    zero must not collapse to an exact zero by Jensen."""
     tok_true = torch.tensor([[0.5] * 8])
     n = torch.tensor([8])
     cf_agree = torch.tensor([[3.0] * 8])
@@ -279,7 +279,7 @@ def test_k_gt_1_averages_gates_and_discounts_dispersion():
         tok_true, n, [cf_agree, cf_disagree], [n, n], torch.ones(1), cfg=cfg,
     )
     per_cf = res["gate_per_cf"]
-    assert float(per_cf[1, 0]) == 0.0        # the disagreeing pairing vetoes
+    assert float(per_cf[1, 0]) == 0.0        # the disagreeing pairing zeroes
     assert float(per_cf[0, 0]) > 0.0
     # Mean of gates is strictly positive; gate-of-mean would have been 0.
     assert float(res["gate"][0]) == pytest.approx(float(per_cf[:, 0].mean()))
@@ -433,7 +433,7 @@ def _length_varying_pool(n=6000, seed=0):
 
     Every sample has the same per-token instruction dependency (the
     counterfactual costs 12.5% more per token) and the same per-token noise.
-    Any length dependence in the veto rate is therefore an artifact of the
+    Any length dependence in the zero-weight rate is therefore an artifact of the
     statistic, not of the data — which is exactly what Eq. 5' is about.
     """
     g = torch.Generator().manual_seed(seed)
@@ -450,11 +450,11 @@ def _length_varying_pool(n=6000, seed=0):
     return true, lens, cf
 
 
-def test_raw_tail_min_veto_rate_drifts_with_response_length():
+def test_raw_tail_min_zero_rate_drifts_with_response_length():
     """The pathology, pinned. Without this the correction has no motivation.
 
     Same per-token dependency at every length, yet the uncorrected Eq. 5
-    vetoes the longest quintile several times more often than the shortest —
+    zeroes the longest quintile several times more often than the shortest —
     because Delta^min is a minimum over M = ceil(n/W) spans and M grows.
     """
     from tads.core.gate import GateConfig, gate_components
@@ -468,17 +468,17 @@ def test_raw_tail_min_veto_rate_drifts_with_response_length():
     assert long_ > 2.5 * short, (short, long_)
 
 
-def test_null_correction_pins_the_clean_veto_rate_in_every_length_bin():
+def test_null_correction_pins_the_clean_zero_rate_in_every_length_bin():
     from tads.core.gate import GateConfig, fit_calibration, gate_components
 
     true, lens, cf = _length_varying_pool()
     cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
     comp = gate_components(true, lens, cf, lens, cfg=cfg)
     fit = fit_calibration(
-        comp["delta_hat"], comp["n_spans"], span_tokens=16, target_veto=0.05,
+        comp["delta_hat"], comp["n_spans"], span_tokens=16, target_zero_rate=0.05,
     )
     centered = fit["delta_hat"]
-    assert fit["veto_rate"] == pytest.approx(0.05, abs=0.01)
+    assert fit["zero_rate"] == pytest.approx(0.05, abs=0.01)
     quint = torch.tensor_split(torch.argsort(lens.float()), 5)
     rates = [float((centered[q] <= 0).float().mean()) for q in quint]
     # Uniform in length is the whole claim.
@@ -492,7 +492,7 @@ def test_null_correction_preserves_detection_of_localized_corruption():
     """Centering must not launder corruption: mu is fit on CLEAN data only.
 
     A sample with one span the instruction no longer explains still lands
-    below the clean null at its own length, so it is still vetoed.
+    below the clean null at its own length, so it still lands at zero weight.
     """
     from tads.core.gate import GateConfig, fit_calibration, gate_components
 
@@ -500,7 +500,7 @@ def test_null_correction_preserves_detection_of_localized_corruption():
     cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
     comp = gate_components(true, lens, cf, lens, cfg=cfg)
     fit = fit_calibration(
-        comp["delta_hat"], comp["n_spans"], span_tokens=16, target_veto=0.05,
+        comp["delta_hat"], comp["n_spans"], span_tokens=16, target_zero_rate=0.05,
     )
     null = fit["null"]
 
@@ -511,12 +511,12 @@ def test_null_correction_preserves_detection_of_localized_corruption():
         a = L // 2
         dirty[i, a: min(a + 16, L)] = cf[i, a: min(a + 16, L)] * 1.6
     comp_d = gate_components(dirty, lens, cf, lens, cfg=cfg)
-    veto_dirty = float(
+    zero_dirty = float(
         (null.apply(comp_d["delta_hat"], comp_d["n_spans"])[hit] <= 0).float().mean()
     )
-    veto_clean = float((fit["delta_hat"][hit] <= 0).float().mean())
-    assert veto_dirty > 0.9, veto_dirty
-    assert veto_clean < 0.1, veto_clean
+    zero_clean = float((fit["delta_hat"][hit] <= 0).float().mean())
+    assert zero_dirty > 0.9, zero_dirty
+    assert zero_clean < 0.1, zero_clean
 
 
 def test_null_curve_is_nonincreasing_in_span_count():
@@ -527,7 +527,7 @@ def test_null_curve_is_nonincreasing_in_span_count():
     cfg = GateConfig(span_tokens=16, null_correction=False, scale=1.0)
     comp = gate_components(true, lens, cf, lens, cfg=cfg)
     cal = fit_null_calibration(
-        comp["delta_hat"], comp["n_spans"], target_veto=0.05, span_tokens=16,
+        comp["delta_hat"], comp["n_spans"], target_zero_rate=0.05, span_tokens=16,
     )
     assert len(cal.bin_edges) > 1
     assert all(a >= b - 1e-9 for a, b in zip(cal.mu, cal.mu[1:])), cal.mu
@@ -539,13 +539,13 @@ def test_null_curve_cannot_be_reused_at_a_different_span_width():
 
     cal = NullCalibration(
         bin_edges=(4, 100), mu=(0.1, -0.2), counts=(500, 500),
-        target_veto=0.05, span_tokens=16, n_ref=1000,
+        target_zero_rate=0.05, span_tokens=16, n_ref=1000,
     )
-    GateConfig(span_tokens=16, target_veto=0.05, null=cal, scale=1.0)
+    GateConfig(span_tokens=16, target_zero_rate=0.05, null=cal, scale=1.0)
     with pytest.raises(ValueError, match="span_tokens"):
-        GateConfig(span_tokens=32, target_veto=0.05, null=cal, scale=1.0)
-    with pytest.raises(ValueError, match="target_veto"):
-        GateConfig(span_tokens=16, target_veto=0.10, null=cal, scale=1.0)
+        GateConfig(span_tokens=32, target_zero_rate=0.05, null=cal, scale=1.0)
+    with pytest.raises(ValueError, match="target_zero_rate"):
+        GateConfig(span_tokens=16, target_zero_rate=0.10, null=cal, scale=1.0)
 
 
 def test_gate_config_defaults_to_corrected_and_says_so_when_uncalibrated():
@@ -554,14 +554,14 @@ def test_gate_config_defaults_to_corrected_and_says_so_when_uncalibrated():
 
     cfg = GateConfig(span_tokens=4, scale=0.2)
     assert cfg.null_correction is True
-    assert cfg.target_veto == 0.05
+    assert cfg.target_zero_rate == 0.05
     tok_true, n, tok_cf, n_cf = _three_samples()
     with pytest.raises(ValueError, match="null_correction"):
         gate_components(tok_true, n, tok_cf, n_cf, cfg=cfg)
 
 
-def test_scale_calibration_rejects_a_target_pct_below_the_veto_target():
-    """Centering puts the target_veto quantile at exactly 0, so a target_pct
+def test_scale_calibration_rejects_a_target_pct_below_the_zero_rate_target():
+    """Centering puts the target_zero_rate quantile at exactly 0, so a target_pct
     at or below it derives s from a non-positive quantile — a config error
     with an exact fix, not something to paper over with the median."""
     from tads.core.gate import calibrate_gate_scale, fit_calibration
@@ -570,7 +570,7 @@ def test_scale_calibration_rejects_a_target_pct_below_the_veto_target():
     with pytest.raises(ValueError, match="target_pct"):
         fit_calibration(
             ref, torch.ones(500, dtype=torch.long), span_tokens=16,
-            target_veto=0.10, target_pct=0.10,
+            target_zero_rate=0.10, target_pct=0.10,
         )
     with pytest.raises(ValueError, match="NULL-CORRECTED"):
         calibrate_gate_scale(
@@ -586,7 +586,7 @@ def test_null_calibration_survives_a_cache_round_trip(tmp_path):
 
     cal = NullCalibration(
         bin_edges=(4, 100), mu=(0.1, -0.2), counts=(500, 500),
-        target_veto=0.05, span_tokens=4, n_ref=1000,
+        target_zero_rate=0.05, span_tokens=4, n_ref=1000,
     )
     cfg = _cfg(null_correction=True, null=cal)
     tok_true, n, tok_cf, n_cf = _three_samples()
@@ -602,7 +602,7 @@ def test_null_calibration_survives_a_cache_round_trip(tmp_path):
     # when the curve does, so a cache from another calibration cannot hit.
     other = NullCalibration(
         bin_edges=(4, 100), mu=(0.1, -0.3), counts=(500, 500),
-        target_veto=0.05, span_tokens=4, n_ref=1000,
+        target_zero_rate=0.05, span_tokens=4, n_ref=1000,
     )
     assert back["config"] == cfg.identity()
     assert back["config"] != _cfg(null_correction=True, null=other).identity()

@@ -154,7 +154,7 @@ def _build_gate_config(params: Dict[str, Any], scale: Optional[float], null=None
         undefined_policy=str(params.get("undefined_policy", "neutral")),
         undefined_gate_value=float(params.get("undefined_gate_value", 0.6)),
         null_correction=bool(params.get("null_correction", True)),
-        target_veto=float(params.get("target_veto", 0.05)),
+        target_zero_rate=float(params.get("target_zero_rate", 0.05)),
         null=null,
         scale=scale,
         dispersion_discount=bool(params.get("dispersion_discount", True)),
@@ -186,7 +186,7 @@ def _resolve_gate_calibration(params: Dict[str, Any]):
     from ..core import gate as gatelib
 
     want_null = bool(params.get("null_correction", True))
-    target_veto = float(params.get("target_veto", 0.05))
+    target_zero_rate = float(params.get("target_zero_rate", 0.05))
     explicit = params.get("gate_scale")
     # ${oc.env:TADS_GATE_SCALE,} resolves to the EMPTY STRING when unset —
     # float('') would crash every TAG run at epoch-1 selection.
@@ -254,12 +254,12 @@ def _resolve_gate_calibration(params: Dict[str, Any]):
                     f"no GPU)."
                 )
             null = gatelib.NullCalibration.from_dict(nd)
-            if abs(null.target_veto - target_veto) > 1e-9:
+            if abs(null.target_zero_rate - target_zero_rate) > 1e-9:
                 raise ValueError(
-                    f"{ref_file} was fit for target_veto={null.target_veto} but "
-                    f"this config asks for {target_veto}. mu(M) IS that "
+                    f"{ref_file} was fit for target_zero_rate={null.target_zero_rate} but "
+                    f"this config asks for {target_zero_rate}. mu(M) IS that "
                     f"quantile, so it does not transfer — refit with "
-                    f"scripts/sweep_gate_config.py --target-veto {target_veto} "
+                    f"scripts/sweep_gate_config.py --target-zero-rate {target_zero_rate} "
                     f"--refit-out {ref_file}."
                 )
             if null.span_tokens != int(params.get("span_tokens", 16)):
@@ -316,7 +316,7 @@ def _warn_gate_ref_config_mismatch(ref_cfg, params, ref_file) -> None:
     ``s`` is a quantile of the clean reference's Delta_hat, and Delta_hat's
     distribution depends on how the response was partitioned. Calibrating at
     W=16 and gating at W=32 silently mis-scales every gate value in the run,
-    with no symptom other than a wrong veto rate — which is exactly the
+    with no symptom other than a wrong zero-weight rate — which is exactly the
     quantity the paper reports.
     """
     if not isinstance(ref_cfg, dict):
@@ -377,7 +377,7 @@ def _prepare_tag(
 
     tag: Dict[str, Any] = {
         "gate": None,
-        # Orders the vetoed block if a backfill is ever forced — see
+        # Orders the zero-weight block if a backfill is ever forced — see
         # scorer.gated_selection_key.
         "delta_hat": None,
         "cluster_ids": tag_ctx.get("cluster_ids"),
@@ -563,10 +563,10 @@ def _finalize_tag(tag, episode, *, cfg, epoch: int) -> Dict[str, Any]:
     extras: Dict[str, Any] = {
         "score_mode": "tag",
         "gate_scale": tag.get("scale_used"),
-        # The realised veto accounting — the only evidence in the run
+        # The realised zero-weight accounting — the only evidence in the run
         # artifacts that the non-compensation claim held for THIS run.
         "n_admissible": episode.get("n_admissible"),
-        "n_vetoed_selected": episode.get("n_vetoed_selected"),
+        "n_zero_weight_selected": episode.get("n_zero_weight_selected"),
         "selection_budget": episode.get("selection_budget"),
     }
     if gate_t is not None:

@@ -20,13 +20,31 @@ into an absolute [0, 1] value.
 
     G_i          = c_i * (2*sigma(Delta_hat_i / s) - 1)_+             (Eq. 6)
 
+**G is a CONTINUOUS weight, not a binary decision.** ``(.)_+`` is a
+ReLU-style kink, not a step: ``2*sigma(z) - 1 -> 0`` as ``z -> 0+``, so G is
+a continuous function of Delta_hat with a single non-differentiable point at
+the origin. Measured on the 7B calibration, roughly half the pool lands
+strictly inside ``(0, 0.99)`` — the weight is genuinely graded, and reading
+it as a mask is wrong.
+
+What IS distinctive is that the floor is ATTAINABLE. A plain sigmoid gate
+(LSTM, GLU, MoE) approaches 0 asymptotically and never reaches it;
+``sigma(0) = 1/2`` makes ``Delta_hat <= 0 => G == 0`` exactly. That single
+property is what the non-compensatory claim rests on: with G strictly
+positive, a large enough R would always compensate. It also cuts the other
+way — a sample wrongly placed at the floor cannot be recovered by any amount
+of dynamic evidence, so an estimation error there is unrecoverable in a way
+it would not be for a strictly-positive weight. That is the trade Eq. 6
+makes, and it is why the calibration below has to be right.
+
 Eq. 5' is an amendment the implementation forced (docs item A5). Eq. 5 is a
 minimum over ``M = ceil(n/W)`` spans, so its null LOCATION depends on the
-response length; testing it against a fixed zero vetoed 60 % of clean 7B
-data, almost all of it long. ``mu(M)`` is the ``target_veto``-quantile of the
-uncentred statistic on a CLEAN reference pool at span count ``M``, so the
-clean veto rate becomes a dial the experimenter sets (5 % by default) and is
-uniform in length. See :class:`NullCalibration`.
+response length; testing it against a fixed zero put 60 % of clean 7B data
+at the floor, almost all of it long. ``mu(M)`` is the
+``target_zero_rate``-quantile of the uncentred statistic on a CLEAN
+reference pool at span count ``M``, so the fraction of clean data at the
+floor becomes a dial the experimenter sets (5 % by default) and is uniform
+in length. See :class:`NullCalibration`.
 
 Why the ratio and not the raw difference (Eq. 3 vs. the v3 ``reliability``
 module's ``ΔL``): the raw difference ``L(y|x^-) - L(y|x)`` is in nats and
@@ -58,7 +76,7 @@ the vectors agree only over the first ``min(n_true, n_cf)`` positions.
 :func:`spans_from_token_losses` trims both sides to that common prefix
 before doing anything else; samples whose common prefix is too short to
 judge are marked *undefined* and (by default) pass the gate rather than
-being vetoed on a tokenisation artifact.
+being zeroed on a tokenisation artifact.
 
 G is a property of the DATA, not of the checkpoint, so it is computed once
 at the base checkpoint and cached (``tag_gate_cache.pt``) — no per-refresh
@@ -87,7 +105,7 @@ CACHE_VERSION = 2
 
 _TAIL_MODES = ("min", "quantile")
 _TAU_MODES = ("per_token", "absolute")
-_UNDEFINED_POLICIES = ("pass", "neutral", "veto")
+_UNDEFINED_POLICIES = ("pass", "neutral", "zero")
 
 
 # ---------------------------------------------------------------------------
@@ -133,10 +151,10 @@ class NullCalibration:
     Why this exists. ``Delta^min`` (Eq. 5) is a MINIMUM over ``M = ceil(n/W)``
     spans, so its distribution is an order statistic whose location depends on
     ``M``. Testing it against the fixed threshold ``Delta_hat <= 0`` therefore
-    vetoes long responses far more often than short ones for a reason that has
+    sends long responses to zero weight far more often than short ones for a reason that has
     nothing to do with instruction dependency. Measured on the 7B backbone
     with W=16 over 51 760 CLEAN alpaca responses: only 39.6 % had
-    ``Delta_hat > 0``, i.e. the gate vetoed 60 % of data it should have passed
+    ``Delta_hat > 0``, i.e. the gate zeroed 60 % of data it should have passed
     — while ``Delta_bar`` (Eq. 3, no order statistic) averaged a healthy
     +0.108. The pathology is entirely in the tail statistic's null.
 
@@ -145,18 +163,18 @@ class NullCalibration:
 
         Delta_hat_i = min(Delta_bar_i, Delta_min_i) - mu(M_i)          (Eq. 5')
 
-    with ``mu(M)`` the ``target_veto``-quantile of the raw statistic on a
+    with ``mu(M)`` the ``target_zero_rate``-quantile of the raw statistic on a
     CLEAN reference pool restricted to span count ``M``. Two properties
     follow by construction:
 
-      * the clean veto rate equals ``target_veto`` in EVERY bin, so it is a
+      * the clean zero-weight rate equals ``target_zero_rate`` in EVERY bin, so it is a
         dial the experimenter sets (0.05 by default) rather than an emergent
         60 %; and
       * it is length-uniform, which is what removes the bias.
 
     ``mu`` is estimated on clean data ONLY. It cannot absorb corruption
     signal: a dirty sample whose worst span sits far below where clean
-    samples of the same length sit still lands negative and is still vetoed.
+    samples of the same length sit still lands negative and still lands at zero weight.
     That is the difference between this and self-calibrating on the candidate
     pool, which would.
 
@@ -169,7 +187,7 @@ class NullCalibration:
             everything above the second-to-last edge.
         mu: one offset per bin, same length as ``bin_edges``.
         counts: reference samples per bin (diagnostics, and PAVA weights).
-        target_veto: the clean-reference veto rate this curve targets.
+        target_zero_rate: the clean-reference zero-weight rate this curve targets.
         span_tokens: the ``W`` the curve was fit at — ``M`` means nothing
             without it, so a curve fit at one ``W`` must never be used at
             another.
@@ -178,7 +196,7 @@ class NullCalibration:
     bin_edges: Tuple[int, ...]
     mu: Tuple[float, ...]
     counts: Tuple[int, ...]
-    target_veto: float
+    target_zero_rate: float
     span_tokens: int
     n_ref: int
     monotone: bool = True
@@ -195,9 +213,9 @@ class NullCalibration:
             raise ValueError(
                 f"NullCalibration: bin_edges must be strictly increasing, got {self.bin_edges}"
             )
-        if not (0.0 < self.target_veto < 1.0):
+        if not (0.0 < self.target_zero_rate < 1.0):
             raise ValueError(
-                f"NullCalibration: target_veto must be in (0,1), got {self.target_veto}"
+                f"NullCalibration: target_zero_rate must be in (0,1), got {self.target_zero_rate}"
             )
         if self.span_tokens < 1:
             raise ValueError(
@@ -223,7 +241,7 @@ class NullCalibration:
             [
                 ",".join(str(int(e)) for e in self.bin_edges),
                 ",".join(f"{float(v):.8g}" for v in self.mu),
-                f"{float(self.target_veto):.8g}",
+                f"{float(self.target_zero_rate):.8g}",
                 str(int(self.span_tokens)),
             ]
         )
@@ -234,7 +252,7 @@ class NullCalibration:
             "bin_edges": list(int(e) for e in self.bin_edges),
             "mu": list(float(v) for v in self.mu),
             "counts": list(int(c) for c in self.counts),
-            "target_veto": float(self.target_veto),
+            "target_zero_rate": float(self.target_zero_rate),
             "span_tokens": int(self.span_tokens),
             "n_ref": int(self.n_ref),
             "monotone": bool(self.monotone),
@@ -246,7 +264,7 @@ class NullCalibration:
             bin_edges=tuple(int(e) for e in d["bin_edges"]),
             mu=tuple(float(v) for v in d["mu"]),
             counts=tuple(int(c) for c in d["counts"]),
-            target_veto=float(d["target_veto"]),
+            target_zero_rate=float(d["target_zero_rate"]),
             span_tokens=int(d["span_tokens"]),
             n_ref=int(d["n_ref"]),
             monotone=bool(d.get("monotone", True)),
@@ -257,7 +275,7 @@ def fit_null_calibration(
     delta_hat_raw: torch.Tensor,
     n_spans: torch.Tensor,
     *,
-    target_veto: float,
+    target_zero_rate: float,
     span_tokens: int,
     min_bin_count: int = 400,
     max_bins: int = 24,
@@ -272,8 +290,8 @@ def fit_null_calibration(
     is merged back into its predecessor rather than left to estimate a
     quantile from a handful of points.
     """
-    if not (0.0 < target_veto < 1.0):
-        raise ValueError(f"fit_null_calibration: target_veto in (0,1), got {target_veto}")
+    if not (0.0 < target_zero_rate < 1.0):
+        raise ValueError(f"fit_null_calibration: target_zero_rate in (0,1), got {target_zero_rate}")
     if min_bin_count < 1:
         raise ValueError(f"fit_null_calibration: min_bin_count >= 1, got {min_bin_count}")
     if max_bins < 1:
@@ -322,7 +340,7 @@ def fit_null_calibration(
         vals = stat[sel]
         counts.append(int(vals.numel()))
         mus.append(
-            float(torch.quantile(vals, float(target_veto)).item())
+            float(torch.quantile(vals, float(target_zero_rate)).item())
             if vals.numel()
             else float("nan")
         )
@@ -340,14 +358,14 @@ def fit_null_calibration(
         bin_edges=tuple(edges),
         mu=tuple(mus),
         counts=tuple(counts),
-        target_veto=float(target_veto),
+        target_zero_rate=float(target_zero_rate),
         span_tokens=int(span_tokens),
         n_ref=int(stat.numel()),
         monotone=bool(monotone),
     )
     logger.info(
-        "fit_null_calibration | n_ref=%d | W=%d | target_veto=%.3f | %d bin(s)",
-        stat.numel(), span_tokens, target_veto, len(edges),
+        "fit_null_calibration | n_ref=%d | W=%d | target_zero_rate=%.3f | %d bin(s)",
+        stat.numel(), span_tokens, target_zero_rate, len(edges),
     )
     for i, hi in enumerate(edges):
         lo_i = 1 if i == 0 else edges[i - 1] + 1
@@ -359,14 +377,14 @@ def fit_null_calibration(
     return cal
 
 
-def null_veto_report(
+def zero_rate_report(
     cal: NullCalibration,
     delta_hat_raw: torch.Tensor,
     n_spans: torch.Tensor,
 ) -> List[Dict[str, float]]:
-    """Per-bin veto rate after centering — the check that the fix worked.
+    """Per-bin zero-weight rate after centering — the check that the fix worked.
 
-    The point of the null correction is that the clean veto rate is uniform in
+    The point of the null correction is that the clean zero-weight rate is uniform in
     length. That is a claim about the data, so it gets measured and logged
     rather than asserted.
     """
@@ -383,7 +401,7 @@ def null_veto_report(
                 "m_hi": float(hi),
                 "n": float(vals.numel()),
                 "mu": float(cal.mu[i]),
-                "veto_rate": float((vals <= 0).float().mean().item()) if vals.numel() else float("nan"),
+                "zero_rate": float((vals <= 0).float().mean().item()) if vals.numel() else float("nan"),
             }
         )
         lo = hi
@@ -432,18 +450,18 @@ class GateConfig:
         clean sample receives, so a sample nobody could judge is neither
         promoted nor punished. "pass" (G = c_i) is the SUPREMUM no evidenced
         sample can reach and exists only as an ablation showing the gate is
-        doing the work; "veto" (G = 0) is the opposite ablation.
+        doing the work; "zero" (G = 0) is the opposite ablation.
     undefined_gate_value: the neutral gate value, default 0.6 = 2*0.8 - 1,
         i.e. exactly what the default calibration target (90% of clean data
         at raw sigma >= 0.8) assigns to the clean reference's 10th
         percentile.
     null_correction: whether to recentre Delta_hat on its clean-reference
         null at the same span count (Eq. 5', :class:`NullCalibration`).
-        Default True: without it the tail min's order-statistic drift vetoed
-        60% of CLEAN 7B data and made the veto rate a function of response
+        Default True: without it the tail min's order-statistic drift sent
+        60% of CLEAN 7B data and made the zero-weight rate a function of response
         length. False reproduces the literal Eq. 5 and is the ablation arm
         that shows why the correction is needed.
-    target_veto: the clean-reference veto rate the correction targets. This
+    target_zero_rate: the clean-reference zero-weight rate the correction targets. This
         is the "how much should the gate reject" dial; it must be strictly
         below ``calibration_target_pct`` (default 0.10), otherwise the
         scale calibration's own quantile lands at or below zero.
@@ -470,7 +488,7 @@ class GateConfig:
     undefined_policy: str = "neutral"
     undefined_gate_value: float = 0.6
     null_correction: bool = True
-    target_veto: float = 0.05
+    target_zero_rate: float = 0.05
     null: Optional[NullCalibration] = None
     scale: Optional[float] = None
     dispersion_discount: bool = True
@@ -518,9 +536,9 @@ class GateConfig:
             )
         if self.scale is not None and self.scale <= 0:
             raise ValueError(f"GateConfig: scale must be > 0 or None, got {self.scale}")
-        if not (0.0 < self.target_veto < 1.0):
+        if not (0.0 < self.target_zero_rate < 1.0):
             raise ValueError(
-                f"GateConfig: target_veto must be in (0,1), got {self.target_veto}"
+                f"GateConfig: target_zero_rate must be in (0,1), got {self.target_zero_rate}"
             )
         if self.null is not None and self.null.span_tokens != self.span_tokens:
             # M is a span COUNT, so mu(M) means a different thing at a
@@ -533,13 +551,13 @@ class GateConfig:
                 f"scripts/calibrate_reliability.py --mode tag (or "
                 f"scripts/sweep_gate_config.py to compare W first)."
             )
-        if self.null is not None and abs(self.null.target_veto - self.target_veto) > 1e-9:
+        if self.null is not None and abs(self.null.target_zero_rate - self.target_zero_rate) > 1e-9:
             raise ValueError(
-                f"GateConfig: the null calibration was fit at target_veto="
-                f"{self.null.target_veto} but this config sets target_veto="
-                f"{self.target_veto}. mu(M) IS that quantile, so it cannot be "
+                f"GateConfig: the null calibration was fit at target_zero_rate="
+                f"{self.null.target_zero_rate} but this config sets target_zero_rate="
+                f"{self.target_zero_rate}. mu(M) IS that quantile, so it cannot be "
                 f"reused at a different target — refit it with "
-                f"scripts/sweep_gate_config.py --target-veto {self.target_veto}."
+                f"scripts/sweep_gate_config.py --target-zero-rate {self.target_zero_rate}."
             )
 
     def identity(self) -> Dict[str, Any]:
@@ -560,7 +578,7 @@ class GateConfig:
             else {
                 "digest": self.null.digest(),
                 "n_bins": len(self.null.bin_edges),
-                "target_veto": float(self.null.target_veto),
+                "target_zero_rate": float(self.null.target_zero_rate),
                 "span_tokens": int(self.null.span_tokens),
                 "n_ref": int(self.null.n_ref),
             }
@@ -821,7 +839,7 @@ def tail_gain(
     When ``C_i`` is empty — every span is boilerplate, or the response is
     shorter than ``min_span_tokens`` — Eq. 5 is undefined. We fall back to
     ``fallback`` (in practice ``Delta_bar``), i.e. the tail test abstains and
-    the overall gain decides alone. Vetoing here would punish short answers
+    the overall gain decides alone. Zeroing here would punish short answers
     for being short; passing unconditionally would blind the gate. See docs
     item P3.
 
@@ -895,7 +913,7 @@ def calibrate_gate_scale(
 
     The calibration statistic MUST be ``Delta_hat``, not ``Delta_bar``: the
     tail min is systematically lower than the mean, so calibrating on the
-    mean and gating on the min would silently veto a large slice of clean
+    mean and gating on the min would silently zero a large slice of clean
     data. Calibrating on ``Delta_hat`` also absorbs the population-level
     length dependence of the min (docs item P2).
     """
@@ -917,16 +935,16 @@ def calibrate_gate_scale(
     if q <= 0:
         med = float(ref.median().item())
         if null_corrected:
-            # After Eq. 5' centering, quantile_{target_veto} == 0 by
+            # After Eq. 5' centering, quantile_{target_zero_rate} == 0 by
             # construction, so a non-positive quantile at target_pct means
-            # target_pct <= target_veto. That is a config error with an exact
+            # target_pct <= target_zero_rate. That is a config error with an exact
             # fix, not something to paper over with the median.
             raise ValueError(
                 f"calibrate_gate_scale: P{int(100 * target_pct)}(Delta_hat) = "
                 f"{q:.4f} on a NULL-CORRECTED reference. Centering puts the "
-                f"target_veto quantile at exactly 0, so calibration_target_pct "
-                f"must be strictly greater than target_veto. Raise "
-                f"calibration_target_pct or lower tads.tag.target_veto."
+                f"target_zero_rate quantile at exactly 0, so calibration_target_pct "
+                f"must be strictly greater than target_zero_rate. Raise "
+                f"calibration_target_pct or lower tads.tag.target_zero_rate."
             )
         logger.warning(
             "calibrate_gate_scale: P%d(Delta_hat_clean)=%.4f is not positive — the "
@@ -954,7 +972,7 @@ def fit_calibration(
     n_spans: torch.Tensor,
     *,
     span_tokens: int,
-    target_veto: float = 0.05,
+    target_zero_rate: float = 0.05,
     target_pct: float = 0.10,
     target_q: float = 0.8,
     null_correction: bool = True,
@@ -969,21 +987,21 @@ def fit_calibration(
     it from the uncentred reference and then centring at gate time would
     shift every value by mu while leaving the scale that interprets them put.
 
-    Returns ``{"null", "scale", "delta_hat", "report", "veto_rate",
+    Returns ``{"null", "scale", "delta_hat", "report", "zero_rate",
     "frac_positive"}``. ``delta_hat`` is the centred reference statistic —
     the thing to inspect when asking "what will this gate do".
     """
-    if null_correction and not (target_veto < target_pct):
+    if null_correction and not (target_zero_rate < target_pct):
         raise ValueError(
-            f"fit_calibration: target_veto ({target_veto}) must be strictly "
-            f"below target_pct ({target_pct}) — centring puts the target_veto "
+            f"fit_calibration: target_zero_rate ({target_zero_rate}) must be strictly "
+            f"below target_pct ({target_pct}) — centring puts the target_zero_rate "
             f"quantile at exactly 0, so s would be derived from a "
             f"non-positive quantile."
         )
     null = (
         fit_null_calibration(
             delta_hat_raw, n_spans,
-            target_veto=target_veto, span_tokens=span_tokens,
+            target_zero_rate=target_zero_rate, span_tokens=span_tokens,
             min_bin_count=min_bin_count, max_bins=max_bins, monotone=monotone,
         )
         if null_correction
@@ -994,13 +1012,13 @@ def fit_calibration(
         stat, target_pct=target_pct, target_q=target_q,
         null_corrected=null is not None,
     )
-    report = null_veto_report(null, delta_hat_raw, n_spans) if null is not None else []
+    report = zero_rate_report(null, delta_hat_raw, n_spans) if null is not None else []
     return {
         "null": null,
         "scale": s,
         "delta_hat": stat,
         "report": report,
-        "veto_rate": float((stat <= 0).float().mean().item()),
+        "zero_rate": float((stat <= 0).float().mean().item()),
         "frac_positive": float((stat > 0).float().mean().item()),
     }
 
@@ -1047,7 +1065,7 @@ def gate_components(
             "supplied. Fit one on a CLEAN reference pool with "
             "scripts/calibrate_reliability.py --mode tag and point "
             "tads.tag.gate_ref_file at it, or set tads.tag.null_correction: "
-            "false to run the uncorrected Eq. 5 ablation (which vetoed 60% of "
+            "false to run the uncorrected Eq. 5 ablation (which sent 60% of "
             "clean 7B data)."
         )
     d_hat = cfg.null.apply(d_hat_raw, sp["n_spans"]) if cfg.null_correction else d_hat_raw
@@ -1092,7 +1110,7 @@ def _apply_undefined_policy(
         repl = completeness.float()
     elif policy == "neutral":
         repl = completeness.float() * float(neutral_value)
-    else:  # "veto"
+    else:  # "zero"
         repl = torch.zeros_like(gate)
     return torch.where(undefined, repl, gate)
 
@@ -1113,7 +1131,7 @@ def compute_gate(
     averaging second (rather than averaging ``Delta_hat`` and gating once) is
     deliberate and matches ``tads.core.reliability``: the clamp in Eq. 6 is
     convex, so gate-of-mean <= mean-of-gates by Jensen, and evidence that
-    straddles zero would collapse to an exact veto under gate-of-mean even
+    straddles zero would collapse to an exact zero under gate-of-mean even
     when some pairings show a clear positive dependency.
 
     Args:
@@ -1192,7 +1210,7 @@ def compute_gate(
         "G==0: %d (%.1f%%) | undefined=%d | empty_C=%d | delta_bar=%.4f | "
         "delta_min=%.4f | delta_hat=%.4f",
         n, len(token_cf), scale,
-        f"W{cfg.null.span_tokens}/v{cfg.null.target_veto:.2f}/{cfg.null.digest()}"
+        f"W{cfg.null.span_tokens}/v{cfg.null.target_zero_rate:.2f}/{cfg.null.digest()}"
         if (cfg.null_correction and cfg.null is not None) else "off",
         float(gate.mean().item()),
         int((gate == 0).sum().item()), 100.0 * float((gate == 0).float().mean().item()),
@@ -1201,25 +1219,25 @@ def compute_gate(
         float(out["delta_hat"].mean().item()),
     )
     if cfg.null_correction and cfg.null is not None:
-        # The candidate pool is dirtier than the reference, so its veto rate
-        # SHOULD exceed target_veto. A rate far below it means the reference
+        # The candidate pool is dirtier than the reference, so its zero-weight rate
+        # SHOULD exceed target_zero_rate. A rate far below it means the reference
         # does not describe this pool (wrong backbone, wrong W, wrong pool);
         # far above it means the pool is much dirtier than expected. Both are
         # worth seeing before a multi-hour run rather than after.
-        veto = float((gate == 0).float().mean().item())
-        if veto < 0.5 * cfg.null.target_veto:
+        zero_frac = float((gate == 0).float().mean().item())
+        if zero_frac < 0.5 * cfg.null.target_zero_rate:
             logger.warning(
-                "compute_gate: pool veto rate %.1f%% is far BELOW the clean "
+                "compute_gate: pool zero-weight rate %.1f%% is far BELOW the clean "
                 "reference target %.1f%% — the null curve may not describe "
                 "this pool (different backbone or pool than it was fit on).",
-                100.0 * veto, 100.0 * cfg.null.target_veto,
+                100.0 * zero_frac, 100.0 * cfg.null.target_zero_rate,
             )
-        elif veto > 0.5:
+        elif zero_frac > 0.5:
             logger.warning(
-                "compute_gate: pool veto rate %.1f%% — the gate is rejecting "
+                "compute_gate: pool zero-weight rate %.1f%% — the gate is rejecting "
                 "more than half the pool. Expected roughly the dirty fraction "
                 "plus %.1f%%; check the calibration before trusting the run.",
-                100.0 * veto, 100.0 * cfg.null.target_veto,
+                100.0 * zero_frac, 100.0 * cfg.null.target_zero_rate,
             )
     return out
 

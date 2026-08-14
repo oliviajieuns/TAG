@@ -76,7 +76,7 @@ def _build_gate_cfg(params, scale, null=None):
         undefined_policy=str(params.get("undefined_policy", "neutral")),
         undefined_gate_value=float(params.get("undefined_gate_value", 0.6)),
         null_correction=bool(params.get("null_correction", True)),
-        target_veto=float(params.get("target_veto", 0.05)),
+        target_zero_rate=float(params.get("target_zero_rate", 0.05)),
         null=null,
         scale=scale,
         dispersion_discount=bool(params.get("dispersion_discount", True)),
@@ -152,12 +152,12 @@ def preflight_scale(cfg) -> None:
 
     tag_cfg = (cfg.get("tads") or {}).get("tag") or {}
     # Raises with the exact fix when the reference is missing, unreadable, or
-    # was fit at a different W / target_veto.
+    # was fit at a different W / target_zero_rate.
     scale, null = _resolve_gate_calibration(tag_cfg)
     if null is not None:
         logger.info(
-            "Eq. 5' null curve: %d bin(s), target_veto=%.3f, fit on n=%d at "
-            "W=%d (%s)", len(null.bin_edges), null.target_veto, null.n_ref,
+            "Eq. 5' null curve: %d bin(s), target_zero_rate=%.3f, fit on n=%d at "
+            "W=%d (%s)", len(null.bin_edges), null.target_zero_rate, null.n_ref,
             null.span_tokens, null.digest(),
         )
     if scale is None:
@@ -331,7 +331,7 @@ def run_merge(args, cfg) -> None:
     print(f"  G == 0   : {int((result['gate'] == 0).sum())}/{n_pool} "
           f"({100.0 * float((result['gate'] == 0).float().mean()):.1f}%)")
     if float((result["gate"] == 0).float().mean()) > 0.9:
-        print("  WARNING: over 90% vetoed — the scale is almost certainly "
+        print("  WARNING: over 90% at zero weight — the scale is almost certainly "
               "wrong (uncalibrated in-pool fallback?).")
     print(f"\nPoint runs at it:\n  export TADS_GATE_CACHE={out}")
     if not args.keep_shards:

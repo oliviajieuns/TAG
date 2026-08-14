@@ -29,7 +29,7 @@ green (core 59 + corruption 19 + table 12 pass).**
 
 **v3 → v3.1 개정 근거 (2026-08-13):** 원고의 진입 프레임을 "multi-view
 fusion 방법론"에서 **"training-adaptive selection이 저품질 pool에서 깨진다 →
-reliability를 veto로"** 로 재배치. 방법의 셀링 포인트가 세 뷰의 존재가 아니라
+reliability를 도달 가능한 하한을 갖는 가중치로"** 로 재배치. 방법의 셀링 포인트가 세 뷰의 존재가 아니라
 **비보상성(non-compensatory) 그 자체**임이 v3 검증에서 드러났고(§7-1의 γ*
 정리가 실질 기여), 저널 스코프는 fusion 어휘를 §0 그대로 유지하는 것으로
 충분히 방어된다. 부수 결정 두 가지: (a) v3의 "trajectory 전면 삭제"를 **철회**
@@ -73,7 +73,7 @@ Hidden-state representations; Foundation models
 > local stability analysis. The fused score is simply
 > s_i^(t) = G_i · R_i^(t) · (1 + λ·ã_i^(t)): because both dynamic factors
 > are bounded, a zeroed gate cannot be compensated by any amount of
-> difficulty or alignment evidence — reliability is a veto, not a vote —
+> difficulty or alignment evidence — reliability is a weight whose floor is attainable, not a vote —
 > while selection among gated samples remains fully adaptive to the
 > training trajectory. On instruction pools with typed,
 > manifest-verified corruptions (mismatched, noisy, truncated,
@@ -122,7 +122,7 @@ Reliability(G = Q·c, counterfactual 교차-뷰 forward, **static**),
 difficulty–uncertainty carrier(R^(t), refresh 간 loss 궤적), trajectory-anchor
 alignment(ã^(t), 층별 hidden-state 기하) — 의 **보정된 비보상적
 (log-opinion-pool형) 융합**으로 재기술한다. dynamic 두 인자가 유계이므로
-G=0은 어떤 난이도·정렬 증거로도 되살아나지 않고(veto), 게이트를 통과한
+G=0은 어떤 난이도·정렬 증거로도 되살아나지 않고(G의 하한은 도달 가능하다), 게이트를 통과한
 샘플들 사이의 순위는 완전히 trajectory-adaptive하게 남는다. 게이트 강도는
 측정된 pool 오염도와 뷰 안정성에 보정으로 연동된다.
 
@@ -246,7 +246,7 @@ contribution 4번이 이 문장을 "prior unified-protocol evidence"로
 
 | # | 초록 | 구현 | 상태 |
 |---|---|---|---|
-| A | `G_i ∈ [0,1]`, 0이면 veto | `(Q·c+ε)^γ`, ε=0.01 바닥 | **표기 문제만.** ε 바닥은 게이트 아래 순위를 정의된 상태로 두기 위한 것이고 억제비 61×는 §7-1에서 명시적으로 계산된다. 초록의 "cannot be compensated"는 γ>γ* 조건부 주장이므로 method에서 ε·γ*를 드러내면 정합. 초록 문구 수정 불필요, **method에 ε 1문장 필수** |
+| A | `G_i ∈ [0,1]`, 하한 0에 도달 | `(Q·c+ε)^γ`, ε=0.01 바닥 | **표기 문제만.** ε 바닥은 게이트 아래 순위를 정의된 상태로 두기 위한 것이고 억제비 61×는 §7-1에서 명시적으로 계산된다. 초록의 "cannot be compensated"는 γ>γ* 조건부 주장이므로 method에서 ε·γ*를 드러내면 정합. 초록 문구 수정 불필요, **method에 ε 1문장 필수** |
 | B | `R^(t)` = difficulty–**uncertainty** carrier, trajectory-anchored selection에서 **inherited unchanged** | `D′` = difficulty-only (`rank01(L^t)`×progress, `[0.5,1]` 압축). entropy는 로깅만 — v3가 "uncertainty ≠ quality"를 근거로 **의도적으로 제거** | **실질 불일치.** 아래 둘 중 하나를 D5까지 선택 |
 
 **B의 선택지 (하나만 고른다):**
@@ -336,7 +336,7 @@ log S = γ·log(Qc+ε) + log(D'+ε) + log(1+λ_t·Ã)
   이질적 뷰 획득 스케줄(Q 1회/D refresh/A epoch) + 뷰별 진단**에 건다,
   (iii) TMC/ETMC(대칭적 evidential, conflict 재분배)와 RCML(conflictive
   averaging = 보상적)과의 대비 — "선택 문제에서는 unreliability가
-  down-weight가 아니라 **veto**여야 한다"가 인용 가능한 포지셔닝 문장.
+  단순 down-weight가 아니라 **하한에 도달하는 가중치**여야 한다"가 인용 가능한 포지셔닝 문장.
 - 각 인자의 확률적 독해와 pool-relative(D,A) vs absolute(Q) 구분을 본문에
   1문단 + limitation 2문장.
 
@@ -553,12 +553,12 @@ partial-view e2e → knockout e2e → dedup-off → source-skewed → SelectIT.
   `TADS-legacy` = `score_mode: tads`(게이트 없음). 표 캡션에 이 대응을 각주로.
 - **Abstract:** §0′에 확정 문구 등록 완료. 구조는 training-adaptive 전제
   1문장 → 저품질 pool에서 difficulty–uncertainty가 오염을 **선호**한다는
-  실패 서술 → 세 뷰(획득 스케줄 차이 포함) → 융합식 + veto-not-vote →
+  실패 서술 → 세 뷰(획득 스케줄 차이 포함) → 융합식 + weight-with-attainable-floor →
   `\STATUS{}` 결과. **§0′의 검증 부채 3건(STATUS 치환 / 33% 재측정 또는 삭제 /
   carrier 문구 B1·B2)을 제출 전 전부 닫을 것.**
 - **Intro:** CFP 토픽 명시 문단(§0 순서) + taxonomy 매핑 테이블 + Huang et
   al. 2024를 둘째 문단에 인용·확장 선언. 첫 문단은 초록과 같은 순서
-  (training-adaptive → 저품질에서의 역선택 → veto)로 전개하고, F2(entropy/
+  (training-adaptive → 저품질에서의 역선택 → 도달 가능한 하한)로 전개하고, F2(entropy/
   PPL/IFD top-K의 오염률)를 그 문단에서 바로 참조한다.
 - **Related work 3단:** ① MVL on low-quality data — TMC(ICLR'21),
   ETMC(TPAMI'23), QMF(ICML'23), PDF(ICML'24), RCML(AAAI'24), 저품질 서베이

@@ -13,7 +13,7 @@ occur in every real pool. §B are **recommended** and are about whether the
 experiment will survive review. §C is wording precision.
 
 Nothing here changes the method's story: the gate is still a calibrated,
-zero-anchored counterfactual contrast used as a veto. The changes make it
+zero-anchored counterfactual contrast used as a multiplicative reliability weight. The changes make it
 well-defined and honest about its failure modes.
 
 ---
@@ -33,7 +33,7 @@ the natural implementations disagree wildly — \(+\infty\) (never gate) and
 \(-\infty\) (always gate) are both "natural".
 
 **Code.** `tail_gain(...)` falls back to \(\bar\Delta_i\): the tail test
-abstains and the overall gain decides alone. Vetoing would punish short
+abstains and the overall gain decides alone. Zeroing would punish short
 answers for being short; passing unconditionally would blind the gate.
 
 **Suggested text.** Add to Eq. 5:
@@ -78,12 +78,12 @@ samples whose common prefix is shorter than `min_common_tokens` are marked
 **Problem.** When the common prefix of A2 is too short (a handful of
 tokens), \(\bar\Delta_i\) and \(\Delta^{\min}_i\) are computable but
 meaningless, and their noise is large enough to cross the zero anchor
-routinely. Vetoing a sample because of a tokenisation artifact is the worst
+routinely. Zeroing a sample because of a tokenisation artifact is the worst
 possible failure mode for a method whose entire pitch is "reliability is a
-veto".
+weight whose floor is attainable".
 
 **Code.** `undefined_policy`, default `pass`: \(G_i = c_i\) — no evidence,
-no verdict. `neutral` and `veto` exist as ablation arms, and the count is
+no verdict. `neutral` and `zero` exist as ablation arms, and the count is
 logged and reported.
 
 **Suggested text.** A footnote to Eq. 6:
@@ -101,40 +101,40 @@ or alignment evidence".
 
 **Problem.** True of the SCORE, but selection is top-\(B\). If
 \(|\{i : G_i > 0\}| < B\) the selector must fill the remaining slots with
-vetoed samples, all of which score exactly 0. The veto claim then silently
+zero-weight samples, all of which score exactly 0. The non-compensation claim then silently
 fails for those slots — and worse, ties at exactly 0 are broken by
 `torch.topk`'s index order, i.e. by the candidate pool's FILE ORDER.
 
 **Code.** `scorer.gated_selection_key` orders every admissible sample above
-every vetoed one and breaks each block by a meaningful statistic (the gated
+every zeroed one and breaks each block by a meaningful statistic (the gated
 score above, the ungated score below); the shortfall is logged as a warning
 and reported per selection ratio as `budget_fits@K`.
 
 **Two further subtleties the code had to settle.**
 
-*Which reject?* Ordering the vetoed block by the ungated reward is actively
+*Which reject?* Ordering the zeroed block by the ungated reward is actively
 perverse: \(\mathcal{R} = wL + (1-w)H\) increases with response loss, and
 the corruptions the gate exists to reject are precisely the high-loss ones,
 so the backfill would pull in the MOST corrupted rejects first. The code
 orders that block by \(\hat\Delta_i\) — take the least unreliable rejects.
 
 *The dedup constraint can force a backfill even when the budget "fits".*
-\(|\{G_i>0\}| \ge B\) does not imply the veto held: at most one sample per
+\(|\{G_i>0\}| \ge B\) does not imply non-compensation held: at most one sample per
 near-duplicate cluster may be selected, so the admissible set can be
 exhausted before \(B\) is reached. The realised count
-(`n_vetoed_selected`) is therefore measured after selection and written to
+(`n_zero_weight_selected`) is therefore measured after selection and written to
 `metrics.json`, rather than predicted from \(|\{G_i>0\}|\).
 
 **Suggested text.** After Eq. 1:
 
 > When fewer than \(B\) candidates pass the gate — either because the gated
 > set is smaller than the budget or because the near-duplicate constraint
-> exhausts it — the remaining slots are filled from the vetoed set in
+> exhausts it — the remaining slots are filled from the zero-weight set in
 > increasing order of \(\hat\Delta_i\), i.e. by the least unreliable
-> rejects. We report the realised number of vetoed samples in each selected
+> rejects. We report the realised number of zero-weight samples in each selected
 > subset; at our selection ratios it is \(N\).
 
-*(Substitute the measured `n_vetoed_selected` from `metrics.json`. If it is
+*(Substitute the measured `n_zero_weight_selected` from `metrics.json`. If it is
 not zero, the non-compensation claim must be stated as holding for the
 remaining slots, not unconditionally.)*
 
@@ -145,7 +145,7 @@ remaining slots, not unconditionally.)*
 **This is the item that decides whether the method works at all at 7B.**
 
 **Paper.** \(\hat\Delta_i = \min(\bar\Delta_i, \Delta^{\min}_i)\), and Eq. 6
-vetoes exactly when \(\hat\Delta_i \le 0\).
+zeroes exactly when \(\hat\Delta_i \le 0\).
 
 **Problem — measured, not simulated.** \(\Delta^{\min}\) is a minimum over
 \(M_i = \lceil n_i/W \rceil\) spans, so its null *location* falls as
@@ -157,12 +157,12 @@ reference pool at \(W=16\):
 |---|---|---|
 | \(\bar\Delta\) (Eq. 3) | **+0.108** | healthy — the instruction explains the response |
 | \(\Delta^{\min}\) (Eq. 5) | **−0.265** | 60% of *clean* responses have a span the counterfactual "explains better" |
-| \(\hat\Delta > 0\) | **39.6%** | the gate would veto **60.4% of clean data** |
+| \(\hat\Delta > 0\) | **39.6%** | the gate would zero **60.4% of clean data** |
 
 \(P_{10}(\hat\Delta_{\text{clean}}) = -0.410\) and even the median is
 \(-0.084\), so `calibrate_gate_scale` could not derive \(s\) at all and fell
 back to the diagnostic \(s = 1\). Because Eq. 6 zeroes *exactly* at
-\(\hat\Delta \le 0\), **no choice of \(s\) can rescue this** — the veto is
+\(\hat\Delta \le 0\), **no choice of \(s\) can rescue this** — the zero is
 decided before \(s\) is consulted. The two readings that matter are that the
 overall gain is fine (so the reference pool is not contaminated and the
 counterfactuals are genuinely unrelated) and that the damage is confined to
@@ -186,8 +186,8 @@ stays non-compensatory. Only the origin moves.
 **Two properties follow by construction**, and both are printed by the
 calibration rather than asserted:
 
-1. the clean veto rate *is* \(\alpha\) — a dial the experimenter sets
-   (`tads.tag.target_veto`, 0.05) instead of an emergent 60%; and
+1. the clean zero-weight rate *is* \(\alpha\) — a dial the experimenter sets
+   (`tads.tag.target_zero_rate`, 0.05) instead of an emergent 60%; and
 2. it is \(\alpha\) in **every** length bin, which is what removes the
    confound that item B2 raises.
 
@@ -200,19 +200,19 @@ hard error with no in-pool fallback, unlike \(s\).
 
 **Measured on a controlled reproduction** (`tests/test_gate.py`, 6 000
 synthetic responses with identical per-token dependency at every length):
-the uncorrected veto rate runs 11% → 55% from the shortest to the longest
+the uncorrected zero-weight rate runs 11% → 55% from the shortest to the longest
 length quintile; after Eq. 5\('\) it is 5% in all five. Injecting one
-corrupted span per response then vetoes 100% of the corrupted rows at a 5.4%
+corrupted span per response then zeroes 100% of the corrupted rows at a 5.4%
 clean rate.
 
 **Interaction with \(s\).** \(s\) must be calibrated on the *centred*
 statistic, since that is what Eq. 6 sees. Centring puts
 \(Q_\alpha(\hat\Delta_{\text{clean}}) = 0\) exactly, so
-`calibration_target_pct` must be strictly greater than `target_veto` or
+`calibration_target_pct` must be strictly greater than `target_zero_rate` or
 \(s\) is derived from a non-positive quantile; the code raises with that
 exact message rather than silently falling back. With
 \(\alpha = 0.05,\ \text{target\_pct} = 0.10\) the derived gate is genuinely
-graded — on the reproduction above, 5% vetoed, 47% in the soft interior,
+graded — on the reproduction above, 5% zeroed, 47% in the soft interior,
 48% at the ceiling — not the binary mask a broken calibration produces.
 
 **Ablation arm.** `configs/experiments/lowq/tag_nonull_7b.yaml` runs the
@@ -224,11 +224,11 @@ add:
 
 > The span minimum is an order statistic over \(M_i = \lceil n_i/W\rceil\)
 > spans, so its null distribution depends on response length; comparing it
-> against a fixed zero threshold would veto long responses far more often
+> against a fixed zero threshold would zero long responses far more often
 > than short ones for reasons unrelated to instruction dependency. We
 > therefore recentre \(\hat\Delta_i\) on \(\mu(M_i)\), the \(\alpha\)-quantile
 > of the uncentred statistic among clean reference responses with the same
-> span count. This makes the clean-reference veto rate equal to \(\alpha\)
+> span count. This makes the clean-reference zero-weight rate equal to \(\alpha\)
 > uniformly in length by construction; we set \(\alpha = 0.05\) and report
 > the realised per-bin rates. Because \(\mu\) is estimated on clean data
 > only, it cannot absorb corruption signal.
@@ -242,7 +242,7 @@ add:
 **This is the most important item in this document.**
 
 > **Update.** Item A5 supersedes the framing below in one respect and
-> confirms it in another. The *veto-rate* half of this problem is solved by
+> confirms it in another. The *zero-weight-rate* half of this problem is solved by
 > the Eq. 5\('\) null correction, which pins the clean rate at \(\alpha\)
 > uniformly in length. The *detection* half is not: re-centring moves the
 > threshold, it does not create separation where the clean and dirty minima
@@ -261,10 +261,10 @@ length, so the tail statistic drifts downward for long responses *even when
 they are perfectly clean*.
 
 **Why it matters.** With a single global \(s\), that drift becomes a
-length-dependent veto rate. Simulating clean-only samples with per-span
+length-dependent zero-weight rate. Simulating clean-only samples with per-span
 gains \(\mathcal{N}(0.45, 0.18)\) at \(W=16\):
 
-| response tokens | \(M\) | clean veto rate |
+| response tokens | \(M\) | clean zero-weight rate |
 |---|---|---|
 | 32 | 2 | 1.2% |
 | 64 | 4 | 2.6% |
@@ -273,16 +273,16 @@ gains \(\mathcal{N}(0.45, 0.18)\) at \(W=16\):
 | 512 | 32 | **18.1%** |
 | 1024 | 64 | **32.8%** |
 
-A 15-27× swing in the false-veto rate driven purely by length. This is
+A 15-27× swing in the false-zero rate driven purely by length. This is
 directly attackable: truncated (T3) corruptions are SHORT, so the gate
-would veto long CLEAN responses more often than short DIRTY ones on this
+would zero long CLEAN responses more often than short DIRTY ones on this
 axis, and a reviewer will read the result as a length filter.
 
 **Two fixes that do not work, and why** (both measured, same model):
 
 - *Capping \(M\)* (widening spans for long responses) flattens the clean
   rate to ~4.7% at every length but destroys detection: a fixed-size
-  corrupted region diluted inside a 64-token span gives dirty veto rate
+  corrupted region diluted inside a 64-token span gives dirty zero-weight rate
   4.8% — statistically identical to clean. The cap trades the confound for
   blindness.
 - *Correcting the null per \(M\)* (subtracting the clean conditional median
@@ -319,12 +319,12 @@ statistics — they justify the sweep, they do not replace it.**
 - `store_token_losses: true` in the 0.5B TAG arm, so re-deriving \(G\) for a
   new \(W\) / \(\tau\) / \(s\) costs **no forward pass** — the sweep is free.
 - `scripts/score_pool.py` reports `tag.length_bias`: per-length-quantile
-  mean gate, veto rate, clean veto rate, and the rank correlation between
+  mean gate, zero-weight rate, clean zero-weight rate, and the rank correlation between
   \(G\) and response length.
 
 **Suggested paper changes.**
 1. Report the \(W\) sweep as a first-order ablation, not an appendix detail.
-2. Report the length-bias diagnostic (clean veto rate by length quantile,
+2. Report the length-bias diagnostic (clean zero-weight rate by length quantile,
    and \(\rho(G, \text{length})\)) — pre-empting the objection is far
    cheaper than answering it in rebuttal.
 3. Add one honest sentence to the method or limitations:
@@ -333,7 +333,7 @@ statistics — they justify the sweep, they do not replace it.**
 > its null distribution drifts downward with response length; \(W\) trades
 > this order-statistic drift against the dilution of a localized corruption
 > inside a wider span. We select \(W\) on a clean reference pool by the
-> criterion that the false-veto rate be flat across response-length
+> criterion that the false-zero rate be flat across response-length
 > quantiles, and report the resulting profile.
 
 ### B1. \(\tau\) should threshold the per-token mean, not the span sum
@@ -413,7 +413,7 @@ reference pool" — but not on *which* quantity.
 **Problem.** \(\bar\Delta\) and \(\Delta^{\min}\) have systematically
 different distributions (the latter is a minimum, so it is lower by
 construction). Calibrating on \(\bar\Delta\) and gating on
-\(\hat\Delta = \min(\cdot,\cdot)\) would veto a large slice of clean data.
+\(\hat\Delta = \min(\cdot,\cdot)\) would zero a large slice of clean data.
 Anyone reimplementing from the paper has a 50% chance of picking the wrong
 one.
 
@@ -468,7 +468,7 @@ evidence".
 
 **Suggested text.** Split the claim:
 
-> A zeroed gate is an exact veto: \(G_i = 0 \Rightarrow s_i^{(t)} = 0\)
+> The gate's floor is exact: \(G_i = 0 \Rightarrow s_i^{(t)} = 0\)
 > regardless of the dynamic factors, since \(\sigma(0)=\tfrac12\) makes the
 > clamp in Eq. 6 bite exactly at zero gain. For a small but non-zero gate the
 > ordering is governed by the ratio
@@ -511,7 +511,7 @@ the aggregate one does not.
 Note also that the reported/cached \(\hat\Delta_i\) is the across-pairing
 mean while the gate is the mean of per-pairing gates (deliberately: the
 clamp is convex, so gate-of-mean would collapse straddling evidence to an
-exact veto). The two are not in the functional relationship Eq. 6 states.
+exact zero). The two are not in the functional relationship Eq. 6 states.
 
 **Suggested text.** If \(K>1\) is reported at all, state the estimator:
 
@@ -519,7 +519,7 @@ exact veto). The two are not in the functional relationship Eq. 6 states.
 > average, discounting by the cross-pairing dispersion:
 > \(G_i = (1 - 2 s_k)_+ \cdot \mathrm{mean}_k\,
 > c_i(2\sigma(\hat\Delta^{(k)}_i/s)-1)_+\). Gating before averaging is
-> deliberate — the clamp is convex, so averaging first would veto any sample
+> deliberate — the clamp is convex, so averaging first would zero any sample
 > whose evidence straddles zero. Under this extension a zero gate also
 > encodes irreducible disagreement between pairings, not only absent
 > instruction dependency.
@@ -543,6 +543,66 @@ lengths (which is what makes A2's trim necessary).
 **Suggested text.** "\(x_i^-\) is an unrelated instruction drawn from the
 same response-length stratum of the pool."
 
+### C7. Say that \(G\) is a continuous weight — "gate" will be read as binary
+
+**Paper.** \(G_i\) is called a *gate* throughout, and Eq. 6 is presented as
+producing a decision the rest of the score cannot override.
+
+**Problem.** "Gate" is doing two jobs at once and only one of them is
+accurate. In the ML literature gating is overwhelmingly *continuous*
+multiplicative modulation — LSTM/GRU \(\sigma\) gates, MoE gating networks,
+GLU, highway networks, squeeze-and-excitation — so the word itself is fine.
+But paired with language like *veto* or *reject*, a reader reconstructs a
+threshold classifier with a decision boundary, and then reads every
+calibration number as a classification error rate. That is the wrong mental
+model of the object and it changes what the reader thinks the failure modes
+are.
+
+\(G_i\) is continuous in \(\hat\Delta_i\): \((\cdot)_+\) is a ReLU-style
+kink, not a step, since \(2\sigma(z)-1 \to 0\) as \(z \to 0^+\). On the 7B
+calibration the weight distribution is
+
+| \(G\) | share of pool |
+|---|---|
+| \(=0\) (at the floor) | 5% |
+| \(0 < G < 0.99\) | **47%** |
+| \(\ge 0.99\) | 48% |
+
+so roughly half the pool receives a genuinely intermediate weight. Calling
+that a veto is simply a wrong description of the measured object.
+
+**What IS distinctive** is that the floor is *attainable*. A plain sigmoid
+gate approaches 0 and never reaches it; \(\sigma(0)=\tfrac12\) makes
+\(\hat\Delta_i \le 0 \Rightarrow G_i = 0\) exactly. That one property — not
+binariness — is what the non-compensation claim rests on, because with
+\(G_i > 0\) strictly, a large enough \(\mathcal{R}_i^{(t)}\) always
+compensates.
+
+**Code.** All decision-flavoured naming has been removed from the weight
+side: `target_zero_rate`, `zero_rate`, `n_zero_weight_selected`. The
+*selection key* keeps two-block language (`n_admissible`) because top-\(B\)
+selection genuinely is discrete — the distinction being drawn is that the
+weight is continuous and the key built from it is not.
+
+**Suggested text.** Replace decision vocabulary in the method section with:
+
+> \(G_i\) is a continuous function of \(\hat\Delta_i\) taking values in
+> \([0,1]\). Unlike a conventional sigmoid gate it *attains* its lower
+> bound: \(G_i = 0\) exactly when \(\hat\Delta_i \le 0\), i.e. when the
+> instruction contributes nothing to explaining the response. This
+> attainability — rather than any thresholding — is what makes the fusion
+> non-compensatory; elsewhere \(G_i\) expresses a graded degree of
+> reliability, and on our pool \(X\%\) of candidates receive a weight
+> strictly between the bounds.
+
+Add one clause to the limitations, since the property is two-sided:
+
+> Because the lower bound is attained, a candidate placed at the floor
+> cannot be recovered by any amount of dynamic evidence; errors in
+> estimating \(\hat\Delta\) near the origin are therefore not recoverable,
+> which is why the null calibration of Eq. 5\('\) is required rather than
+> optional.
+
 ### C4. The EOS position is excluded from the span aggregation
 
 Tokenisation appends EOS to every response unconditionally, so the final
@@ -557,7 +617,7 @@ token counts in the paper match a reimplementation.
 ## Checklist before submission
 
 - [ ] A1-A4 folded into the equations (these are correctness fixes)
-- [ ] A5 Eq. 5\('\) added; \(\alpha\) stated; per-length-bin clean veto rates
+- [ ] A5 Eq. 5\('\) added; \(\alpha\) stated; per-length-bin clean zero-weight rates
       reported; the `tag_nonull_7b` ablation in the results table
 - [ ] B1 \(\mathcal{C}_i\) redefined on the per-token mean
 - [ ] B2 \(W\) sweep run and reported; length-bias profile reported
@@ -571,7 +631,10 @@ token counts in the paper match a reimplementation.
 - [ ] C5 the K>1 estimator stated, or K=1 declared and K>1 moved to the
       appendix
 - [ ] C6 "length-matched instruction" -> "same response-length stratum"
-- [ ] `n_vetoed_selected` from metrics.json reported, not `budget_fits@K`
+- [ ] C7 decision vocabulary ('veto', 'reject') replaced; G described as a
+      continuous weight with an ATTAINABLE floor, with the measured share
+      of intermediate weights; the two-sided cost noted in limitations
+- [ ] `n_zero_weight_selected` from metrics.json reported, not `budget_fits@K`
       inferred — the dedup constraint can force a backfill even when the
       gated set is larger than the budget
 - [ ] measured numbers substituted for every placeholder above

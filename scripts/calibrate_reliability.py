@@ -79,14 +79,14 @@ def main() -> None:
     p.add_argument("--target-pct", type=float, default=0.10)
     p.add_argument("--target-q", type=float, default=0.8)
     p.add_argument("--batch-size", type=int, default=None)
-    p.add_argument("--target-veto", type=float, default=None,
-                   help="tag mode: clean-reference veto rate for the Eq. 5' "
-                        "null correction. Default: tads.tag.target_veto from "
+    p.add_argument("--target-zero-rate", type=float, default=None,
+                   help="tag mode: clean-reference zero-weight rate for the Eq. 5' "
+                        "null correction. Default: tads.tag.target_zero_rate from "
                         "the config (0.05). Must be < --target-pct.")
     p.add_argument("--no-null-correction", action="store_true",
                    help="tag mode: fit s on the RAW Delta_hat, the literal "
                         "Eq. 5. This is the ablation arm — on the 7B backbone "
-                        "it vetoes ~60%% of clean data.")
+                        "it sends ~60%% of clean data to zero weight.")
     p.add_argument("--no-token-losses", action="store_true",
                    help="tag mode: omit the per-token NLLs from the artifact. "
                         "Saves disk, but makes the W/tau sweep cost a full "
@@ -153,17 +153,17 @@ def main() -> None:
         from tads.core import gate as gatelib
 
         tag_cfg = _tads_cfg.get("tag", {}) or {}
-        target_veto = (
-            float(args.target_veto)
-            if args.target_veto is not None
-            else float(tag_cfg.get("target_veto", 0.05))
+        target_zero_rate = (
+            float(args.target_zero_rate)
+            if args.target_zero_rate is not None
+            else float(tag_cfg.get("target_zero_rate", 0.05))
         )
         fit_null = not args.no_null_correction
-        if fit_null and target_veto >= args.target_pct:
+        if fit_null and target_zero_rate >= args.target_pct:
             sys.exit(
-                f"--target-veto ({target_veto}) must be strictly below "
+                f"--target-zero-rate ({target_zero_rate}) must be strictly below "
                 f"--target-pct ({args.target_pct}): the Eq. 5' centring puts "
-                f"the target_veto quantile at exactly 0, so the scale "
+                f"the target_zero_rate quantile at exactly 0, so the scale "
                 f"calibration would derive s from a non-positive quantile."
             )
         gcfg = gatelib.GateConfig(
@@ -182,7 +182,7 @@ def main() -> None:
             # Both halves of the calibration are what we are about to derive,
             # so the components pass runs uncorrected and unit-scaled.
             null_correction=False,
-            target_veto=target_veto,
+            target_zero_rate=target_zero_rate,
             scale=1.0,
         )
         tok, n_tok = {}, {}
@@ -201,7 +201,7 @@ def main() -> None:
         fit = gatelib.fit_calibration(
             raw, comp["n_spans"],
             span_tokens=gcfg.span_tokens,
-            target_veto=target_veto,
+            target_zero_rate=target_zero_rate,
             target_pct=args.target_pct,
             target_q=args.target_q,
             null_correction=fit_null,
@@ -209,7 +209,7 @@ def main() -> None:
         stat, s = fit["delta_hat"], fit["scale"]
         payload = {
                 # delta_hat is the RAW statistic: it is what a later refit
-                # (a different W, a different target_veto) needs, and the
+                # (a different W, a different target_zero_rate) needs, and the
                 # centred version is one lookup away given "null".
                 "delta_hat": raw.cpu(),
                 "delta_hat_centered": stat.cpu(),
@@ -221,7 +221,7 @@ def main() -> None:
                 "scale": s,
                 "target_pct": args.target_pct,
                 "target_q": args.target_q,
-                "target_veto": target_veto,
+                "target_zero_rate": target_zero_rate,
                 "gate_config": gcfg.identity(),
                 "model_path": str(cfg["model_path"]),
                 "pool": str(args.pool),
@@ -261,41 +261,41 @@ def main() -> None:
             )
         if fit["null"] is not None:
             logger.info(
-                "  Eq.5' null correction ON (target_veto=%.3f): clean veto "
+                "  Eq.5' null correction ON (target_zero_rate=%.3f): clean zero-weight "
                 "rate %.1f%%, %.1f%% positive",
-                target_veto, 100.0 * fit["veto_rate"],
+                target_zero_rate, 100.0 * fit["zero_rate"],
                 100.0 * fit["frac_positive"],
             )
             # Length-uniformity is the entire claim of the correction, so it
             # is printed rather than assumed. A bin whose rate drifts far from
             # the target means the curve is under-resolved there.
-            logger.info("  per-bin clean veto rate (should all be ~%.1f%%):",
-                        100.0 * target_veto)
+            logger.info("  per-bin clean zero-weight rate (should all be ~%.1f%%):",
+                        100.0 * target_zero_rate)
             for row in fit["report"]:
                 logger.info(
-                    "    M in [%d, %d] | n=%6d | mu=%+.4f | veto=%.1f%%",
+                    "    M in [%d, %d] | n=%6d | mu=%+.4f | zero=%.1f%%",
                     int(row["m_lo"]), int(row["m_hi"]), int(row["n"]),
-                    row["mu"], 100.0 * row["veto_rate"],
+                    row["mu"], 100.0 * row["zero_rate"],
                 )
         else:
             logger.warning(
                 "  Eq.5' null correction OFF — this is the ablation arm. The "
-                "clean veto rate below is what the uncorrected Eq. 5 gives: "
-                "%.1f%%.", 100.0 * fit["veto_rate"],
+                "clean zero-weight rate below is what the uncorrected Eq. 5 gives: "
+                "%.1f%%.", 100.0 * fit["zero_rate"],
             )
         logger.info("  calibrated s = %.6f  →  export TADS_GATE_SCALE=%.6f", s, s)
         logger.info(
             "Gate config used for calibration MUST match the training config "
             "(W=%d, tau=%.3f/%s, min_span=%d, tail=%s, include_eos=%s, "
-            "target_veto=%.3f) — a different span partition yields a different "
+            "target_zero_rate=%.3f) — a different span partition yields a different "
             "Δ̂ distribution and silently mis-scales the gate.",
             gcfg.span_tokens, gcfg.tau, gcfg.tau_mode, gcfg.min_span_tokens,
-            gcfg.tail_mode, gcfg.include_eos, target_veto,
+            gcfg.tail_mode, gcfg.include_eos, target_zero_rate,
         )
         # The generic contamination check below judges what Eq. 6 will
         # actually see, which is the CENTRED statistic when the correction is
         # on. With it off, this is the raw fraction and the check fires — as
-        # it should, since that arm really does veto most of a clean pool.
+        # it should, since that arm really does zero most of a clean pool.
         frac_pos = fit["frac_positive"]
         stat_name = "Δ̂"
     else:

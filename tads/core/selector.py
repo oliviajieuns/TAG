@@ -406,13 +406,13 @@ def collect_episode(
                 )
             ungated_score = score
             score = tag_score(gate, R, alignment if apply_anchor else None, lam)
-            n_vetoed = int((gate == 0).sum().item())
+            n_zero_weight = int((gate == 0).sum().item())
             logger.info(
                 "TAG score | epoch=%d | lam=%.3f | G_mean=%.4f | G==0: %d/%d "
                 "(%.1f%%) | R_mean=%.4f | s_mean=%.4f",
                 epoch, lam if apply_anchor else 0.0,
-                float(gate.mean().item()), n_vetoed, total_samples,
-                100.0 * n_vetoed / max(1, total_samples),
+                float(gate.mean().item()), n_zero_weight, total_samples,
+                100.0 * n_zero_weight / max(1, total_samples),
                 float(R.mean().item()), float(score.mean().item()),
             )
     else:
@@ -521,28 +521,28 @@ def collect_episode(
     ranking = score
     n_admissible = None
     if tag is not None and gate is not None:
-        # Vetoed samples all score exactly 0; rank them below every
+        # Zero-weight samples all score exactly 0; rank them below every
         # admissible sample and break the zero-block by the gate's own
         # evidence rather than by pool file order (see
-        # scorer.gated_selection_key). Delta_hat orders the vetoed block by
+        # scorer.gated_selection_key). Delta_hat orders the zero-weight block by
         # how close each sample came to passing, so a forced backfill takes
         # the least unreliable rejects; the ungated reward would take the
         # highest-loss ones, i.e. the most corrupted.
-        vetoed_order = tag.get("delta_hat")
-        if vetoed_order is not None:
-            vetoed_order = vetoed_order.view(-1).float()
-            if vetoed_order.numel() != total_samples:
+        zero_weight_order = tag.get("delta_hat")
+        if zero_weight_order is not None:
+            zero_weight_order = zero_weight_order.view(-1).float()
+            if zero_weight_order.numel() != total_samples:
                 raise ValueError(
                     f"collect_episode(tag=...): delta_hat length "
-                    f"{vetoed_order.numel()} != pool size {total_samples}",
+                    f"{zero_weight_order.numel()} != pool size {total_samples}",
                 )
         else:
-            vetoed_order = ungated_score if ungated_score is not None else R
-        ranking, n_admissible = gated_selection_key(score, vetoed_order, gate)
+            zero_weight_order = ungated_score if ungated_score is not None else R
+        ranking, n_admissible = gated_selection_key(score, zero_weight_order, gate)
         if n_admissible < k:
             logger.warning(
                 "TAG: only %d/%d samples pass the reliability gate but the "
-                "budget is B=%d — %d slot(s) must be filled with VETOED "
+                "budget is B=%d — %d slot(s) must be filled with ZERO-WEIGHT "
                 "samples (ranked by the ungated score). The non-compensation "
                 "guarantee does not hold for those slots; report this count, "
                 "or lower selection_ratio / raise the gate scale.",
@@ -569,20 +569,20 @@ def collect_episode(
     # G > 0 pool-wide, but with the dedup constraint constrained_topk can
     # only take one sample per near-duplicate cluster, so the admissible set
     # can be exhausted before B even when n_admissible >= B. The realised
-    # count is the only number that supports (or refutes) the veto claim for
+    # count is the only number that supports (or refutes) the non-compensation claim for
     # a given run, so it is measured and reported rather than inferred.
-    n_vetoed_selected = None
+    n_zero_weight_selected = None
     if tag is not None and gate is not None:
         sel_t = torch.as_tensor(selected_indices, dtype=torch.long)
-        n_vetoed_selected = int((gate[sel_t] == 0).sum().item())
-        if n_vetoed_selected:
+        n_zero_weight_selected = int((gate[sel_t] == 0).sum().item())
+        if n_zero_weight_selected:
             logger.warning(
-                "TAG: %d/%d SELECTED samples are vetoed (G == 0). The "
+                "TAG: %d/%d SELECTED samples have G == 0. The "
                 "non-compensation guarantee does not hold for those slots — "
                 "report this count. Causes: budget larger than the gated set "
                 "(admissible=%s), or the dedup constraint exhausting the "
                 "admissible clusters.",
-                n_vetoed_selected, k, n_admissible,
+                n_zero_weight_selected, k, n_admissible,
             )
         else:
             logger.info(
@@ -630,7 +630,7 @@ def collect_episode(
         "gate": gate,
         "ungated_score": ungated_score,
         "n_admissible": n_admissible,
-        "n_vetoed_selected": n_vetoed_selected,
+        "n_zero_weight_selected": n_zero_weight_selected,
         "selection_budget": k,
         "score": score,
         "score_mode": (

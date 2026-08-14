@@ -459,7 +459,7 @@ def tag_score(
 
     Both dynamic factors are bounded above — R by the pool's own reward range
     and the anchor factor by ``1+λ`` — which is what makes ``G_i = 0`` an
-    unconditional veto rather than a large penalty.
+    an exact zero rather than a large penalty.
     """
     if gate.shape != R.shape:
         raise ValueError(
@@ -478,9 +478,9 @@ def gated_selection_key(
     *,
     validate: bool = True,
 ) -> Tuple[torch.Tensor, int]:
-    """Total order that keeps the veto intact and still breaks zero-ties.
+    """Total order that keeps the exact zero intact and still breaks zero-ties.
 
-    A vetoed sample scores EXACTLY 0 (Eq. 6 clamps at zero gain), so when the
+    A zero-weight sample scores EXACTLY 0 (Eq. 6 clamps at zero gain), so when the
     budget B exceeds the number of admissible samples, ``topk`` would have to
     choose among a large block of exact ties — and ``torch.topk`` resolves
     ties by index, which promotes the candidate pool's FILE ORDER into the
@@ -490,14 +490,14 @@ def gated_selection_key(
     The key is a two-level order:
 
         admissible (G > 0)  ->  2 + rank01(gated score)      in [2, 3]
-        vetoed     (G == 0) ->      rank01(fallback score)   in [0, 1]
+        zero-weight (G == 0) ->     rank01(fallback score)   in [0, 1]
 
-    so every admissible sample outranks every vetoed one, ties inside each
+    so every admissible sample outranks every zero-weight one, ties inside each
     block are broken by the pool-relative rank of a meaningful statistic, and
     the caller can hand the key straight to ``select_top_b`` or
     ``constrained_topk`` — the dedup constraint composes unchanged.
 
-    ``fallback_score`` orders the VETOED block. Prefer the gate's own
+    ``fallback_score`` orders the ZERO-WEIGHT block. Prefer the gate's own
     evidence (``Delta_hat``) so a forced backfill takes the LEAST unreliable
     rejects. Ordering that block by the ungated reward instead would be
     actively perverse: ``R = w·L + (1−w)·H`` increases with response loss,

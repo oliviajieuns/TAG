@@ -4,7 +4,7 @@
 # This arm exists to justify Eq. 5' with a number instead of an argument.
 # On Qwen2.5-7B over 51 760 CLEAN alpaca responses the uncorrected statistic
 # passed only 39.6% (Delta_bar mean +0.108, Delta^min mean -0.265), and the
-# veto rate rose monotonically with response length — so this arm should show
+# zero-weight rate rose monotonically with response length — so this arm should show
 # TAG collapsing toward "select short responses", not toward the legacy score.
 #
 # It needs its OWN calibration reference, written with --no-null-correction:

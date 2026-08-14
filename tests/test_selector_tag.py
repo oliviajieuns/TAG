@@ -4,7 +4,7 @@
 
 The contract under test: TAG must leave the trajectory-anchored selector
 untouched and add exactly one multiplicative factor, so that G == 1
-reproduces the legacy ranking bit-for-bit, and G == 0 is a veto no dynamic
+reproduces the legacy ranking bit-for-bit, and G == 0 is an exact zero no dynamic
 evidence can overturn.
 """
 from __future__ import annotations
@@ -95,10 +95,10 @@ def test_tag_episode_exposes_the_gate(tiny_model):
 
 
 # ---------------------------------------------------------------------------
-# Non-compensation: the veto
+# Non-compensation: the attainable zero
 # ---------------------------------------------------------------------------
 
-def test_vetoed_sample_is_never_selected_while_budget_allows(tiny_model):
+def test_zero_weight_sample_is_never_selected_while_budget_allows(tiny_model):
     """The paper's central claim, end-to-end: zero the gate on whichever
     sample has the LARGEST reward and it must drop out of the selection
     entirely — no amount of difficulty evidence buys it back."""
@@ -114,12 +114,12 @@ def test_vetoed_sample_is_never_selected_while_budget_allows(tiny_model):
     assert float(gated["score"][best]) == 0.0
 
 
-def test_veto_survives_an_arbitrarily_large_reward(tiny_model):
+def test_zero_weight_survives_an_arbitrarily_large_reward(tiny_model):
     ds = _TinyDataset()
     g = torch.ones(len(ds))
     g[0] = 0.0
     ep = _run(tiny_model, ds, tag={"gate": g})
-    # Even scaled by 1e12 the vetoed score stays exactly zero.
+    # Even scaled by 1e12 the zeroed score stays exactly zero.
     assert float(ep["score"][0]) == 0.0
     assert 0 not in ep["selected_indices"]
 
@@ -130,7 +130,7 @@ def test_veto_survives_an_arbitrarily_large_reward(tiny_model):
 
 def test_budget_shortfall_fills_with_ungated_ranking_not_file_order(tiny_model):
     """When fewer samples pass the gate than the budget needs, the leftover
-    slots must go to the best VETOED samples by the ungated score. Without
+    slots must go to the best ZERO-WEIGHT samples by the ungated score. Without
     the composite key, torch.topk would break the exact-zero tie by index
     and promote pool file order into the selection."""
     ds = _TinyDataset()
@@ -146,21 +146,21 @@ def test_budget_shortfall_fills_with_ungated_ranking_not_file_order(tiny_model):
 
     assert len(sel) == k
     assert sel[0] == admissible[0]   # the only admissible sample ranks first
-    # The remaining slots are the top vetoed samples by ungated score.
+    # The remaining slots are the top zero-weight samples by ungated score.
     ungated = legacy["score"].clone()
     ungated[admissible[0]] = float("-inf")
     expected_fill = ungated.topk(k - 1).indices.tolist()
     assert sel[1:] == expected_fill
 
 
-def test_all_vetoed_pool_still_ranks_by_ungated_score(tiny_model):
+def test_all_zero_weight_pool_still_ranks_by_ungated_score(tiny_model):
     ds = _TinyDataset()
     legacy = _run(tiny_model, ds)
     ep = _run(tiny_model, ds, tag={"gate": torch.zeros(len(ds))}, ratio=0.5)
     assert ep["selected_indices"] == legacy["score"].topk(len(ds) // 2).indices.tolist()
 
 
-def test_gated_selection_key_orders_admissible_above_vetoed():
+def test_gated_selection_key_orders_positive_weight_above_zero():
     score = torch.tensor([0.0, 5.0, 0.0, 1.0])
     fallback = torch.tensor([9.0, 5.0, 8.0, 1.0])
     gate = torch.tensor([0.0, 1.0, 0.0, 1.0])
@@ -257,7 +257,7 @@ def test_nan_score_is_rejected_not_promoted_to_the_top(tiny_model):
 
 
 def test_backfill_takes_the_least_unreliable_rejects_not_the_highest_loss(tiny_model):
-    """When a backfill is forced, ordering the vetoed block by the ungated
+    """When a backfill is forced, ordering the zero-weight block by the ungated
     reward would pull in the HIGHEST-loss rejects — and the corruptions the
     gate exists to reject are exactly the high-loss ones. Delta_hat orders
     them by how close each came to passing instead."""
@@ -277,25 +277,25 @@ def test_backfill_takes_the_least_unreliable_rejects_not_the_highest_loss(tiny_m
     assert 3 not in sel
 
 
-def test_episode_reports_realised_veto_accounting(tiny_model):
+def test_episode_reports_realised_zero_weight_accounting(tiny_model):
     """n_admissible is a pool-wide prediction; what supports the paper's claim
-    is how many SELECTED samples were vetoed."""
+    is how many SELECTED samples carry G == 0."""
     ds = _TinyDataset()
     n = len(ds)
     ep_ok = _run(tiny_model, ds, tag={"gate": torch.ones(n)}, ratio=0.5)
     assert ep_ok["n_admissible"] == n
-    assert ep_ok["n_vetoed_selected"] == 0
+    assert ep_ok["n_zero_weight_selected"] == 0
     assert ep_ok["selection_budget"] == n // 2
 
     gate = torch.zeros(n)
     gate[0] = 1.0
     ep_short = _run(tiny_model, ds, tag={"gate": gate}, ratio=0.5)
     assert ep_short["n_admissible"] == 1
-    assert ep_short["n_vetoed_selected"] == n // 2 - 1
+    assert ep_short["n_zero_weight_selected"] == n // 2 - 1
 
 
 def test_dedup_exhaustion_is_counted_even_when_the_budget_would_fit(tiny_model):
-    """n_admissible >= B does NOT imply the veto held: constrained_topk takes
+    """n_admissible >= B does NOT imply non-compensation held: constrained_topk takes
     at most one sample per near-duplicate cluster, so the admissible set can
     be exhausted by the dedup constraint before B is reached."""
     ds = _TinyDataset()
@@ -308,7 +308,7 @@ def test_dedup_exhaustion_is_counted_even_when_the_budget_would_fit(tiny_model):
         tag={"gate": gate, "cluster_ids": clusters}, ratio=0.5,
     )
     assert ep["n_admissible"] == 8 >= ep["selection_budget"]
-    assert ep["n_vetoed_selected"] > 0, (
-        "dedup exhausted the admissible clusters, so vetoed samples entered "
+    assert ep["n_zero_weight_selected"] > 0, (
+        "dedup exhausted the admissible clusters, so zero-weight samples entered "
         "the selection even though n_admissible >= B"
     )

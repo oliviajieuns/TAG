@@ -11,7 +11,7 @@ that drive dynamic selection actively *prefer* that corruption — broken
 samples look hard. TAG adds one static, model-intrinsic **reliability
 gate** in front of the dynamic score, fused non-compensatorily: a zeroed
 gate cannot be bought back by any amount of difficulty or alignment
-evidence. Reliability is a veto, not a vote.
+evidence. Reliability is a weight whose floor is attainable, not a vote.
 
 No external judges, no reward models, no PPO-style selector training.
 
@@ -34,10 +34,10 @@ would suppress half of a clean pool and pass the top of an 80%-corrupted
 one. That absolute anchor, not the contrast itself, is what separates the
 gate from IFD-style pool-relative rankings.
 
-A zeroed gate is an exact veto: `G_i = 0 ⟹ s_i = 0` whatever the dynamic
+The gate's floor is exact: `G_i = 0 ⟹ s_i = 0` whatever the dynamic
 factors say. For a small but non-zero gate, the achievable compensation is
 governed by the pool's reward ratio times the anchor factor's `1+λ` — so
-the veto proper needs only finiteness, while boundedness is what constrains
+the exact-zero case needs only finiteness, while boundedness is what constrains
 the *graded* case (see `docs/tag-paper-deltas.md` C2).
 
 ### The gate, concretely (paper Eqs. 2-6)
@@ -50,15 +50,35 @@ granularities:
     Δ̄_i    = 1 − L(y_i|x_i) / L(y_i|x_i⁻)                           (Eq. 3)
     Δ_{i,m} = 1 − Σ_{k∈S_m} ℓ_k(y_i|x_i) / Σ_{k∈S_m} ℓ_k(y_i|x_i⁻)  (Eq. 4)
     Δ^min_i = min over admissible spans S_m ∈ C_i                    (Eq. 5)
-    G_i     = c_i · (2σ(Δ̂_i/s) − 1)₊ ,  Δ̂_i = min(Δ̄_i, Δ^min_i)     (Eq. 6)
+    Δ̂_i     = min(Δ̄_i, Δ^min_i) − μ(M_i)                            (Eq. 5′)
+    G_i     = c_i · (2σ(Δ̂_i/s) − 1)₊                                 (Eq. 6)
 
 The **ratio** makes the statistic scale-free, so an intrinsically hard
 response is not mistaken for a large gain. The **span minimum** is what
 catches localized corruption: a response whose final answer is wrong still
 gains on every other token, so `Δ̄` stays healthy while `Δ^min` collapses.
 `C_i` excludes low-information spans — boilerplate carries no instruction
-dependency by nature and must not trigger the gate. `σ(0)=½` makes
-`Δ̂ ≤ 0 → G = 0` exactly, which is what turns the product into a veto.
+dependency by nature and must not drive the gate down.
+
+**Eq. 5′** is an amendment the implementation forced. `Δ^min` is a minimum
+over `M = ⌈n/W⌉` spans, so its null *location* falls as responses get
+longer; tested against a fixed zero it put 60% of a **clean** 7B reference
+at the floor, almost all of it long, while `Δ̄` averaged a healthy +0.108.
+`μ(M)` is the `target_zero_rate`-quantile of the uncorrected statistic on a
+clean reference at the same span count, which makes the share of clean data
+at the floor a dial (5% by default) and uniform in length. `μ` is fit on
+clean data only, so it cannot absorb corruption signal — there is no
+in-pool fallback for it. See `docs/tag-paper-deltas.md` A5, and the
+`tag_nonull_7b` ablation arm.
+
+**`G` is a continuous weight, not a binary gate.** `(·)₊` is a ReLU-style
+kink, not a step: `2σ(z)−1 → 0` as `z → 0⁺`, so `G` is continuous in `Δ̂`
+and about half the pool receives a weight strictly between the bounds. What
+is distinctive is that the floor is *attainable* — `σ(0)=½` makes
+`Δ̂ ≤ 0 → G = 0` exactly, where an ordinary sigmoid gate only approaches 0.
+That attainability, not thresholding, is what makes the fusion
+non-compensatory; it also means an estimation error at the floor is
+unrecoverable, which is why Eq. 5′ is required rather than optional.
 
 Because response token IDs are identical under both instructions (prompt
 and response are tokenised separately), the two per-token vectors are
@@ -97,11 +117,11 @@ Notes shared by both gated modes:
   unconditionally).
 - `K > 1` counterfactual pools give a dispersion-discounted gate; the gate
   is applied per pairing and then averaged, not the reverse (the clamp is
-  convex, so gate-of-mean would collapse straddling evidence to a veto).
+  convex, so gate-of-mean would collapse straddling evidence to an exact zero).
 - Near-duplicate clusters (MinHash) admit at most one selection each. The
   legacy path never deduplicated, so TAG threads `cluster_ids` explicitly.
 - When fewer candidates pass the gate than the budget needs, the leftover
-  slots go to the best vetoed samples by the **ungated** score, with a loud
+  slots go to the best zero-weight samples by the **ungated** score, with a loud
   warning — without that rule the exact-zero ties would be broken by pool
   file order. `score_pool.py` reports `budget_fits@K` so a shortfall cannot
   pass unnoticed.

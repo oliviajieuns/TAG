@@ -223,7 +223,7 @@ def test_null_correction_without_a_reference_is_a_hard_error():
     Self-calibrating the null on the candidate pool would fit the curve to
     data that is 30% corrupted, so the correction would absorb exactly the
     signal the gate exists to find. Silently skipping it instead would give
-    back the 60%-clean-veto behaviour under a config that claims otherwise.
+    back the 60%-of-clean-at-zero behaviour under a config that claims otherwise.
     Neither is acceptable, so this fails loudly with the command that fixes it.
     """
     from tads.pipelines.selection import _resolve_gate_calibration
@@ -462,10 +462,10 @@ def test_tag_arms_default_to_the_null_correction():
         cfg = _load(name)
         tag = cfg["tads"]["tag"]
         assert tag["null_correction"] is True, name
-        assert tag["target_veto"] == 0.05, name
-        # Centring puts the target_veto quantile at exactly 0, so s must be
+        assert tag["target_zero_rate"] == 0.05, name
+        # Centring puts the target_zero_rate quantile at exactly 0, so s must be
         # derived from a strictly larger one.
-        assert tag["target_veto"] < tag["calibration_target_pct"], name
+        assert tag["target_zero_rate"] < tag["calibration_target_pct"], name
 
 
 def test_nonull_ablation_arm_differs_in_exactly_one_bit(monkeypatch):
@@ -509,7 +509,7 @@ def test_gate_ref_carrying_a_null_curve_calibrates_s_on_the_centred_statistic(tm
     n_spans = torch.randint(1, 30, (4000,), generator=g)
     # A raw statistic that drifts down with span count, like the real one.
     raw = 0.3 - 0.02 * n_spans.float() + 0.15 * torch.randn(4000, generator=g)
-    fit = fit_calibration(raw, n_spans, span_tokens=16, target_veto=0.05)
+    fit = fit_calibration(raw, n_spans, span_tokens=16, target_zero_rate=0.05)
 
     ref = tmp_path / "delta_hat.pt"
     torch.save(
@@ -518,13 +518,13 @@ def test_gate_ref_carrying_a_null_curve_calibrates_s_on_the_centred_statistic(tm
             "n_spans": n_spans,
             "null": fit["null"].to_dict(),
             "gate_config": GateConfig(
-                span_tokens=16, scale=1.0, null=fit["null"], target_veto=0.05,
+                span_tokens=16, scale=1.0, null=fit["null"], target_zero_rate=0.05,
             ).identity(),
         },
         ref,
     )
     params = {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 16,
-              "target_veto": 0.05}
+              "target_zero_rate": 0.05}
     scale, null = _resolve_gate_calibration(params)
     assert null == fit["null"]
     assert scale == pytest.approx(fit["scale"], rel=1e-6)
@@ -534,6 +534,6 @@ def test_gate_ref_carrying_a_null_curve_calibrates_s_on_the_centred_statistic(tm
     torch.save({"delta_hat": raw}, bare)
     with pytest.raises(ValueError, match="no null curve"):
         _resolve_gate_calibration({**params, "gate_ref_file": str(bare)})
-    # ...and one fit at another target_veto is refused too.
-    with pytest.raises(ValueError, match="target_veto"):
-        _resolve_gate_calibration({**params, "target_veto": 0.10})
+    # ...and one fit at another target_zero_rate is refused too.
+    with pytest.raises(ValueError, match="target_zero_rate"):
+        _resolve_gate_calibration({**params, "target_zero_rate": 0.10})

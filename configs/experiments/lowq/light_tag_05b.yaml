@@ -38,7 +38,7 @@ tads:
     # M = ceil(n/W) spans, so M — and with it the order-statistic drift of
     # the tail — grows with response length, while per-span noise shrinks
     # like 1/sqrt(W). The two effects pull in opposite directions and their
-    # balance decides both the clean false-veto rate and the detection
+    # balance decides both the clean false-zero-weight rate and the detection
     # power; W is therefore a first-order hyper-parameter, not a detail.
     # See docs/tag-paper-deltas.md P2 for the quantitative argument.
     store_token_losses: true
