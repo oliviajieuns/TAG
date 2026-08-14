@@ -168,6 +168,7 @@ def main() -> None:
             )
         gcfg = gatelib.GateConfig(
             span_tokens=int(tag_cfg.get("span_tokens", 16)),
+            prefix_tokens=int(tag_cfg.get("prefix_tokens", 0)),
             tau=float(tag_cfg.get("tau", 0.5)),
             tau_mode=str(tag_cfg.get("tau_mode", "per_token")),
             min_span_tokens=int(tag_cfg.get("min_span_tokens", 4)),

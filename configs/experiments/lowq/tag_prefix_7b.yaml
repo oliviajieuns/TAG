@@ -1,0 +1,68 @@
+# Lowq arm at 7B: TAG gated on the PREFIX contrast — the winning support
+# statistic, measured.
+#
+#   Delta_hat_i = [1 - L(y_i^{<32} | u_i) / L(y_i^{<32} | u_i^-)] - mu(M_i)
+#   G_i         = c_i * (2*sigma(Delta_hat_i/s) - 1)_+
+#
+# WHY. scripts/span_profile.py measured that the instruction's predictive
+# contribution is concentrated in the opening of the response. Mean per-token
+# nat gap ell(y|u^-) - ell(y|u^+) by span index on the clean reference:
+#
+#   m=0: 4.380    m=1: 0.600    m=2: 0.296    m>=12: 0.054
+#
+# ell_k(y|u) conditions on the response prefix y_<k as well as on u, so once
+# the model has read the opening it infers the topic and predicts the rest
+# about as well under a wrong instruction as under the right one.
+#
+# scripts/sweep_gate_statistic.py then compared every candidate summary
+# against the corruption labels (AP, composite-20 pool, 59 516 records):
+#
+#   statistic              all  duplicate  mismatch    noisy  truncated  wrong_a
+#   (base rate)          0.304      0.158     0.059    0.059      0.059    0.059
+#   Delta^min (Eq. 5)    0.334      0.171     0.087    0.057      0.051    0.090
+#   Delta^min pos-centred 0.465     0.202     0.454    0.166      0.049    0.089
+#   Delta_bar (Eq. 3)    0.542      0.239     0.817    0.451      0.045    0.088
+#   span 0 only          0.582      0.259     0.933    0.584      0.062    0.063
+#   prefix 32 tok        0.591      0.266     0.935    0.632      0.061    0.068
+#
+# prefix-32 wins on every corruption type the contrast can see, and detects
+# instruction-response mismatch at 15.8x the base rate. It is also more
+# length-robust than Eq. 3, whose denominator grows with the response while
+# the signal does not.
+#
+# Two limits this arm does NOT fix, both to be reported rather than hidden:
+#   - wrong_answer is caught by nothing (0.068 vs 0.059 base). A fluent wrong
+#     answer is genuinely well explained by its instruction.
+#   - truncated is caught by c_i alone, not by the contrast (0.061 vs 0.059).
+#
+# Its own calibration reference (prefix_tokens is calibration-bound, since it
+# changes the Delta_hat distribution). No GPU — re-derived from the token
+# losses already in the W=16 reference:
+#
+#   python scripts/sweep_gate_config.py --ref $TAG_GATE_REF_7B \
+#       --span-tokens 16 --tail-modes none --prefix-tokens 32 \
+#       --refit-out $TAG_GATE_REF_7B_PREFIX
+#
+# ...and its own gate cache, because G differs:
+#
+#   bash scripts/precompute_gate.sh \
+#       configs/experiments/lowq/tag_prefix_7b.yaml $TAG_GATE_CACHE_PREFIX
+#
+# Everything else — optimizer, precision, schedule, batch, epochs, tau,
+# min_span, c_trunc — is inherited unchanged.
+defaults:
+  - configs/methods/tag.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq/tag_prefix_7b
+selection:
+  tag:
+    # Restrict the sequence-level contrast to the response opening.
+    prefix_tokens: 32
+    # The span minimum is off: measured AP 0.334 against a 0.304 base, and
+    # because Eq. 6 takes a minimum it drags the prefix statistic down with
+    # it. tag_7b keeps it, so the pair is the ablation.
+    tail_mode: none
+    gate_ref_file: ${oc.env:TAG_GATE_REF_7B_PREFIX,}
+    gate_cache_file: ${oc.env:TAG_GATE_CACHE_PREFIX,}
+    store_token_losses: true

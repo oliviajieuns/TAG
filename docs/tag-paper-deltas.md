@@ -302,13 +302,16 @@ every \(m\ge1\) (−0.19 to −0.33) for perfectly clean data.
 This also explains why \(\bar\Delta\) works: the sum is dominated by span 0
 (4.38 nats × 16 tokens ≈ 70 nats, against ~0.05 nats/token over the rest).
 
-**Per-position centring is not sufficient.** Subtracting a per-position null
-\(\mu(m)\) moves the clean tail's \(P_{05}\) only from −0.565 to −0.324, for
-two compounding reasons: a minimum over \(M\) positions each calibrated at
-\(\alpha\) still falls below zero with probability \(1-(1-\alpha)^M\), and —
-more fundamentally — centring spans that contain no signal yields unbiased
-noise, and *the minimum of noise is still noise*. Eq. 5\('\)'s \(M\)-centring
-handles the first; nothing handles the second.
+**Per-position centring helps a great deal but still loses.** An earlier
+draft of this item claimed centring signal-free spans "yields unbiased noise,
+and the minimum of noise is still noise". The measurement refutes that: there
+IS signal in the later spans, merely buried under the position bias.
+Subtracting a per-position \(\mu(m)\) raises mismatch AP from 0.087 to
+**0.454**, a 5.2× improvement. It is nonetheless well short of the prefix
+statistic (0.935), and it still leaves the clean tail's \(P_{05}\) at −0.324
+(from −0.565), because a minimum over \(M\) positions each calibrated at
+\(\alpha\) falls below zero with probability \(1-(1-\alpha)^M\) — the part
+Eq. 5\('\)'s \(M\)-centring handles.
 
 So this is B2's recorded limit in its strongest form, with the mechanism now
 identified: not "the distributions happen to overlap" but "the statistic is
@@ -329,6 +332,16 @@ rate, i.e. mildly anti-correlated: a truncated response is a prefix of a
 correct one and therefore slightly *more* predictable from its instruction.
 The paper must not credit Eqs. 2-6 with catching T3.
 
+**A false alarm worth recording.** The pool's mean \(\bar\Delta\) is 0.447
+against the reference's 0.108, which looks like a calibration-invalidating
+distribution shift. It is not: the two agree to three decimals at every
+quantile (\(P_{10}\) 0.159 vs 0.159, \(P_{50}\) 0.379 vs 0.382, \(P_{90}\)
+0.883 vs 0.889). The means differ only because \(\bar\Delta\) has a heavy
+left tail — the `eps_den` clamp sends \(1 - L^+/L^-\) far negative whenever
+the counterfactual sum is tiny — which drags the reference's mean below even
+its own 10th percentile. Any diagnostic on this statistic must use medians
+and IQRs, not means and SDs; `gate_report.py` now does.
+
 **Code.** `tail_mode: none` makes the tail abstain everywhere, so
 \(\hat\Delta = \bar\Delta\). `configs/experiments/lowq/tag_bar_7b.yaml` is
 that arm; it differs from `tag_7b` in exactly one field.
@@ -337,18 +350,35 @@ that arm; it differs from `tag_7b` in exactly one field.
 1. Report the per-type AP table above. It is the strongest evidence in the
    paper that the contrast works, and it is also the evidence that Eqs. 4-5
    do not.
-2. **Replace the minimum, do not merely delete it.** The paper's intuition —
-   "a sequence average can hide a locally unsupported segment" — is sound; what
-   is wrong is *where* Eq. 5 looks. Since support is a prefix phenomenon, the
-   candidates worth measuring are the contrast restricted to the first \(n\)
-   response tokens, span 0 alone, and \(\bar\Delta\) itself;
-   `scripts/sweep_gate_statistic.py` evaluates all of them against the
-   corruption labels at once. On synthetic data with the measured decay
-   profile the ordering is prefix-8 (AP 0.921) > span-0 (0.906) >
-   \(\bar\Delta\) (0.392) > position-centred min (0.490) > raw min (0.306
-   ≈ base) — the real pool decides which holds here.
-   A prefix statistic would also be length-robust in a way \(\bar\Delta\) is
-   not, since \(\bar\Delta\) dilutes span 0's contribution as responses grow. Which configuration is "main" is settled by the
+2. **Replace the minimum with a PREFIX contrast — measured on the real pool.**
+   The paper's intuition ("a sequence average can hide a locally unsupported
+   segment") is sound; what is wrong is *where* Eq. 5 looks. Every candidate
+   summary, scored against the corruption labels
+   (`scripts/sweep_gate_statistic.py`, 59 516 records, AP):
+
+   | statistic | all | duplicate | mismatch | noisy | truncated | wrong_ans |
+   |---|---|---|---|---|---|---|
+   | *(base rate)* | 0.304 | 0.158 | 0.059 | 0.059 | 0.059 | 0.059 |
+   | \(\Delta^{\min}\) (Eq. 5) | 0.334 | 0.171 | 0.087 | 0.057 | 0.051 | 0.090 |
+   | \(\Delta^{\min}\) pos-centred | 0.465 | 0.202 | 0.454 | 0.166 | 0.049 | 0.089 |
+   | \(\bar\Delta\) (Eq. 3) | 0.542 | 0.239 | 0.817 | 0.451 | 0.045 | 0.088 |
+   | span 0 only | 0.582 | 0.259 | 0.933 | 0.584 | 0.062 | 0.063 |
+   | **prefix 32 tok** | **0.591** | **0.266** | **0.935** | **0.632** | 0.061 | 0.068 |
+
+   The prefix contrast wins on every type the contrast can see, detecting
+   instruction-response mismatch at **15.8× the base rate**. (`prefix 16` and
+   `span 0 only` agree to four decimals, as they must at \(W=16\) — a
+   consistency check on the implementation.) It is also more length-robust
+   than Eq. 3, whose denominator grows with the response while the signal
+   does not.
+
+   So Eq. 4-5 should be replaced by
+
+   \[\hat\Delta_i = \Bigl[1 - \tfrac{L(y_i^{<n_p} \mid u_i)}{L(y_i^{<n_p} \mid u_i^-)}\Bigr] - \mu(M_i), \qquad n_p = 32,\]
+
+   with the span minimum reported as the measured-and-rejected variant.
+   `configs/experiments/lowq/tag_prefix_7b.yaml` is the arm
+   (`prefix_tokens: 32`, `tail_mode: none`). Which configuration is "main" is settled by the
    end-to-end numbers (`tag_bar_7b` vs `tag_7b`), not by this table alone,
    but the table already rules out presenting the span minimum as a
    contribution.

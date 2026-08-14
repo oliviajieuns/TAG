@@ -61,6 +61,9 @@ def main() -> None:
                    help="delta_hat_*.pt from calibrate_reliability.py --mode tag")
     p.add_argument("--span-tokens", default="8,16,32,64,128",
                    help="comma-separated W values to try")
+    p.add_argument("--prefix-tokens", type=int, default=None,
+                   help="restrict the sequence-level contrast to the first\n"
+                        "N response tokens (0/unset = whole sequence)")
     p.add_argument("--tau", default=None,
                    help="comma-separated tau values (default: the ref's own)")
     p.add_argument("--tail-modes", default="min",
@@ -149,6 +152,10 @@ def main() -> None:
                     include_eos=bool(base.get("include_eos", False)),
                     c_trunc=float(base.get("c_trunc", 0.2)),
                     min_common_tokens=int(base.get("min_common_tokens", 8)),
+                    prefix_tokens=int(
+                        args.prefix_tokens if args.prefix_tokens is not None
+                        else base.get("prefix_tokens", 0)
+                    ),
                     null_correction=False, scale=1.0,
                 )
                 comp = gate_components(tok_true, n_true, tok_cf, n_cf, cfg=cfg_raw)

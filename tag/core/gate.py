@@ -420,6 +420,13 @@ class GateConfig:
         spans are the paper's other option; fixed windows are used here
         because they need no detokenisation and no sentence splitter, and
         because a corrupted region rarely respects sentence boundaries.
+    prefix_tokens: when > 0, the sequence-level contrast is restricted to
+        the first this-many response tokens (:func:`prefix_gain`) instead of
+        running over the whole response. 0 keeps the literal Eq. 3. The
+        instruction's contribution is concentrated in the opening of the
+        response, so this raises detection rather than discarding evidence
+        — measured AP for mismatch: 0.935 at 32 tokens, 0.817 for the full
+        sequence, 0.087 for the span minimum. See docs item A6.
     tau: low-information threshold defining C_i (Eq. 5). A span whose
         COUNTERFACTUAL loss is below tau carries no instruction dependency
         to begin with — boilerplate, closing pleasantries, formatting — and
@@ -476,6 +483,7 @@ class GateConfig:
     """
 
     span_tokens: int = 16
+    prefix_tokens: int = 0
     tau: float = 0.5
     tau_mode: str = "per_token"
     min_span_tokens: int = 4
@@ -496,6 +504,11 @@ class GateConfig:
     def __post_init__(self) -> None:
         if self.span_tokens < 1:
             raise ValueError(f"GateConfig: span_tokens must be >= 1, got {self.span_tokens}")
+        if self.prefix_tokens < 0:
+            raise ValueError(
+                f"GateConfig: prefix_tokens must be >= 0 (0 = use the whole "
+                f"sequence, Eq. 3), got {self.prefix_tokens}"
+            )
         if self.tau < 0:
             raise ValueError(f"GateConfig: tau must be >= 0, got {self.tau}")
         if self.tau_mode not in _TAU_MODES:
@@ -786,6 +799,50 @@ def overall_gain(
     return 1.0 - total_true.float() / den
 
 
+def prefix_gain(
+    token_true: torch.Tensor,
+    token_cf: torch.Tensor,
+    n_common: torch.Tensor,
+    *,
+    prefix_tokens: int,
+    eps_den: float = 1e-3,
+) -> torch.Tensor:
+    """Eq. 3 restricted to the first ``prefix_tokens`` response tokens.
+
+    Measured on Qwen2.5-7B, the instruction's predictive contribution is
+    concentrated almost entirely in the opening of the response: the mean
+    per-token nat gap ``l(y|u^-) - l(y|u^+)`` runs 4.38 over tokens 0-15,
+    0.60 over 16-31, and 0.05 past token ~190. ``l_k(y|u)`` conditions on
+    the response prefix ``y_<k`` as well as on ``u``, so once the model has
+    read the opening it infers the topic and predicts the rest about as well
+    under a wrong instruction as under the right one.
+
+    Restricting the contrast to that window therefore raises the signal
+    rather than discarding evidence: on the composite-20 pool, AP for
+    detecting instruction-response mismatch is 0.935 at 32 tokens against
+    0.817 for the whole sequence (Eq. 3) and 0.087 for the span minimum
+    (Eq. 5). It is also more length-robust than Eq. 3, whose denominator
+    grows with the response while the numerator's signal does not.
+
+    Samples shorter than ``prefix_tokens`` simply use their whole common
+    prefix, so no sample is excluded.
+    """
+    if prefix_tokens < 1:
+        raise ValueError(f"prefix_gain: prefix_tokens must be >= 1, got {prefix_tokens}")
+    t_axis = max(token_true.size(1), token_cf.size(1))
+    if token_true.size(1) < t_axis:
+        token_true = F.pad(token_true, (0, t_axis - token_true.size(1)))
+    if token_cf.size(1) < t_axis:
+        token_cf = F.pad(token_cf, (0, t_axis - token_cf.size(1)))
+    lim = torch.minimum(
+        n_common.long(), torch.full_like(n_common.long(), int(prefix_tokens)),
+    )
+    keep = torch.arange(t_axis).unsqueeze(0) < lim.unsqueeze(1)
+    s_true = (token_true[:, :t_axis].float() * keep).sum(dim=1)
+    s_cf = (token_cf[:, :t_axis].float() * keep).sum(dim=1)
+    return 1.0 - s_true / s_cf.clamp(min=eps_den)
+
+
 def span_gains(
     span_true: torch.Tensor,
     span_cf: torch.Tensor,
@@ -1065,7 +1122,17 @@ def gate_components(
     sp = spans_from_token_losses(
         token_true, n_true, token_cf, n_cf, span_tokens=cfg.span_tokens,
     )
-    d_bar = overall_gain(sp["total_true"], sp["total_cf"], eps_den=cfg.eps_den)
+    d_seq = overall_gain(sp["total_true"], sp["total_cf"], eps_den=cfg.eps_den)
+    # The "overall" leg of Eq. 6 is the prefix contrast when one is
+    # configured; d_seq stays available as a diagnostic either way.
+    d_bar = (
+        prefix_gain(
+            token_true, token_cf, sp["n_common"],
+            prefix_tokens=cfg.prefix_tokens, eps_den=cfg.eps_den,
+        )
+        if cfg.prefix_tokens > 0
+        else d_seq
+    )
     gains = span_gains(sp["span_true"], sp["span_cf"], sp["span_len"], eps_den=cfg.eps_den)
     mask = valid_span_mask(
         sp["span_cf"], sp["span_len"],
@@ -1089,6 +1156,7 @@ def gate_components(
     undefined = sp["n_common"] < int(cfg.min_common_tokens)
     return {
         "delta_bar": d_bar,
+        "delta_seq": d_seq,
         "delta_min": d_min,
         "delta_hat": d_hat,
         "delta_hat_raw": d_hat_raw,

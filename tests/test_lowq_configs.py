@@ -48,6 +48,7 @@ _ARMS_7B = [
     "full_polluted_7b",
     "tag_nonull_7b",
     "tag_bar_7b",
+    "tag_prefix_7b",
 ]
 
 

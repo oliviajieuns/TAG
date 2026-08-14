@@ -142,6 +142,7 @@ def _build_gate_config(params: Dict[str, Any], scale: Optional[float], null=None
 
     return GateConfig(
         span_tokens=int(params.get("span_tokens", 16)),
+        prefix_tokens=int(params.get("prefix_tokens", 0)),
         tau=float(params.get("tau", 0.5)),
         tau_mode=str(params.get("tau_mode", "per_token")),
         min_span_tokens=int(params.get("min_span_tokens", 4)),
@@ -305,7 +306,7 @@ def _resolve_gate_scale(params: Dict[str, Any]) -> Optional[float]:
 # Fields whose value changes the Delta_hat DISTRIBUTION, and therefore make a
 # calibration derived under one setting invalid under another.
 _CALIBRATION_BOUND_FIELDS = (
-    "span_tokens", "tau", "tau_mode", "min_span_tokens",
+    "span_tokens", "prefix_tokens", "tau", "tau_mode", "min_span_tokens",
     "tail_mode", "tail_quantile", "include_eos",
 )
 

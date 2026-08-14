@@ -268,11 +268,18 @@ def main() -> None:
                       f"{float(torch.quantile(v, 0.10)):>9.4f} "
                       f"{float(torch.quantile(v, 0.50)):>9.4f} "
                       f"{float(torch.quantile(v, 0.90)):>9.4f}")
-            shift = float(pb.mean() - rb.mean())
-            spread = float(rb.std())
-            print(f"  mean shift = {shift:+.4f}  ({abs(shift)/max(spread,1e-9):.2f}"
-                  f" reference SDs)")
-            if abs(shift) > 0.5 * spread:
+            # MEDIAN and IQR, not mean and SD: delta_bar has a heavy left
+            # tail (the eps_den clamp sends 1 - L+/L- far negative whenever
+            # the counterfactual sum is tiny), which drags the mean below
+            # even the 10th percentile and inflates the SD enough to hide
+            # any real shift. The quantiles are what describe the bulk.
+            med_r = float(torch.quantile(rb, 0.50))
+            med_p = float(torch.quantile(pb, 0.50))
+            iqr_r = float(torch.quantile(rb, 0.75) - torch.quantile(rb, 0.25))
+            shift = med_p - med_r
+            print(f"  median shift = {shift:+.4f}  "
+                  f"({abs(shift)/max(iqr_r,1e-9):.2f} reference IQRs)")
+            if abs(shift) > 0.25 * iqr_r:
                 print()
                 print("  ** The two pools' CLEAN records do not match. s and mu(M)")
                 print("     were fit on the reference, so on this pool the gate is")

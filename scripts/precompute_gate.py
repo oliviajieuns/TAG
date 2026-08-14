@@ -64,6 +64,7 @@ def _build_gate_cfg(params, scale, null=None):
 
     return GateConfig(
         span_tokens=int(params.get("span_tokens", 16)),
+        prefix_tokens=int(params.get("prefix_tokens", 0)),
         tau=float(params.get("tau", 0.5)),
         tau_mode=str(params.get("tau_mode", "per_token")),
         min_span_tokens=int(params.get("min_span_tokens", 4)),

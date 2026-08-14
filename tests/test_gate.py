@@ -606,3 +606,45 @@ def test_null_calibration_survives_a_cache_round_trip(tmp_path):
     )
     assert back["config"] == cfg.identity()
     assert back["config"] != _cfg(null_correction=True, null=other).identity()
+
+
+def test_prefix_gain_restricts_the_contrast_to_the_response_opening():
+    """The instruction's contribution is concentrated in the opening: measured
+    per-token nat gap 4.38 over tokens 0-15 against 0.05 past ~190, so the
+    prefix contrast raises detection rather than discarding evidence (AP 0.935
+    for mismatch vs 0.817 whole-sequence vs 0.087 span-min). See docs A6."""
+    from tag.core.gate import prefix_gain
+
+    # First two tokens carry the whole contrast; the tail is uninformative.
+    tok_true = torch.tensor([[3.0, 3.0, 1.0, 1.0, 1.0, 1.0]])
+    tok_cf = torch.tensor([[6.0, 6.0, 1.0, 1.0, 1.0, 1.0]])
+    n = torch.tensor([6])
+    # Over the informative window only: 1 - 6/12.
+    assert float(prefix_gain(tok_true, tok_cf, n, prefix_tokens=2)) == pytest.approx(0.5)
+    # Over everything the uninformative tail dilutes it.
+    assert float(prefix_gain(tok_true, tok_cf, n, prefix_tokens=6)) < 0.4
+    # A window longer than the response is the response — nobody is excluded.
+    assert float(prefix_gain(tok_true, tok_cf, n, prefix_tokens=999)) == pytest.approx(
+        float(prefix_gain(tok_true, tok_cf, n, prefix_tokens=6))
+    )
+
+
+def test_prefix_tokens_replaces_the_sequence_leg_and_is_calibration_bound():
+    from tag.core.gate import GateConfig, gate_components
+
+    tok_true = torch.tensor([[3.0, 3.0, 1.0, 1.0, 1.0, 1.0]])
+    tok_cf = torch.tensor([[6.0, 6.0, 1.0, 1.0, 1.0, 1.0]])
+    n = torch.tensor([6])
+    kw = dict(span_tokens=2, min_span_tokens=1, null_correction=False, scale=1.0)
+    off = gate_components(tok_true, n, tok_cf, n, cfg=GateConfig(**kw))
+    on = gate_components(tok_true, n, tok_cf, n,
+                         cfg=GateConfig(prefix_tokens=2, **kw))
+    # delta_seq is the untouched Eq. 3 either way; delta_bar is the leg Eq. 6
+    # consumes and follows prefix_tokens.
+    assert float(on["delta_seq"]) == pytest.approx(float(off["delta_seq"]))
+    assert float(on["delta_bar"]) == pytest.approx(0.5)
+    assert float(off["delta_bar"]) == pytest.approx(float(off["delta_seq"]))
+    # It changes the Delta_hat distribution, so a reference calibrated at one
+    # value must not be reused at another.
+    from tag.pipelines.selection import _CALIBRATION_BOUND_FIELDS
+    assert "prefix_tokens" in _CALIBRATION_BOUND_FIELDS

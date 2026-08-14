@@ -111,6 +111,9 @@ export TAG_GATE_CACHE_NONULL="${TAG_GATE_CACHE_NONULL:-$POOLS/composite20/tag_ga
 # reference and its own gate.
 export TAG_GATE_REF_7B_BAR="${TAG_GATE_REF_7B_BAR:-$POOLS/clean_ref/delta_hat_7b_bar.pt}"
 export TAG_GATE_CACHE_BAR="${TAG_GATE_CACHE_BAR:-$POOLS/composite20/tag_gate_qwen2.5-7b_bar.pt}"
+# The prefix arm (tag_prefix_7b) — the measured-best support statistic.
+export TAG_GATE_REF_7B_PREFIX="${TAG_GATE_REF_7B_PREFIX:-$POOLS/clean_ref/delta_hat_7b_prefix.pt}"
+export TAG_GATE_CACHE_PREFIX="${TAG_GATE_CACHE_PREFIX:-$POOLS/composite20/tag_gate_qwen2.5-7b_prefix.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub
 # fallback is how you end up training on a different pool than you think.
