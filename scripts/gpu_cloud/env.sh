@@ -125,6 +125,35 @@ export HF_HOME="${HF_HOME:-$TAG_WORKSPACE/hf_home}"
 
 export OUTPUT_ROOT="${OUTPUT_ROOT:-$TAG_WORKSPACE/runs}"
 export DATA_CACHE="${DATA_CACHE:-$TAG_WORKSPACE/cache}"
+export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-$TAG_WORKSPACE/eval-results}"
+
+# Benchmark corpora for `python -m tag.eval`. These lived only in
+# scripts/setup_env.sh (the n9-specific file), so a shell that sourced THIS
+# file — the documented entry point — had none of them and every eval failed
+# on a missing data dir. Probe the cluster location first, fall back to the
+# workspace, and let an explicit export win either way.
+_tag_bench_dir() {  # usage: _tag_bench_dir VARNAME subdir [marker]
+  local var="$1" sub="$2" marker="${3:-}"
+  local cur="${!var:-}"
+  [ -n "$cur" ] && { echo "$cur"; return; }
+  for c in "/group-volume/IT-datasets/$sub" "$TAG_WORKSPACE/datasets/$sub"; do
+    if [ -n "$marker" ]; then
+      [ -e "$c/$marker" ] && { echo "$c"; return; }
+    else
+      [ -d "$c" ] && { echo "$c"; return; }
+    fi
+  done
+  echo "$TAG_WORKSPACE/datasets/$sub"
+}
+export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR mmlu/all)"
+export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR mmlu_pro)"
+export GSM8K_DATA_DIR="$(_tag_bench_dir GSM8K_DATA_DIR gsm8k)"
+export SVAMP_DATA_DIR="$(_tag_bench_dir SVAMP_DATA_DIR svamp)"
+export HUMANEVAL_DATA_DIR="$(_tag_bench_dir HUMANEVAL_DATA_DIR human-eval)"
+export MBPP_DATA_DIR="$(_tag_bench_dir MBPP_DATA_DIR mbpp)"
+export TYDIQA_DATA_DIR="$(_tag_bench_dir TYDIQA_DATA_DIR tydiqa)"
+export XQUAD_DATA_DIR="$(_tag_bench_dir XQUAD_DATA_DIR xquad)"
+export BBH_DATA_DIR="$(_tag_bench_dir BBH_DATA_DIR bbh)"
 
 # Forward-only batch size for the pool scoring passes. The config default
 # (_shared_7b.yaml: ${oc.env:TAG_EPISODE_BS_7B,8}) is sized for a small GPU,
@@ -162,7 +191,18 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] gate ref 0.5b: $TAG_GATE_REF  [$(_tag_mark "$TAG_GATE_REF")]"
   echo "[tag-env] gate ref 7b  : $TAG_GATE_REF_7B  [$(_tag_mark "$TAG_GATE_REF_7B")]"
   echo "[tag-env] outputs   : $OUTPUT_ROOT"
+  echo "[tag-env] eval out  : $EVAL_RESULTS_ROOT"
   echo "[tag-env] fwd batch : 0.5b=$TAG_EPISODE_BS  7b=$TAG_EPISODE_BS_7B"
+  _tag_missing_bench=""
+  for _v in MMLU_DATA_DIR GSM8K_DATA_DIR HUMANEVAL_DATA_DIR TYDIQA_DATA_DIR BBH_DATA_DIR; do
+    [ -d "${!_v}" ] || _tag_missing_bench="$_tag_missing_bench ${_v%%_DATA_DIR}"
+  done
+  if [ -n "$_tag_missing_bench" ]; then
+    echo "[tag-env] benchmarks:$_tag_missing_bench MISSING (eval will fail on those)"
+  else
+    echo "[tag-env] benchmarks: mmlu gsm8k humaneval tydiqa bbh found"
+  fi
+  unset _v _tag_missing_bench
   if command -v nvidia-smi >/dev/null 2>&1; then
     echo "[tag-env] gpus      : $(nvidia-smi --query-gpu=name --format=csv,noheader | tr '\n' ',' | sed 's/,$//')"
   fi
