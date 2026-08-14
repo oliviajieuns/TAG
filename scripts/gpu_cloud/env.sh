@@ -156,30 +156,49 @@ export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-$TAG_WORKSPACE/eval-results}"
 # Benchmark corpora for `python -m tag.eval`. These lived only in
 # scripts/setup_env.sh (the n9-specific file), so a shell that sourced THIS
 # file — the documented entry point — had none of them and every eval failed
-# on a missing data dir. Probe the cluster location first, fall back to the
-# workspace, and let an explicit export win either way.
-_tag_bench_dir() {  # usage: _tag_bench_dir VARNAME subdir [marker]
-  local var="$1" sub="$2" marker="${3:-}"
+# on a missing data dir.
+#
+# The corpora are NOT all under one root: setup_env.sh's defaults say
+# /group-volume/IT-datasets, but this box keeps them at /group-volume/datasets,
+# and MMLU sits one level deeper (mmlu/all) in some layouts and not in others.
+# Probing a single root reported eight benchmarks as missing that were all
+# present. So: try every root we have seen, and for each benchmark try the
+# spellings it actually appears under. An explicit export always wins, and
+# TAG_BENCH_ROOTS prepends more roots without editing this file.
+_TAG_BENCH_ROOTS="${TAG_BENCH_ROOTS:-} $TAG_WORKSPACE/datasets /group-volume/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/${USER:-nobody}/datasets"
+
+_tag_bench_dir() {  # usage: _tag_bench_dir VARNAME subdir [subdir...]
+  local var="$1"; shift
   local cur="${!var:-}"
-  [ -n "$cur" ] && { echo "$cur"; return; }
-  for c in "/group-volume/IT-datasets/$sub" "$TAG_WORKSPACE/datasets/$sub"; do
-    if [ -n "$marker" ]; then
-      [ -e "$c/$marker" ] && { echo "$c"; return; }
-    else
-      [ -d "$c" ] && { echo "$c"; return; }
-    fi
+  # An explicit export wins — but only if it exists, so a stale value copied
+  # between machines does not shadow a corpus that IS here.
+  [ -n "$cur" ] && [ -d "$cur" ] && { echo "$cur"; return; }
+  # Spelling is the OUTER loop: the more specific one (mmlu/all) must beat a
+  # bare mmlu found under an earlier root, or MMLU resolves to a directory
+  # whose parquet files are one level down and the evaluator finds nothing.
+  local root sub
+  for sub in "$@"; do
+    for root in $_TAG_BENCH_ROOTS; do
+      # Non-empty, not merely present: an empty directory left behind by an
+      # interrupted download would otherwise shadow the real corpus.
+      if [ -d "$root/$sub" ] && [ -n "$(ls -A "$root/$sub" 2>/dev/null)" ]; then
+        echo "$root/$sub"; return
+      fi
+    done
   done
-  echo "$TAG_WORKSPACE/datasets/$sub"
+  # Nothing found: report the preferred spelling under the download target so
+  # the message names a path the download scripts will actually create.
+  echo "${cur:-$TAG_WORKSPACE/datasets/$1}"
 }
-export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR mmlu/all)"
-export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR mmlu_pro)"
+export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR mmlu/all mmlu)"
+export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR mmlu_pro mmlu-pro)"
 export GSM8K_DATA_DIR="$(_tag_bench_dir GSM8K_DATA_DIR gsm8k)"
-export SVAMP_DATA_DIR="$(_tag_bench_dir SVAMP_DATA_DIR svamp)"
-export HUMANEVAL_DATA_DIR="$(_tag_bench_dir HUMANEVAL_DATA_DIR human-eval)"
+export SVAMP_DATA_DIR="$(_tag_bench_dir SVAMP_DATA_DIR svamp SVAMP)"
+export HUMANEVAL_DATA_DIR="$(_tag_bench_dir HUMANEVAL_DATA_DIR human-eval humaneval human_eval)"
 export MBPP_DATA_DIR="$(_tag_bench_dir MBPP_DATA_DIR mbpp)"
-export TYDIQA_DATA_DIR="$(_tag_bench_dir TYDIQA_DATA_DIR tydiqa)"
+export TYDIQA_DATA_DIR="$(_tag_bench_dir TYDIQA_DATA_DIR tydiqa tydi_qa)"
 export XQUAD_DATA_DIR="$(_tag_bench_dir XQUAD_DATA_DIR xquad)"
-export BBH_DATA_DIR="$(_tag_bench_dir BBH_DATA_DIR bbh)"
+export BBH_DATA_DIR="$(_tag_bench_dir BBH_DATA_DIR bbh BIG-Bench-Hard bbh/bbh)"
 
 # Forward-only batch size for the pool scoring passes. The config default
 # (_shared_7b.yaml: ${oc.env:TAG_EPISODE_BS_7B,8}) is sized for a small GPU,
@@ -232,9 +251,24 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] benchmarks:${_tag_have:- none} found"
   if [ -n "$_tag_missing" ]; then
     echo "[tag-env]   MISSING:$_tag_missing — eval will refuse to start on these"
-    echo "[tag-env]   try:  bash scripts/gpu_cloud/n9_discover.sh --write"
-    echo "[tag-env]   then re-source; scripts/download_*.sh fetches what is"
-    echo "[tag-env]   genuinely absent (svamp, mbpp, humaneval, tydiqa, xquad)."
+    echo "[tag-env]   roots searched:$_TAG_BENCH_ROOTS"
+    echo "[tag-env]   if a corpus is on this box under another path, either"
+    echo "[tag-env]   export TAG_BENCH_ROOTS=/its/parent before sourcing, or"
+    echo "[tag-env]   run: bash scripts/gpu_cloud/n9_discover.sh --write"
+    echo "[tag-env]   Otherwise fetch it with scripts/download_<bench>.sh."
+  fi
+  # The resolution above picks between several spellings per benchmark, and
+  # picking the wrong one fails deep inside eval rather than here.
+  if [ -n "${TAG_ENV_VERBOSE:-}" ]; then
+    for _pair in mmlu:MMLU_DATA_DIR bbh:BBH_DATA_DIR svamp:SVAMP_DATA_DIR \
+                 gsm8k:GSM8K_DATA_DIR mbpp:MBPP_DATA_DIR \
+                 humaneval:HUMANEVAL_DATA_DIR tydiqa:TYDIQA_DATA_DIR \
+                 xquad:XQUAD_DATA_DIR; do
+      _b="${_pair%%:*}"; _v="${_pair##*:}"
+      printf '[tag-env]   %-10s %s\n' "$_b" "${!_v}"
+    done
+  else
+    echo "[tag-env]   (TAG_ENV_VERBOSE=1 prints the resolved path of each)"
   fi
   unset _pair _b _v _tag_have _tag_missing
   if command -v nvidia-smi >/dev/null 2>&1; then
