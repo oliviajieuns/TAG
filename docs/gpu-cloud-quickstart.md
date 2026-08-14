@@ -189,8 +189,7 @@ python scripts/sweep_gate_config.py --ref $TADS_GATE_REF_7B \
 # Completeness is a five-fold demotion decided by a string heuristic; check
 # its false-positive rate on THIS pool before running four arms on it.
 python scripts/audit_completeness.py --ablate \
-    --pool $POOLS/composite20/pool.json \
-    --manifest $POOLS/composite20/manifest.json
+    --pool $POOLS/composite20/pool.json
 
 python scripts/gpu_cloud/preflight.py --config configs/experiments/lowq/tag_7b.yaml
 

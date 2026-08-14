@@ -94,8 +94,7 @@ tads:
     # five-fold demotion decided by a string heuristic
     # (tads.data.sft_prompts.text_is_complete), so measure the heuristic's
     # false-positive rate on YOUR pool before trusting it:
-    #   python scripts/audit_completeness.py --pool <pool>.json \
-    #       --manifest <manifest>.json --ablate
+    #   python scripts/audit_completeness.py --pool <pool>.json --ablate
     c_trunc: 0.2
     eps_den: 0.001         # denominator floor in Eqs. 3-4
     # A sample whose true/counterfactual responses share fewer than this

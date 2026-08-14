@@ -52,8 +52,9 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--pool", required=True, help="pool.json (list of records)")
     p.add_argument("--manifest", default=None,
-                   help="manifest.json beside the pool. Without it only the "
-                        "overall flag rate can be reported.")
+                   help="corruption_manifest.json. Defaults to the one beside "
+                        "--pool; without either, only the overall flag rate "
+                        "can be reported.")
     p.add_argument("--response-key", default="output")
     p.add_argument("--ablate", action="store_true",
                    help="also report the heuristic with each added rule off")
@@ -68,6 +69,16 @@ def main() -> None:
         sys.exit(f"{args.pool} is not a list of records")
     texts = [str(r.get(args.response_key, "")) for r in records]
     n = len(texts)
+
+    # make_corrupted_pool.py writes corruption_manifest.json beside the pool.
+    # Requiring the exact name buys nothing and is easy to get wrong, and
+    # getting it wrong silently downgrades this to a bare flag-rate report
+    # with no precision or recall — the numbers that decide the question.
+    if not args.manifest:
+        guess = Path(args.pool).with_name("corruption_manifest.json")
+        if guess.exists():
+            args.manifest = str(guess)
+            print(f"(using the manifest beside the pool: {guess})")
 
     types: List[str] = ["clean"] * n
     if args.manifest:
