@@ -68,7 +68,11 @@ def main() -> None:
                    help="comma-separated tau values (default: the ref's own)")
     p.add_argument("--tail-modes", default="min",
                    help="comma-separated: min,quantile")
-    p.add_argument("--tail-quantile", type=float, default=0.25)
+    p.add_argument("--tail-quantile", type=float, default=None,
+                   help="only read when --tail-modes includes quantile; "
+                        "defaults to the reference's own value so a refit "
+                        "does not stamp an unrelated default into the "
+                        "artifact identity")
     p.add_argument("--target-pct", type=float, default=0.10)
     p.add_argument("--target-q", type=float, default=0.8)
     p.add_argument("--target-zero-rate", type=float, default=0.05,
@@ -108,8 +112,11 @@ def main() -> None:
     n = tok_true.size(0)
     print(f"reference : {args.ref}")
     print(f"samples   : {n}")
+    _pfx = (args.prefix_tokens if args.prefix_tokens is not None
+            else int(base.get("prefix_tokens", 0)))
     print(f"as-built  : W={base.get('span_tokens')} tau={base.get('tau')}"
           f"({base.get('tau_mode')}) tail={base.get('tail_mode')}")
+    print(f"sweeping  : prefix_tokens={_pfx or 'off (whole sequence, Eq. 3)'}")
     print(f"correction: {'Eq.5-prime null, target_zero_rate=%.3f' % args.target_zero_rate if use_null else 'OFF (literal Eq. 5)'}")
     print()
 
@@ -148,7 +155,11 @@ def main() -> None:
                     span_tokens=W, tau=tau,
                     tau_mode=str(base.get("tau_mode", "per_token")),
                     min_span_tokens=int(base.get("min_span_tokens", 4)),
-                    tail_mode=tail, tail_quantile=args.tail_quantile,
+                    tail_mode=tail,
+                    tail_quantile=(
+                        args.tail_quantile if args.tail_quantile is not None
+                        else float(base.get("tail_quantile", 0.0))
+                    ),
                     include_eos=bool(base.get("include_eos", False)),
                     c_trunc=float(base.get("c_trunc", 0.2)),
                     min_common_tokens=int(base.get("min_common_tokens", 8)),
@@ -244,12 +255,14 @@ def main() -> None:
     print("`sep` is a clean-only proxy. Confirm on a LABELLED pool before")
     print("committing:  python scripts/score_pool.py --config <arm> ...")
     print()
-    print("Apply it in configs/methods/tag.yaml (or the 7B arm):")
+    print("Apply it in the arm's YAML — EVERY line, including the defaults:")
     print(f"  selection.tag.span_tokens: {W}")
     print(f"  selection.tag.tau: {tau}")
-    if tail != "min":
-        print(f"  selection.tag.tail_mode: {tail}")
+    print(f"  selection.tag.tail_mode: {tail}")
+    print(f"  selection.tag.prefix_tokens: {_pfx}")
     print(f"  selection.tag.target_zero_rate: {args.target_zero_rate}")
+    print("  (omitting one silently reverts it to the method default, which")
+    print("   makes the arm disagree with the reference it is calibrated by)")
 
     if args.refit_out:
         _write_refit(args, ref, winner)
@@ -286,13 +299,23 @@ def _write_refit(args, ref, chosen) -> None:
     torch.save(payload, out)
     print()
     print(f"Wrote refit reference -> {out}")
-    print(f"  W = {cfg_raw.span_tokens} | s = {fit['scale']:.6f} | "
-          f"clean zero-weight rate {100*fit['zero_rate']:.1f}% | "
-          f"null {'off' if fit['null'] is None else 'on'}")
-    print("Point the arm at it and recompute the gate:")
-    print(f"  export TAG_GATE_REF_7B={out}")
-    print("  rm -f $POOLS/composite20/tag_gate_*.pt")
-    print("  bash scripts/precompute_gate.sh configs/experiments/lowq/tag_7b.yaml")
+    print(f"  W = {cfg_raw.span_tokens} | prefix = {cfg_raw.prefix_tokens or 'off'}"
+          f" | tail = {cfg_raw.tail_mode} | s = {fit['scale']:.6f}"
+          f" | clean zero-weight rate {100*fit['zero_rate']:.1f}%"
+          f" | null {'off' if fit['null'] is None else 'on'}")
+    print()
+    # Deliberately NOT naming an arm or an env var: this script cannot know
+    # which arm the refit is for, and guessing has real consequences —
+    # pointing TAG_GATE_REF_7B at a variant reference silently recalibrates
+    # the MAIN arm, and a glob delete of tag_gate_*.pt takes out every other
+    # arm's cache too.
+    print("Next, for the arm whose YAML carries this configuration:")
+    print("  1. point its gate_ref_file env var at the path above")
+    print("     (each arm reads its own; see scripts/gpu_cloud/env.sh)")
+    print("  2. recompute THAT arm's gate into its own cache path:")
+    print("       bash scripts/precompute_gate.sh <that-arm>.yaml <its-cache>.pt")
+    print("     Do not reuse another arm's cache: G differs whenever any")
+    print("     calibration-bound field does.")
 
 
 if __name__ == "__main__":

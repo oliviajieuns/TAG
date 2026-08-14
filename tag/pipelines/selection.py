@@ -311,6 +311,34 @@ _CALIBRATION_BOUND_FIELDS = (
 )
 
 
+def _effective_calibration_fields(params: Dict[str, Any]) -> Tuple[str, ...]:
+    """The subset of :data:`_CALIBRATION_BOUND_FIELDS` this config actually reads.
+
+    Several of the span fields only exist to feed the tail test, so under a
+    tail_mode that does not run they have NO effect on Delta_hat. Comparing
+    them anyway turns a difference that changes nothing into a hard error —
+    which is exactly what happened when a refit artifact recorded the sweep
+    script's default ``tail_quantile: 0.25`` while the arm inherited ``0.0``,
+    under ``tail_mode: none`` where neither value is ever read.
+
+    Kept deliberately narrow: a field is excluded only where the code path
+    provably ignores it.
+      * ``tail_quantile`` — read only by ``tail_gain(mode="quantile")``.
+      * ``tau`` / ``tau_mode`` / ``min_span_tokens`` — define C_i, which only
+        exists to mask the spans the tail test reads. ``tail_mode: none``
+        abstains before touching the mask.
+      * ``span_tokens`` is NOT excluded even under ``tail_mode: none``: it
+        sets the span count M, and mu(M) bins on it.
+    """
+    fields = ["span_tokens", "prefix_tokens", "include_eos", "tail_mode"]
+    tail = str(params.get("tail_mode", "min"))
+    if tail != "none":
+        fields += ["tau", "tau_mode", "min_span_tokens"]
+    if tail == "quantile":
+        fields.append("tail_quantile")
+    return tuple(fields)
+
+
 def _warn_gate_ref_config_mismatch(ref_cfg, params, ref_file) -> None:
     """The reference records the gate config it was computed under; check it.
 
@@ -319,12 +347,16 @@ def _warn_gate_ref_config_mismatch(ref_cfg, params, ref_file) -> None:
     W=16 and gating at W=32 silently mis-scales every gate value in the run,
     with no symptom other than a wrong zero-weight rate — which is exactly the
     quantity the paper reports.
+
+    Only the fields the requested configuration actually reads are compared
+    (:func:`_effective_calibration_fields`); a field the code path ignores
+    cannot have changed the distribution, and refusing on it is a false alarm.
     """
     if not isinstance(ref_cfg, dict):
         return
     diffs = {
         f: (ref_cfg.get(f), params.get(f))
-        for f in _CALIBRATION_BOUND_FIELDS
+        for f in _effective_calibration_fields(params)
         if f in ref_cfg and f in params and ref_cfg[f] != params[f]
     }
     if diffs:

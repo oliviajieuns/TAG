@@ -539,3 +539,50 @@ def test_gate_ref_carrying_a_null_curve_calibrates_s_on_the_centred_statistic(tm
     # ...and one fit at another target_zero_rate is refused too.
     with pytest.raises(ValueError, match="target_zero_rate"):
         _resolve_gate_calibration({**params, "target_zero_rate": 0.10})
+
+
+def test_calibration_check_ignores_fields_the_config_never_reads(tmp_path):
+    """A refit artifact recorded the sweep script's default tail_quantile=0.25
+    while the arm inherited 0.0 — under tail_mode: none, where NEITHER value
+    is ever read — and the run died with 'calibrated under a different span
+    configuration'. Comparing a field the code path provably ignores turns a
+    difference that changes nothing into a hard error."""
+    import torch
+    from tag.core.gate import GateConfig
+    from tag.pipelines.selection import (
+        _effective_calibration_fields, _resolve_gate_scale,
+    )
+
+    # tail_quantile is read only by tail_gain(mode="quantile").
+    assert "tail_quantile" not in _effective_calibration_fields({"tail_mode": "none"})
+    assert "tail_quantile" not in _effective_calibration_fields({"tail_mode": "min"})
+    assert "tail_quantile" in _effective_calibration_fields({"tail_mode": "quantile"})
+    # C_i exists only to mask the spans the tail test reads.
+    for f in ("tau", "tau_mode", "min_span_tokens"):
+        assert f not in _effective_calibration_fields({"tail_mode": "none"})
+        assert f in _effective_calibration_fields({"tail_mode": "min"})
+    # span_tokens always matters: it sets M, and mu(M) bins on it.
+    for tm in ("none", "min", "quantile"):
+        eff = _effective_calibration_fields({"tail_mode": tm})
+        assert "span_tokens" in eff and "prefix_tokens" in eff and "tail_mode" in eff
+
+    ref = tmp_path / "delta_hat.pt"
+    torch.save(
+        {
+            "delta_hat": torch.linspace(0.05, 0.95, 200),
+            "gate_config": GateConfig(
+                span_tokens=16, tail_mode="none", tail_quantile=0.25,
+                scale=1.0, null_correction=False,
+            ).identity(),
+        },
+        ref,
+    )
+    base = {"gate_scale": "", "gate_ref_file": str(ref), "span_tokens": 16,
+            "tail_mode": "none", "null_correction": False}
+    # The exact failure: differs only in a field tail_mode: none never reads.
+    assert _resolve_gate_scale({**base, "tail_quantile": 0.0}) > 0
+    # A field it DOES read still fails loudly.
+    with pytest.raises(ValueError, match="different span configuration"):
+        _resolve_gate_scale({**base, "span_tokens": 32})
+    with pytest.raises(ValueError, match="different span configuration"):
+        _resolve_gate_scale({**base, "tail_mode": "min"})
