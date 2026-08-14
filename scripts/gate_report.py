@@ -166,13 +166,78 @@ def main() -> None:
     by_type: Dict[str, List[int]] = {}
     for i, t in enumerate(types):
         by_type.setdefault(t, []).append(i)
-    print(f"{'type':<16} {'n':>7} {'mean G':>8} {'G==0':>8}")
-    print("-" * 43)
+    comp = cache.get("completeness")
+    have_comp = comp is not None
+    if have_comp:
+        comp = comp.float().view(-1)
+        # G = c * sigma_part, so sigma_part isolates what the COUNTERFACTUAL
+        # CONTRAST (Eqs. 2-6) contributes, with the completeness heuristic's
+        # contribution divided out. A type whose mean G is low but whose
+        # sigma_part is ~clean is being caught by the string heuristic, not by
+        # the likelihood contrast the method is about.
+        sigma_part = torch.where(comp > 0, G / comp.clamp(min=1e-6), G)
+    hdr = f"{'type':<16} {'n':>7} {'mean G':>8} {'G==0':>8}"
+    if have_comp:
+        hdr += f" {'mean c':>8} {'G/c':>8}"
+    print(hdr)
+    print("-" * (len(hdr) + 2))
     for t in sorted(by_type, key=lambda x: (x != "clean", x)):
         idx = torch.tensor(by_type[t], dtype=torch.long)
         g = G[idx]
-        print(f"{t:<16} {len(idx):>7} {float(g.mean()):>8.4f} "
-              f"{100*float((g==0).float().mean()):>7.1f}%")
+        row = (f"{t:<16} {len(idx):>7} {float(g.mean()):>8.4f} "
+               f"{100*float((g==0).float().mean()):>7.1f}%")
+        if have_comp:
+            row += f" {float(comp[idx].mean()):>8.4f} {float(sigma_part[idx].mean()):>8.4f}"
+        print(row)
+    if have_comp:
+        print("  mean c  = completeness (the c_trunc string heuristic)")
+        print("  G/c     = the counterfactual contrast alone. Compare it to")
+        print("            clean's: a type that only separates in 'mean G' but")
+        print("            not in 'G/c' is caught by the heuristic, not Eqs. 2-6.")
+
+    # ---- span ablation: does Delta^min earn its place over Delta_bar? ----
+    # This IS the paper's justification for Eqs. 4-5. The stated argument is
+    # that a localized corruption (a wrong final answer in an otherwise
+    # correct response) leaves Delta_bar healthy while Delta^min collapses.
+    # That is a testable claim and the cache already holds both statistics,
+    # so it gets measured rather than assumed. Per corruption type, AP of
+    # each statistic as a detector of THAT type against clean only.
+    d_bar = cache.get("delta_bar")
+    d_min = cache.get("delta_min")
+    if d_bar is None or d_min is None:
+        return
+    d_bar = d_bar.float().view(-1)
+    d_min = d_min.float().view(-1)
+    clean_idx = by_type.get("clean") or []
+    if not clean_idx:
+        return
+    print()
+    print("Span ablation — AP for detecting each type against CLEAN only")
+    print("(the paper's reason for Eqs. 4-5: Delta^min should beat Delta_bar")
+    print(" on LOCALIZED corruption. Where it does not, spans are not earning")
+    print(" their place on that type.)")
+    print(f"{'type':<16} {'base':>7} {'AP dbar':>9} {'AP dmin':>9} {'AP dhat':>9}  verdict")
+    print("-" * 66)
+    d_hat = cache.get("delta_hat")
+    d_hat = d_hat.float().view(-1) if d_hat is not None else None
+    for t in sorted(by_type):
+        if t == "clean":
+            continue
+        idx = by_type[t]
+        sel = torch.tensor(list(idx) + list(clean_idx), dtype=torch.long)
+        lab = torch.zeros(sel.numel(), dtype=torch.bool)
+        lab[: len(idx)] = True
+        b = float(lab.float().mean())
+        ap_bar = average_precision(-d_bar[sel], lab)
+        ap_min = average_precision(-d_min[sel], lab)
+        ap_hat = average_precision(-d_hat[sel], lab) if d_hat is not None else float("nan")
+        if ap_min > ap_bar + 0.01:
+            verdict = "spans help"
+        elif ap_min < ap_bar - 0.01:
+            verdict = "spans HURT"
+        else:
+            verdict = "no difference"
+        print(f"{t:<16} {b:>7.3f} {ap_bar:>9.4f} {ap_min:>9.4f} {ap_hat:>9.4f}  {verdict}")
 
 
 if __name__ == "__main__":
