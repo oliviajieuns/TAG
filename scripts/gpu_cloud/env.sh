@@ -216,7 +216,13 @@ export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-$TAG_WORKSPACE/eval-results}"
 # benchmark was consolidated there and the HF arrow caches deleted. It goes
 # first so a stale copy left in a workspace cannot shadow the real one. The
 # rest are historical and kept only so an older box still resolves.
-_TAG_BENCH_ROOTS="${TAG_BENCH_ROOTS:-} /group-volume/datasets $TAG_WORKSPACE/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/${USER:-nobody}/datasets"
+# scripts/prepare_eval_data.py writes here: five of the eight corpora are HF
+# clones laid out differently from what the evaluators open, and converting
+# the data (rather than the loaders) keeps scoring identical to what produced
+# the published numbers. It goes FIRST so the converted copy wins over the
+# clone it was built from.
+export TAG_EVAL_DATA="${TAG_EVAL_DATA:-$TAG_WORKSPACE/eval-data}"
+_TAG_BENCH_ROOTS="${TAG_BENCH_ROOTS:-} $TAG_EVAL_DATA /group-volume/datasets $TAG_WORKSPACE/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/${USER:-nobody}/datasets"
 
 _tag_has() {  # _tag_has <dir> <glob>[|<glob>...] — does the dir hold the goods?
   local d="$1" rest="$2" g
@@ -376,6 +382,8 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
     echo "[tag-env]   if a corpus is on this box under another path, either"
     echo "[tag-env]   export TAG_BENCH_ROOTS=/its/parent before sourcing, or"
     echo "[tag-env]   run: bash scripts/gpu_cloud/n9_discover.sh --write"
+    echo "[tag-env]   Five corpora are HF clones the loaders cannot read"
+    echo "[tag-env]   as-is: python scripts/prepare_eval_data.py --apply"
     echo "[tag-env]   Otherwise fetch it with scripts/download_<bench>.sh."
   fi
   echo "[tag-env]   verify before a run: python scripts/check_eval_data.py"
