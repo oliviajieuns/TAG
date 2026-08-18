@@ -68,7 +68,7 @@ def inspect_mmlu_pro():
     d = Path(os.environ.get("MMLU_PRO_DATA_DIR", "/group-volume/IT-datasets/mmlu_pro"))
     print(f"  dir: {d}")
     if not d.is_dir():
-        print(f"  [missing] directory not found")
+        print("  [missing] directory not found")
         return
     for stem in ("test", "validation"):
         candidates = sorted(d.glob(f"{stem}*.parquet"))
@@ -86,7 +86,7 @@ def inspect_svamp():
     d = Path(os.environ.get("SVAMP_DATA_DIR", "/group-volume/IT-datasets/svamp"))
     print(f"  dir: {d}")
     if not d.is_dir():
-        print(f"  [missing] directory not found")
+        print("  [missing] directory not found")
         return
     candidates = sorted(d.glob("test*.parquet")) + sorted(d.glob("*.parquet"))
     seen = set()
@@ -104,7 +104,7 @@ def inspect_mbpp():
     d = Path(os.environ.get("MBPP_DATA_DIR", "/group-volume/IT-datasets/mbpp"))
     print(f"  dir: {d}")
     if not d.is_dir():
-        print(f"  [missing] directory not found")
+        print("  [missing] directory not found")
         return
     for cfg in ("sanitized", "full"):
         sub = d / cfg
@@ -127,7 +127,7 @@ def inspect_xquad():
     d = Path(os.environ.get("XQUAD_DATA_DIR", "/group-volume/IT-datasets/xquad"))
     print(f"  dir: {d}")
     if not d.is_dir():
-        print(f"  [missing] directory not found")
+        print("  [missing] directory not found")
         return
     json_files = sorted(d.glob("xquad.*.json"))
     if not json_files:

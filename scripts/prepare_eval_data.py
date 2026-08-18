@@ -33,13 +33,12 @@ Use --limit only for smoke tests.
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:

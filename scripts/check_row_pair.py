@@ -25,7 +25,6 @@ a lowq shell trains on corrupted data and says nothing about it.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -118,18 +117,18 @@ def main() -> int:
         elif any(m in val.lower() for m in _CORRUPT_MARKERS):
             print(f"POOL  {role}: data_files looks like a corrupted / lowq pool:")
             print(f"        {val}")
-            print(f"      Table 2 is defined on the clean source corpus. Export")
-            print(f"      ALPACA_DATA_FILES and TAG_MAIN_POOL to it before launching.")
+            print("      Table 2 is defined on the clean source corpus. Export")
+            print("      ALPACA_DATA_FILES and TAG_MAIN_POOL to it before launching.")
             pool_bad = True
     if pa and pb and pa != pb:
         # data_files is in neither allow-list, so it is already in `problems`;
         # this just says why it matters.
-        print(f"POOL  the two rows read DIFFERENT pools — the comparison is void.")
+        print("POOL  the two rows read DIFFERENT pools — the comparison is void.")
         pool_bad = True
     elif pa and not pool_bad:
         print(f"POOL  both rows: {pa}")
         if not Path(pa.split(",")[0]).exists():
-            print(f"      WARNING: that path does not exist yet.")
+            print("      WARNING: that path does not exist yet.")
 
     print()
     if problems:

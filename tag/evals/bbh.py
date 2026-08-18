@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -276,13 +275,13 @@ class BBHEvaluator(BenchmarkEvaluator):
         if _bad_tasks:
             raise ValueError(
                 "BBH dataset schema mismatch — refusing to run. "
-                f"Expected the suzgun/BIG-Bench-Hard layout (each per-task "
-                f"file is a JSON dict `{{'examples': [{{'input': str, "
-                f"'target': str}}, ...]}}`). Bad task files (first 5):\n  "
+                "Expected the suzgun/BIG-Bench-Hard layout (each per-task "
+                "file is a JSON dict `{'examples': [{'input': str, "
+                "'target': str}, ...]}`). Bad task files (first 5):\n  "
                 + "\n  ".join(_bad_tasks[:5])
                 + (f"\n  ... +{len(_bad_tasks) - 5} more" if len(_bad_tasks) > 5 else "")
-                + f"\nFix: clone https://github.com/suzgunmirac/BIG-Bench-Hard "
-                + f"and point BBH_DATA_DIR at the resulting `bbh/` directory.",
+                + "\nFix: clone https://github.com/suzgunmirac/BIG-Bench-Hard "
+                + "and point BBH_DATA_DIR at the resulting `bbh/` directory.",
             )
 
         for task_path in task_files:

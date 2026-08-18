@@ -580,7 +580,7 @@ def test_scale_calibration_rejects_a_target_pct_below_the_zero_rate_target():
 
 def test_null_calibration_survives_a_cache_round_trip(tmp_path):
     from tag.core.gate import (
-        GateConfig, NullCalibration, cache_identity, load_gate_cache,
+        NullCalibration, cache_identity, load_gate_cache,
         save_gate_cache,
     )
 

@@ -287,7 +287,7 @@ def main() -> int:
             if alt is not None:
                 print(f"     use:  export {var}={alt}")
             else:
-                print(f"     no whole-dataset copy on disk — build one:")
+                print("     no whole-dataset copy on disk — build one:")
                 print(f"       python scripts/prepare_eval_data.py --apply --only {b}")
             continue
         if not missing:
@@ -310,10 +310,10 @@ def main() -> int:
             more = f" (+{len(entries) - 8} more)" if len(entries) > 8 else ""
             print(f"     contains: {shown}{more}")
         else:
-            print(f"     contains: <empty>")
+            print("     contains: <empty>")
         alt = _suggest(root, needs, b)
         if alt is not None:
-            print(f"     found it here instead — fix with:")
+            print("     found it here instead — fix with:")
             print(f"       export {var}={alt}")
 
     print()

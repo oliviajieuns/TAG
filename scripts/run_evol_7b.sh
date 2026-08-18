@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Run the Evol-Instruct (Table 5) 7B experiment matrix.
 #
+# Evaluate the results with the generalized eval launcher (there is no
+# separate evol eval script any more — it was a copy that had already
+# drifted behind the main one's checkpoint resolution and preflight):
+#
+#   SET=evol_7b BENCHMARKS=mmlu,svamp,mbpp,tydiqa \
+#     bash scripts/run_eval_main_7b.sh --gpus 0,1 --parallel
+#
 # Difference vs. scripts/run_main_7b.sh:
 #   - Pulls configs from configs/experiments/evol_7b/ (Evol-Instruct dataset).
 #   - Launches plain `python -m tag.train` (single-process), NOT torchrun.

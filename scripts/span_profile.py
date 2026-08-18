@@ -105,7 +105,6 @@ def main() -> None:
     print(f"{'m':>4} {'n':>7} {'ell(y|u+)':>10} {'ell(y|u-)':>10} "
           f"{'gap':>8} {'mean D':>8} {'P05 D':>8}")
     print("-" * 62)
-    lo = 0
     rows = list(range(min(args.max_index, m_max)))
     for m in rows:
         sel = mask[:, m]

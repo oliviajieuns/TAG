@@ -31,3 +31,5 @@ configs/env.yaml
 
 # Commit-meta notes (draft for the init commit message)
 COMMIT_NOTES.md
+workspace/
+eval-data/

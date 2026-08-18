@@ -40,8 +40,7 @@ import torch
 import torch.distributed as dist
 
 from ..core.selector import collect_episode
-from ..core.trajectory_anchor import TrajectoryAnchor
-from ..core.utils import is_main_process, local_rank, rank, world_size
+from ..core.utils import is_main_process
 
 logger = logging.getLogger(__name__)
 

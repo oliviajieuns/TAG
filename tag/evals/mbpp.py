@@ -39,7 +39,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import textwrap
 from typing import Any, Dict, List, Optional
 

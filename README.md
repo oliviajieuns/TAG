@@ -147,7 +147,55 @@ under one workspace, no cluster mounts needed:
     bash   scripts/run_tag_lowq_05b.sh smoke # ~2 min, proves the epoch-2 path
 
 See `docs/gpu-cloud-quickstart.md`. `scripts/setup_env.sh` is the n9-cluster
-equivalent and points at `/group-volume` paths.
+equivalent and points at `/group-volume` paths. On the n9 cluster every
+dataset and benchmark lives under `/group-volume/datasets/<corpus>/` —
+one location, no fallbacks (`CLAUDE.md` has the inventory and layout).
+
+### The Table 2 pair (LLaMA-2-7B, clean Alpaca-GPT4, ρ=10%)
+
+The main-table row pair, end to end. Each step refuses to proceed when its
+input is wrong, so run them in order:
+
+    source scripts/gpu_cloud/env.sh
+    python scripts/check_eval_data.py            # the 8 benchmarks, as the evaluators open them
+    python scripts/check_row_pair.py \
+        configs/experiments/main_7b/llama2/legacy_10.yaml \
+        configs/experiments/main_7b/llama2/tag_10.yaml    # rows differ ONLY by the method?
+
+    # gate inputs (once per backbone; ~30 min on one H100):
+    python scripts/calibrate_reliability.py --mode tag \
+        --config configs/experiments/main_7b/llama2/tag_10.yaml \
+        --pool "$TAG_CLEAN_POOL" --counterfactual "$TAG_CLEAN_CF" \
+        --batch-size 32 --out "$TAG_GATE_REF_LLAMA2"
+    bash scripts/precompute_gate.sh \
+        configs/experiments/main_7b/llama2/tag_10.yaml "$TAG_GATE_CACHE_LLAMA2"
+    python scripts/gate_report.py --gate "$TAG_GATE_CACHE_LLAMA2" \
+        --config configs/experiments/main_7b/llama2/tag_10.yaml
+    # sanity: G==0 should sit near target_zero_rate (5%); a large graded band
+    # (0 < G < 0.99) means the gate reweights rather than masks.
+
+    # train both arms, one per GPU. grad_accum=16 restores effective batch
+    # 128 (the configs assume DDP x 4):
+    OVERRIDES="grad_accum=16" ARM_DIR=configs/experiments/main_7b/llama2 \
+      SCALE=7b bash scripts/run_lowq_all_arms.sh 42 legacy_10 tag_10
+
+    # what did each arm actually train on? (CPU, instant)
+    python scripts/selection_purity.py \
+        --manifest $POOLS/alpaca_gpt4/corruption_manifest.json \
+        legacy_10=$OUTPUT_ROOT/main_7b/llama2/legacy_10 \
+        tag_10=$OUTPUT_ROOT/main_7b/llama2/tag_10
+
+    # evaluate + aggregate (only sealed, un-limited runs enter the table):
+    SET=main_7b MODELS=llama2 METHODS="legacy_10 tag_10" \
+      bash scripts/run_eval_main_7b.sh --gpus 0,1 --parallel
+    python scripts/make_table_v2.py --results-root $EVAL_RESULTS_ROOT \
+        --pairs tag_10:legacy_10
+
+Evaluation decodes prompts in batches (`TAG_EVAL_GEN_BS`, default 16; ~6x
+on identical work). Batched greedy decoding is float-level nondeterministic
+across batch shapes, so the batch size is stamped into every summary JSON
+and must be held fixed across every arm and seed — the measurement and the
+rules live in `docs/tag-paper-deltas.md` D1.
 
 The `smoke` stage is worth running once per machine: `G` is defined at the
 base checkpoint and cached, so the whole gate lifecycle — cache write, cache
@@ -210,12 +258,30 @@ End-to-end training on the corrupted pool:
 
 ## Results status
 
-Detection (Dirty@K / AUPRC vs. entropy-, perplexity-, and IFD-based
-selection) and end-to-end seed-paired SFT comparisons are **pending** —
-see `docs/plan_low_quality_multiview.md` §4–§5 for the pre-registered
-endpoints and statistics. No number from the earlier CIKM submission may
-be carried into the new manuscript (`docs/cikm-review-revision-audit.md`
-§2).
+Measured so far (seed 42; multi-seed CIs pending — no single-seed number
+goes in the paper as final):
+
+* **Selection, corrupted pool** (Qwen2.5-7B-Instruct, composite20, 30.4%
+  corrupted): the gate cuts the selected subset's corrupted fraction from
+  67.9% (legacy — 2.2x the base rate) to **17.5%** (0.57x — *below* base).
+  92% of the separation is present after one epoch. Per-type: 2.4–10.2x
+  better on four of five corruption types; `wrong_answer` is the one axis
+  the baseline wins, by an accident of its own loss-seeking bias
+  (`docs/tag-paper-deltas.md` D3).
+* **Downstream, corrupted pool**: the selection gap lands where corruption
+  does its damage — exact-answer generation (SVAMP +25.3pp, GSM8K +13.1pp,
+  TyDiQA F1 +6.0pp) — while knowledge-probing benches (MMLU, BBH, MBPP)
+  are unchanged. Stored knowledge survives corrupted SFT; the behaviors
+  SFT is supposed to teach do not.
+* **Clean pools**: the two arms are statistically tied everywhere measured
+  — the gate is calibrated to be nearly inert when there is nothing to
+  filter (G==0 lands on the configured 5% on both backbones).
+* Gate distribution, calibration-uniformity limits, and the clean-pool
+  attractor dynamics are recorded with numbers in
+  `docs/tag-paper-deltas.md` D2–D4.
+
+No number from the earlier CIKM submission may be carried into the new
+manuscript (`docs/cikm-review-revision-audit.md` §2).
 
 ## Layout
 
@@ -223,6 +289,8 @@ be carried into the new manuscript (`docs/cikm-review-revision-audit.md`
     tag/core/        scorer, selector, reliability, dedup, trajectory anchor
     tag/data/        Alpaca loading + corruption generation
     tag/pipelines/   per-epoch selection dispatch + SFT loop
+    tag/evals/       the 8 Table 2 benchmark evaluators; batched greedy
+                     decoding + its verification lives in tag/evals/_gen.py
     baselines/        data_agent / nait / lima / selectit / alpagasus / q2q
     configs/          composable YAML (base / methods / models / modes / experiments)
     scripts/          pool generation, forward-only scoring, run helpers

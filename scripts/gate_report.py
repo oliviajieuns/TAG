@@ -241,14 +241,15 @@ def main() -> None:
                 best_name, best_ap = name, a
             print(f"  {name:<26} AP={a:.4f}   lift {a/base:.2f}x")
         print(f"  base rate                  AP={base:.4f}   (no signal)")
+        print(f"  strongest: {best_name}")
         ap_db = average_precision(-_db.float().view(-1), dirty)
         ap_dh = average_precision(-_dh.float().view(-1), dirty)
         if ap_db > ap_dh + 0.02:
             print()
             print(f"  ** Delta_bar ALONE beats Delta_hat ({ap_db:.4f} vs "
                   f"{ap_dh:.4f}). Delta_hat is a MINIMUM, so the tail term is")
-            print(f"     not merely useless here — it is destroying signal.")
-            print(f"     Set selection.tag.tail_mode: none to gate on Eq. 3 alone.")
+            print("     not merely useless here — it is destroying signal.")
+            print("     Set selection.tag.tail_mode: none to gate on Eq. 3 alone.")
         # Caveat worth stating: delta_hat in the cache is already null-centred
         # per span count while the other two are raw, and AP is not invariant
         # to a per-bin shift. The comparison is still informative when the gap

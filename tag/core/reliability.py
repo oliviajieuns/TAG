@@ -52,7 +52,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from . import forward as fwd
