@@ -1,0 +1,10 @@
+model_key: llama31-8b
+model_path: ${oc.env:MODEL_PATH_LLAMA31_8B,/group-volume/models/Llama-3.1-8B-Instruct}
+# Same Stanford Alpaca template llama2-7b.yaml uses. NOT Llama-3's own chat
+# template: this config exists to rehearse the Table 2 pipeline, and changing
+# the prompt as well as the backbone would make the rehearsal test something
+# else. Nothing resolves prompt_style from model_key at runtime, so no
+# registry entry is needed.
+prompt_style: alpaca_default
+max_seq_len: 512
+learning_rate: 2.0e-5

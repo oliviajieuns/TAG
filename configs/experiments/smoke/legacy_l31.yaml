@@ -1,0 +1,30 @@
+# PIPELINE REHEARSAL — not a table row.
+#
+# Llama-3.1-8B-INSTRUCT standing in for LLaMA-2-7B-base while the real
+# checkpoint uploads. It exercises everything the Table 2 run does — gate
+# calibration, the shared cache, selection, SFT, the eight-benchmark eval,
+# the table — so a wiring fault surfaces here instead of four hours into the
+# real thing.
+#
+# Its numbers are NOT comparable to Table 2 and must never be merged into it:
+#   - different family and size (Llama-3.1-8B vs LLaMA-2-7B)
+#   - INSTRUCT, not base. An instruction-tuned model follows instructions
+#     better, so Delta_hat separates more easily and the gate looks stronger
+#     than the base-model setting would show.
+#   - one epoch, not three
+# output_subdir keeps the results under smoke/, out of the Table 2 tree.
+defaults:
+  - configs/base.yaml
+  - configs/methods/legacy.yaml
+  - configs/models/llama31-8b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: smoke/legacy_l31
+data_files: ${oc.env:TAG_MAIN_POOL,}
+selection_ratio: 0.1
+train_epochs: 1
+# 8B in full FT does not fit beside fp32 AdamW state on an 80 GB card;
+# legacy_10.yaml can turn 8-bit off at 7B, this cannot.
+use_8bit_optimizer: true
+warmup_ratio: 0.06
+gradient_clip: 0.5

@@ -26,6 +26,7 @@ if [ -n "${TAG_ENV_RESET:-}" ]; then
   unset TAG_WORKSPACE TAG_REPO_ROOT POOLS OUTPUT_ROOT DATA_CACHE \
         EVAL_RESULTS_ROOT TAG_EVAL_DATA TAG_BENCH_ROOTS \
         MODEL_PATH_QWEN25_05B MODEL_PATH_QWEN25_7B MODEL_PATH_LLAMA2_7B \
+        MODEL_PATH_LLAMA31_8B TAG_GATE_REF_L31 TAG_GATE_CACHE_L31 \
         ALPACA_RAW_JSON ALPACA_DATA_FILES ALPACA_GPT4_JSON ALPACA_GPT4_DIR \
         TAG_CF_FILES TAG_DEDUP_FILE \
         TAG_GATE_REF TAG_GATE_REF_7B TAG_GATE_REF_7B_NONULL \
@@ -234,6 +235,17 @@ export TAG_MAIN_CF="$(_tag_sticky_dir TAG_MAIN_CF "$POOLS/alpaca_gpt4/counterfac
 # clean corpus (alpaca-cleaned is on this box) and report the floor rate the
 # gate actually lands at.
 export TAG_GATE_REF_LLAMA2="${TAG_GATE_REF_LLAMA2:-$POOLS/clean_ref/delta_hat_llama2_prefix.pt}"
+
+# Pipeline rehearsal on whatever 7-8B checkpoint is already here, while the
+# LLaMA-2 weights upload (configs/experiments/smoke/). Its own reference and
+# cache: Delta_hat is a property of one backbone's likelihoods, and mixing
+# them is the mistake the per-backbone variables exist to prevent.
+export MODEL_PATH_LLAMA31_8B="$(_tag_first_existing config.json \
+  "${MODEL_PATH_LLAMA31_8B:-/nonexistent}" \
+  /group-volume/models/Llama-3.1-8B-Instruct \
+  "$TAG_WORKSPACE/models/llama31-8b")"
+export TAG_GATE_REF_L31="${TAG_GATE_REF_L31:-$POOLS/clean_ref/delta_hat_llama31_prefix.pt}"
+export TAG_GATE_CACHE_L31="${TAG_GATE_CACHE_L31:-$POOLS/alpaca_gpt4/tag_gate_llama31-8b_prefix.pt}"
 export TAG_GATE_CACHE_LLAMA2="${TAG_GATE_CACHE_LLAMA2:-$POOLS/alpaca_gpt4/tag_gate_llama2-7b_prefix.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub
