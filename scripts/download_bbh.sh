@@ -25,9 +25,15 @@ TARGET="${1:-${BBH_DATA_DIR:-${TAG_EVAL_DATA:-./eval-data}/bbh}}"
 REPO="https://github.com/suzgunmirac/BIG-Bench-Hard"
 mkdir -p "$TARGET"
 
-if [ -d "$TARGET/cot-prompts" ] && \
-   [ "$(ls -1 "$TARGET"/cot-prompts/*.txt 2>/dev/null | wc -l)" -ge 27 ]; then
-  echo "[bbh] cot-prompts already present under $TARGET — nothing to do"
+_count() { ls -1 $1 2>/dev/null | wc -l; }
+_n_task="$(_count "$TARGET/bbh/*.json")"
+_n_cot="$(_count "$TARGET/cot-prompts/*.txt")"
+if [ "$_n_cot" -ge 27 ]; then
+  # Say what is there. "nothing to do" without the counts is the same
+  # non-answer as a directory that merely exists.
+  echo "[bbh] already present under $TARGET — nothing to do"
+  echo "[bbh]   bbh/*.json        : $_n_task"
+  echo "[bbh]   cot-prompts/*.txt : $_n_cot"
   exit 0
 fi
 
