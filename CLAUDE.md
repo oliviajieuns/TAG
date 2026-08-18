@@ -40,7 +40,9 @@ extra pre-formatted `text` column and twice the bytes. Using it changes the
 tokenised text.
 
 A table row cannot be reproduced without saying which mirror produced it.
-Cite the sha256 (`scripts/export_hf_corpus.py --inspect`), not the name.
+Cite the sha256, not the name — `make_corrupted_pool.py` records it for the
+corpus a pool was built from, under `inputs` in that pool's
+`corruption_manifest.json`.
 
 ## Two experiments that are easy to confuse
 
@@ -63,7 +65,11 @@ the two rows differ on.
 
 - `python scripts/check_eval_data.py` — the eight Table 2 benchmarks, checked
   against the files each evaluator actually opens, not against the directory
-  existing. It has caught a corpus one level down more than once.
+  existing. It has caught a corpus one level down more than once, and an
+  MMLU that resolved to a single subject.
+  Benchmarks are acquired by `scripts/download_<bench>.sh` (six of the
+  eight); MMLU and BBH have no downloader and are built from the clones on
+  disk by `scripts/prepare_eval_data.py --apply`.
 - `python scripts/gate_report.py --gate <cache>` — the gate's G distribution
   and, where corruption labels exist, its separation. Costs seconds and
   answers whether the training run is worth starting.

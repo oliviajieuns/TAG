@@ -164,8 +164,6 @@ export TAG_GATE_CACHE_CLEAN="${TAG_GATE_CACHE_CLEAN:-$POOLS/clean_ref/tag_gate_q
 # named as its dataset_name fallback — so it is the one earlier runs used.
 # The vicgalle mirror is a different corpus for reproduction purposes: it
 # ships an extra pre-formatted `text` column and twice the bytes.
-# The consolidated parquet is listed first because the arrow cache it came
-# from is deleted once scripts/consolidate_hf_datasets.py has run.
 # make_corrupted_pool.py reads a parquet directory directly, so the
 # consolidated corpus is used as-is with no JSON step.
 #

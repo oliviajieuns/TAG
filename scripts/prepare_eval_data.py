@@ -4,29 +4,22 @@
     python scripts/prepare_eval_data.py            # look, convert nothing
     python scripts/prepare_eval_data.py --apply
 
-PREFER THE DOWNLOAD SCRIPTS. scripts/download_{humaneval,tydiqa,xquad,svamp,
-mbpp}.sh each fetch from the canonical upstream and write exactly the layout
-their evaluator opens — that is the intended path, and it gives the corpus a
-provenance a paper can name. Converting somebody's clone of xquad into SQuAD
-JSON is not the same artifact as the official google/xquad files that
-tag/evals/xquad.py was written against.
+This script covers MMLU and BBH and nothing else, on purpose. Every other
+benchmark has scripts/download_<bench>.sh, which fetches from the canonical
+upstream and writes exactly the layout its evaluator opens; converting a
+local clone instead would be both redundant and a DIFFERENT artifact — the
+official google/xquad JSON is what tag/evals/xquad.py was written against.
+Asking for one of those here prints the downloader to use and exits.
 
-What has no downloader is MMLU and BBH. setup_env.sh assumes both are
-already on the cluster, and the clones that are there do not match:
+MMLU and BBH have no downloader. setup_env.sh assumes both are already on
+the cluster, and the clones that are there do not match:
 
     mmlu   57 per-subject configs and no `all`  -> one concatenated pair
     bbh    <task>/test-*.parquet                -> <task>.json {examples:[...]}
 
-Those two are this script's job, and they are what it converts by default.
-
-The other three are implemented here as well, but only as a fallback for a
-box that cannot reach the network (HF_HUB_OFFLINE, blocked egress) — ask for
-them by name with --only. Where a downloader can run, run it instead.
-
-No evaluator is changed either way. They define how each benchmark is
-scored and the published numbers came out of them; editing a loader to
-accept a new layout risks moving a score for reasons unrelated to the
-method.
+No evaluator is changed. They define how each benchmark is scored and the
+published numbers came out of them; editing a loader to accept a new layout
+risks moving a score for reasons unrelated to the method.
 
 Output goes to a directory of our own (default $TAG_WORKSPACE/eval-data),
 never into the shared corpus tree. env.sh searches it first.
@@ -128,120 +121,18 @@ def prep_bbh(src: Path, out: Path) -> str:
     return f"{len(tasks)} task(s), {total} examples"
 
 
-def prep_humaneval(src: Path, out: Path) -> str:
-    """HumanEval.jsonl.gz, the file openai/human-eval publishes."""
-    cand = [src / "openai_humaneval", src]
-    files: List[Path] = []
-    for c in cand:
-        if c.is_dir():
-            files = _parquets(c)
-            if files:
-                break
-    if not files:
-        raise ValueError(f"no parquet under {src} or {src}/openai_humaneval")
-    df = _read_concat(files)
-    need = ("task_id", "prompt", "entry_point", "test")
-    missing = [c for c in need if c not in df.columns]
-    if missing:
-        raise ValueError(f"humaneval: missing column(s) {missing}; "
-                         f"has {sorted(df.columns)}")
-    keep = [c for c in ("task_id", "prompt", "canonical_solution", "test",
-                        "entry_point") if c in df.columns]
-    with gzip.open(out / "HumanEval.jsonl.gz", "wt", encoding="utf-8") as f:
-        for _, r in df[keep].iterrows():
-            f.write(json.dumps({k: r[k] for k in keep}, ensure_ascii=False) + "\n")
-    return f"{len(df)} problems"
+_PREP = {"mmlu": prep_mmlu, "bbh": prep_bbh}
 
-
-def prep_tydiqa(src: Path, out: Path) -> str:
-    """One flat validation.jsonl across every language.
-
-    The clone splits the dev set one file per language, and the evaluator
-    takes a single dev file — pointing it at the directory would silently
-    score one language out of nine. Parsing is delegated to the evaluator's
-    own reader so the records mean exactly what it expects, and the
-    language is recovered downstream from each QA id.
-    """
-    from tag.evals.tydiqa import _parse_squad_file
-
-    dev_dir = src / "dev" if (src / "dev").is_dir() else src
-    files = sorted(f for f in dev_dir.rglob("*")
-                   if f.is_file() and f.suffix in (".json", ".jsonl")
-                   and not any(p in _SKIP_DIRS for p in f.parts)
-                   and "dataset_infos" not in f.name)
-    if not files:
-        raise ValueError(f"no json/jsonl under {dev_dir}")
-    records: List[Dict[str, Any]] = []
-    used = 0
-    for f in files:
-        try:
-            recs = _parse_squad_file(str(f))
-        except Exception as e:  # noqa: BLE001 — a stray file is not fatal
-            print(f"      ! skipping {f.name}: {e}", file=sys.stderr)
-            continue
-        if recs:
-            records.extend(recs)
-            used += 1
-    if not records:
-        raise ValueError(f"every file under {dev_dir} parsed to zero records")
-    with open(out / "validation.jsonl", "w", encoding="utf-8") as fh:
-        for r in records:
-            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-    langs = sorted({str(r.get("language", "?")) for r in records})
-    return f"{used} file(s), {len(records)} questions, {len(langs)} language(s): {','.join(langs)}"
-
-
-def prep_xquad(src: Path, out: Path) -> str:
-    """xquad.<lang>.json, SQuAD-nested, one per language."""
-    langs = [d for d in _subdirs(src) if d.name.startswith("xquad.") and _parquets(d)]
-    if not langs:
-        raise ValueError(f"no xquad.<lang> directories with parquet under {src}")
-    total = 0
-    for d in langs:
-        lang = d.name.split(".", 1)[1]
-        df = _read_concat(_parquets(d))
-        missing = [c for c in ("context", "question", "answers") if c not in df.columns]
-        if missing:
-            raise ValueError(f"xquad/{lang}: missing column(s) {missing}; "
-                             f"has {sorted(df.columns)}")
-        by_ctx: Dict[str, List[Dict[str, Any]]] = {}
-        for _, r in df.iterrows():
-            ans = r["answers"]
-            texts = list(ans.get("text", [])) if isinstance(ans, dict) else list(ans)
-            starts = list(ans.get("answer_start", [])) if isinstance(ans, dict) else []
-            qas = by_ctx.setdefault(str(r["context"]), [])
-            qas.append({
-                "id": str(r.get("id", f"{lang}-{len(qas)}")),
-                "question": str(r["question"]),
-                "answers": [
-                    {"text": str(t),
-                     "answer_start": int(starts[i]) if i < len(starts) else 0}
-                    for i, t in enumerate(texts)
-                ],
-            })
-        doc = {"data": [{"title": f"xquad.{lang}", "paragraphs": [
-            {"context": c, "qas": q} for c, q in by_ctx.items()]}]}
-        (out / f"xquad.{lang}.json").write_text(
-            json.dumps(doc, ensure_ascii=False))
-        total += len(df)
-    return f"{len(langs)} language(s), {total} questions"
-
-
-# Converted by default: no downloader exists for either.
-_PREP = {
-    "mmlu": prep_mmlu,
-    "bbh": prep_bbh,
+# Everything else already has a way in that is better than converting a
+# clone, and duplicating it here would mean two paths to keep in agreement.
+_HANDLED_ELSEWHERE = {
+    "humaneval": "scripts/download_humaneval.sh",
+    "tydiqa": "scripts/download_tydiqa.sh",
+    "xquad": "scripts/download_xquad.sh",
+    "svamp": "scripts/download_svamp.sh (already readable on this box)",
+    "mbpp": "scripts/download_mbpp.sh (already readable on this box)",
+    "gsm8k": "already readable on this box",
 }
-# Available with --only, as a fallback for a box that cannot reach the
-# network. Each names the downloader that should be used instead.
-_FALLBACK = {
-    "humaneval": (prep_humaneval, "scripts/download_humaneval.sh"),
-    "tydiqa": (prep_tydiqa, "scripts/download_tydiqa.sh"),
-    "xquad": (prep_xquad, "scripts/download_xquad.sh"),
-}
-# Already in a shape the evaluators read; converting them would only add a
-# second copy to keep in sync.
-_ALREADY_OK = ("svamp", "gsm8k", "mbpp")
 
 
 def main() -> int:
@@ -265,24 +156,19 @@ def main() -> int:
         return 2
 
     names = [n.strip() for n in args.only.split(",") if n.strip()] or list(_PREP)
-    known = {**_PREP, **{k: v[0] for k, v in _FALLBACK.items()}}
-    unknown = [n for n in names if n not in known]
-    if unknown:
-        print(f"unknown benchmark(s): {unknown}; known: {sorted(known)} "
-              f"(already fine and not converted: {list(_ALREADY_OK)})",
-              file=sys.stderr)
-        return 2
     for n in names:
-        if n in _FALLBACK:
-            print(f"NOTE {n}: {_FALLBACK[n][1]} fetches this from upstream in "
-                  f"the layout the evaluator expects. Converting the local "
-                  f"clone instead is a fallback for a box that cannot reach "
-                  f"the network — and it is a different artifact.")
-    print()
+        if n in _HANDLED_ELSEWHERE:
+            print(f"{n}: use {_HANDLED_ELSEWHERE[n]} — it writes the layout "
+                  f"the evaluator opens, from upstream.", file=sys.stderr)
+            return 2
+    unknown = [n for n in names if n not in _PREP]
+    if unknown:
+        print(f"unknown benchmark(s): {unknown}; this script builds "
+              f"{sorted(_PREP)}.", file=sys.stderr)
+        return 2
 
     print(f"src : {src_root}")
     print(f"out : {out_root}")
-    print(f"not converted (already readable): {', '.join(_ALREADY_OK)}")
     print()
 
     if not args.apply:
@@ -305,7 +191,7 @@ def main() -> int:
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True, exist_ok=True)
         try:
-            summary = known[n](src, tmp)
+            summary = _PREP[n](src, tmp)
         except Exception as e:  # noqa: BLE001 — one benchmark must not stop the rest
             print(f"   FAILED: {e}", file=sys.stderr)
             shutil.rmtree(tmp, ignore_errors=True)

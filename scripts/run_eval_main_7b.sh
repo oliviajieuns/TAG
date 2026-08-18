@@ -19,6 +19,13 @@
 # -------
 #   MODELS="llama2 qwen25" METHODS="legacy_10" \
 #       BENCHMARKS="mmlu,gsm8k" bash scripts/run_eval_main_7b.sh
+#
+# Other experiment sets
+# ---------------------
+# SET names the directory under configs/experiments/ and under OUTPUT_ROOT.
+# Sets without a per-model level (lowq, clean) pass MODELS="":
+#   SET=lowq MODELS="" METHODS="tag_prefix_7b legacy_7b" \
+#       bash scripts/run_eval_main_7b.sh --gpus 0,1 --parallel
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -49,7 +56,13 @@ done
 
 IFS=',' read -r -a _gpus_arr <<< "$GPUS"
 
-echo "[run_eval] GPUS=$GPUS  PARALLEL=$PARALLEL  BENCHMARKS=$BENCHMARKS"
+# Refuse to start rather than die on the fifth benchmark an hour in. The
+# check is on the files each evaluator opens, not on a directory existing.
+if ! python scripts/check_eval_data.py --benchmarks "$BENCHMARKS"; then
+  exit 2
+fi
+
+echo "[run_eval] SET=$SET  GPUS=$GPUS  PARALLEL=$PARALLEL  BENCHMARKS=$BENCHMARKS"
 echo "[run_eval] MODELS=$MODELS"
 echo "[run_eval] METHODS=$METHODS"
 
@@ -101,10 +114,17 @@ latest_epoch() {
 
 eval_one() {
   local model=$1 method=$2 gpu=$3
-  local cfg="configs/experiments/main_7b/${model}/${method}.yaml"
-  local ckpt_root="${OUTPUT_ROOT}/main_7b/${model}/${method}"
-  local out_dir="${EVAL_RESULTS_ROOT}/${model}/${method}"
-  local log="logs/eval_main_7b_${model}_${method}.log"
+  local seg=""
+  [ "$model" != "-" ] && seg="/${model}"
+  local cfg="configs/experiments/${SET}${seg}/${method}.yaml"
+  local ckpt_root="${OUTPUT_ROOT}/${SET}${seg}/${method}"
+  # <set>/<model>/<method> is the shape make_table_v2 --results-root walks.
+  local out_dir="${EVAL_RESULTS_ROOT}/${SET}${seg}/${method}"
+  local log="logs/eval_${SET}_${model}_${method}.log"
+  if [ ! -f "$cfg" ]; then
+    echo "[skip] missing config: $cfg" >&2
+    return 0
+  fi
 
   local ckpt
   ckpt=$(latest_epoch "$ckpt_root")
@@ -114,7 +134,7 @@ eval_one() {
   fi
   mkdir -p "$out_dir"
 
-  echo "=== eval ${model}/${method}  ckpt=${ckpt} -> ${out_dir} (GPU ${gpu}) ==="
+  echo "=== eval ${SET}${seg}/${method}  ckpt=${ckpt} -> ${out_dir} (GPU ${gpu}) ==="
   local extra_args=()
   if [ -n "$LIMIT" ]; then extra_args+=(--limit "$LIMIT"); fi
 
