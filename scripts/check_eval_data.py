@@ -84,12 +84,12 @@ def _suggest(root: Path, needs: Sequence[str]) -> Optional[Path]:
     cands: List[Path] = [root / n for n in _NEARBY]
     if root.parent != root:
         cands.append(root.parent)
-        cands.extend(p for p in _NEARBY if (root.parent / p).is_dir()
-                     for p in [root.parent / p])
-    try:
-        cands.extend(p for p in root.iterdir() if p.is_dir())
-    except OSError:
-        pass
+        cands.extend(root.parent / n for n in _NEARBY)
+    for parent in (root, root.parent):
+        try:
+            cands.extend(c for c in parent.iterdir() if c.is_dir())
+        except OSError:
+            pass
     seen = set()
     for c in cands:
         if c in seen or not c.is_dir():
@@ -138,6 +138,20 @@ def main() -> int:
         bad += 1
         print(f"FAIL {b:<10} {raw}")
         print(f"     missing: {', '.join(missing)}   ({desc})")
+        # "missing" is not actionable on its own — the directory usually holds
+        # SOMETHING, and what it holds says whether the corpus is one level
+        # down, in another format, or genuinely absent.
+        try:
+            entries = sorted(e.name + ("/" if e.is_dir() else "")
+                             for e in list(root.iterdir())[:200])
+        except OSError as e:
+            entries = [f"<unreadable: {e}>"]
+        if entries:
+            shown = ", ".join(entries[:8])
+            more = f" (+{len(entries) - 8} more)" if len(entries) > 8 else ""
+            print(f"     contains: {shown}{more}")
+        else:
+            print(f"     contains: <empty>")
         alt = _suggest(root, needs)
         if alt is not None:
             print(f"     found it here instead — fix with:")

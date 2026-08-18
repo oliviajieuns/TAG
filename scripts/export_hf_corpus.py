@@ -72,17 +72,56 @@ def _rows_from_arrow(files: List[Path]) -> List[Dict[str, Any]]:
     return out
 
 
+def _describe(out: Path, rows: List[Dict[str, Any]]) -> None:
+    h = hashlib.sha256()
+    with open(out, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    n = len(rows)
+    n_with_input = sum(1 for r in rows if (r.get("input") or "").strip())
+    print(f"  path         : {out}")
+    print(f"  records      : {n}")
+    print(f"  with 'input' : {n_with_input} ({100*n_with_input/max(n,1):.1f}%)")
+    print(f"  fields       : {sorted(rows[0]) if n else '<empty>'}")
+    print(f"  sha256       : {h.hexdigest()}")
+    if n:
+        first = rows[0]
+        print(f"  first record : instruction={first.get('instruction','')[:60]!r}")
+    print()
+    print("Cite THIS hash as the corpus — 'Alpaca-GPT4' names several mirrors")
+    print("that differ in record count and cleaning.")
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--cache-dir", required=True,
+    p.add_argument("--cache-dir", default="",
                    help="HF datasets cache dir for the corpus (contains dataset_info.json)")
     p.add_argument("--out", required=True, help="destination .json")
     p.add_argument("--force", action="store_true",
                    help="overwrite an existing destination")
+    p.add_argument("--inspect", action="store_true",
+                   help="describe an existing --out file and exit, writing "
+                        "nothing. Use this before reaching for --force: the "
+                        "question is whether the corpus already there is the "
+                        "one you want, and the record count and hash answer it.")
     args = p.parse_args()
 
     cache = Path(args.cache_dir)
     out = Path(args.out)
+
+    if args.inspect:
+        if not out.exists():
+            print(f"{out} does not exist yet.")
+            return 1
+        try:
+            with open(out, encoding="utf-8") as f:
+                rows = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"{out} is not readable JSON: {e}", file=sys.stderr)
+            return 1
+        _describe(out, rows)
+        return 0
+
     if out.exists() and not args.force:
         # Overwriting the corpus under a finished pool would silently
         # invalidate every artifact fingerprinted against it.
@@ -90,6 +129,9 @@ def main() -> int:
               f"downstream was built from the current one.", file=sys.stderr)
         return 2
 
+    if not args.cache_dir:
+        print("--cache-dir is required unless --inspect is given", file=sys.stderr)
+        return 2
     files = _find_arrow(cache)
     print(f"reading {len(files)} arrow file(s) under {cache}")
     rows = _rows_from_arrow(files)
@@ -102,19 +144,8 @@ def main() -> int:
         json.dump(rows, f, ensure_ascii=False)
     tmp.replace(out)
 
-    h = hashlib.sha256()
-    with open(out, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    n_with_input = sum(1 for r in rows if (r.get("input") or "").strip())
-
     print(f"wrote {out}")
-    print(f"  records      : {len(rows)}")
-    print(f"  with 'input' : {n_with_input} ({100*n_with_input/len(rows):.1f}%)")
-    print(f"  fields       : {sorted(rows[0])}")
-    print(f"  sha256       : {h.hexdigest()}")
-    print()
-    print("Cite THIS hash as the corpus — 'Alpaca-GPT4' names several mirrors.")
+    _describe(out, rows)
     return 0
 
 
