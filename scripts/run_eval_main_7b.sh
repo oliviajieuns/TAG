@@ -172,7 +172,7 @@ if [ "$PARALLEL" = "1" ]; then
       idx=$((idx + 1))
     done
   done
-  echo "Launched ${#pids[@]} eval jobs (cycled across GPUs ${GPUS}). Tail logs/eval_main_7b_*.log for progress."
+  echo "Launched ${#pids[@]} eval jobs (cycled across GPUs ${GPUS}). Tail logs/eval_${SET}_*.log for progress."
   wait "${pids[@]}"
 else
   # Sequential: pin every job to the first GPU in the list.
