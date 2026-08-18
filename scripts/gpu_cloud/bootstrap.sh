@@ -162,6 +162,42 @@ print(f"[done] Qwen/Qwen2.5-7B -> {target}")
 HFPY
 }
 
+step_model_llama2() {
+  # Table 2's backbone. Unlike Qwen, meta-llama/Llama-2-7b-hf is GATED: the
+  # download 401s until the account has accepted the licence on the model
+  # page AND `huggingface-cli login` has run. NousResearch/Llama-2-7b-hf is
+  # a byte-identical ungated mirror and is tried second, because a blocked
+  # licence click should not stop a run at 2am.
+  if [ -f "$MODEL_PATH_LLAMA2_7B/config.json" ]; then
+    log "LLaMA-2-7B already at $MODEL_PATH_LLAMA2_7B — skipping"
+    return
+  fi
+  log "downloading LLaMA-2-7B -> $MODEL_PATH_LLAMA2_7B (~13 GB)"
+  mkdir -p "$(dirname "$MODEL_PATH_LLAMA2_7B")"
+  HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0 TRANSFORMERS_OFFLINE=0 \
+  python - "$MODEL_PATH_LLAMA2_7B" <<'HFPY'
+import sys
+from huggingface_hub import snapshot_download
+target = sys.argv[1]
+pats = ["*.json", "*.txt", "*.safetensors", "tokenizer*", "*.model"]
+last = None
+for repo in ("meta-llama/Llama-2-7b-hf", "NousResearch/Llama-2-7b-hf"):
+    try:
+        snapshot_download(repo_id=repo, local_dir=target,
+                          local_dir_use_symlinks=False, allow_patterns=pats)
+        print(f"[done] {repo} -> {target}")
+        sys.exit(0)
+    except Exception as e:
+        print(f"[warn] {repo}: {e}", file=sys.stderr)
+        last = e
+print("[error] both mirrors failed. meta-llama/Llama-2-7b-hf is gated —\n"
+      "        accept the licence at https://huggingface.co/meta-llama/Llama-2-7b-hf\n"
+      "        then `huggingface-cli login`, or set MODEL_PATH_LLAMA2_7B to a\n"
+      "        copy already on this machine.", file=sys.stderr)
+raise SystemExit(1)
+HFPY
+}
+
 step_calibrate_7b() {
   # Delta_hat is a property of THIS backbone's likelihoods, so a 0.5B
   # reference does not transfer — 7B needs its own calibration.
@@ -230,6 +266,7 @@ case "$STEP" in
   deps)         step_deps ;;
   model)        step_model ;;
   model7b)      step_model_7b ;;
+  llama2)       step_model_llama2 ;;
   data)         step_data ;;
   pools)        step_pools ;;
   calibrate)    step_calibrate ;;

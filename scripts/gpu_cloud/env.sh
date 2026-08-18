@@ -98,11 +98,18 @@ _TAG_M7B="$(_tag_first_existing config.json \
   /group-volume/models/Qwen2.5-7B-Instruct)"
 export MODEL_PATH_QWEN25_7B="${_TAG_M7B:-$TAG_WORKSPACE/models/qwen2.5-7b}"
 
+# One checkpoint, many spellings across the mirrors people pull it from.
 _TAG_ML2="$(_tag_first_existing config.json \
   "${MODEL_PATH_LLAMA2_7B:-/nonexistent}" \
   "$TAG_WORKSPACE/models/llama2-7b" \
   /group-volume/nait-models/Llama-2-7b-hf \
-  /group-volume/models/Llama-2-7b-hf)"
+  /group-volume/models/Llama-2-7b-hf \
+  /group-volume/models/Llama-2-7B-hf \
+  /group-volume/models/llama-2-7b-hf \
+  /group-volume/models/llama2-7b \
+  /group-volume/models/Llama-2-7b \
+  /group-volume/nait-models/llama2-7b \
+  "/group-volume/${USER:-nobody}/models/llama2-7b")"
 export MODEL_PATH_LLAMA2_7B="${_TAG_ML2:-$TAG_WORKSPACE/models/llama2-7b}"
 
 export POOLS="${POOLS:-$TAG_WORKSPACE/pools}"
@@ -363,6 +370,11 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] model 0.5b: $MODEL_PATH_QWEN25_05B  [$(_tag_mark "$MODEL_PATH_QWEN25_05B/config.json")]"
   echo "[tag-env] model 7b  : $MODEL_PATH_QWEN25_7B  [$(_tag_mark "$MODEL_PATH_QWEN25_7B/config.json")]"
   echo "[tag-env] llama2-7b : $MODEL_PATH_LLAMA2_7B  [$(_tag_mark "$MODEL_PATH_LLAMA2_7B/config.json")]"
+  if [ ! -f "$MODEL_PATH_LLAMA2_7B/config.json" ]; then
+    echo "[tag-env]   Table 2's backbone. Fetch it with:"
+    echo "[tag-env]     bash scripts/gpu_cloud/bootstrap.sh llama2"
+    echo "[tag-env]   or export MODEL_PATH_LLAMA2_7B if it is already here."
+  fi
   case "$MODEL_PATH_QWEN25_7B" in
     *Instruct*|*instruct*)
       echo "[tag-env] NOTE: the 7B checkpoint is an INSTRUCT model, not a base"
