@@ -145,6 +145,44 @@ def make_model_check(cfg_path):
             return _FAIL, (
                 f"no config.json under {p} — bash scripts/gpu_cloud/bootstrap.sh model"
             )
+        # Weight shards, before anything expensive. A 13 GB checkpoint that
+        # arrived over scp or snapshot_download can be missing a shard, and
+        # nothing notices until the model load at the end of a 20-minute
+        # gate pass. The index file lists exactly what must be present.
+        import json as _json
+        idx = None
+        for name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
+            if (p / name).exists():
+                idx = p / name
+                break
+        if idx is not None:
+            try:
+                wmap = (_json.loads(idx.read_text()).get("weight_map") or {})
+            except (OSError, ValueError) as e:
+                return _FAIL, f"{idx.name} is unreadable ({e}) — re-copy the checkpoint"
+            shards = sorted(set(wmap.values()))
+            gone = [f for f in shards if not (p / f).exists()]
+            empty = [f for f in shards
+                     if (p / f).exists() and (p / f).stat().st_size == 0]
+            if gone or empty:
+                return _FAIL, (
+                    f"{idx.name} lists {len(shards)} shard(s); missing "
+                    f"{len(gone)}{f' ({gone[:3]})' if gone else ''}, empty "
+                    f"{len(empty)}{f' ({empty[:3]})' if empty else ''} — the "
+                    f"copy is incomplete, finish it before launching"
+                )
+        elif not (list(p.glob("*.safetensors")) or list(p.glob("*.bin"))):
+            return _FAIL, f"no weight files under {p} — the copy is incomplete"
+        # An in-flight transfer leaves these behind; they mean "still copying".
+        partial = [f.name for f in p.iterdir()
+                   if f.suffix in (".part", ".tmp", ".incomplete")
+                   or f.name.endswith(".incomplete")]
+        if partial:
+            return _FAIL, (
+                f"{len(partial)} partial file(s) under {p} "
+                f"({partial[:3]}) — a copy is still in progress"
+            )
+
         # The loader uses local_files_only=True, so the tokenizer must be
         # complete on disk; a partial snapshot fails here rather than after
         # the pool has been tokenised.
