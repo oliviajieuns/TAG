@@ -40,7 +40,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -77,6 +77,24 @@ def main() -> None:
 
     import torch
 
+    # An unset environment variable arrives here as an empty string, and
+    # `FileNotFoundError: ''` says nothing about which variable was empty or
+    # why. Every gate cache path in the runbook comes from one.
+    if not str(args.gate).strip():
+        sys.exit(
+            "--gate is empty. It was probably an unset environment variable "
+            "(TAG_GATE_CACHE_Q7, _PREFIX, _LLAMA2, ...). A new container "
+            "starts with none of them set:\n"
+            "  git pull origin main\n"
+            "  TAG_ENV_RESET=1 source scripts/gpu_cloud/env.sh\n"
+            "then check it with:  echo \"$TAG_GATE_CACHE_Q7\""
+        )
+    if not Path(args.gate).is_file():
+        sys.exit(
+            f"no gate cache at {args.gate}\n"
+            f"Build it with:  bash scripts/precompute_gate.sh <arm config> "
+            f"{args.gate}"
+        )
     cache = torch.load(args.gate, map_location="cpu", weights_only=False)
     G = cache["gate"].float().view(-1)
     n = G.numel()
@@ -90,15 +108,13 @@ def main() -> None:
             if guess.exists():
                 manifest_path = str(guess)
                 print(f"(manifest from the cache's pool identity: {guess})")
-    if not manifest_path:
-        sys.exit(
-            "no --manifest and none inferable from the cache identity; pass it "
-            "explicitly. Without labels this script cannot say anything."
-        )
-
-    with open(manifest_path) as f:
-        man = json.load(f)
-    entries = man.get("entries") or {}
+    entries: Dict[str, Any] = {}
+    if manifest_path:
+        with open(manifest_path) as f:
+            entries = json.load(f).get("entries") or {}
+    else:
+        print("(no manifest — reporting the G distribution only; the "
+              "separation analysis below needs corruption labels)")
 
     types: List[str] = ["clean"] * n
     for k, e in entries.items():
@@ -128,6 +144,23 @@ def main() -> None:
     print(f"  G >= 0.99     : {100*float((G>=0.99).float().mean()):5.1f}%")
     print()
 
+    if base <= 0:
+        # A CLEAN pool — Table 2's is one. Every section below divides by the
+        # dirty rate or ranks against it, so they are not merely uninformative
+        # here, they are undefined. What the distribution above already says
+        # is the whole answer for a clean pool: how much of it the gate
+        # floors, and how much it grades.
+        print("This pool carries no corruption labels (dirty 0.0%), so there "
+              "is nothing to separate.")
+        print("Read the distribution above instead:")
+        print(f"  - G == 0 should land near the configured target_zero_rate; "
+              f"here {100*float((G <= 0).float().mean()):.1f}%.")
+        print("  - a large graded band (0 < G < 0.99) means the gate is "
+              "reweighting rather than acting as a mask.")
+        print("  - if almost everything sat at G >= 0.99 the gate would be "
+              "doing nothing, whatever a corrupted pool showed.")
+        return
+
     # ---- the headline: does G know what is dirty? -----------------------
     ap = average_precision(-G, dirty)
     print("Separation")
@@ -144,10 +177,10 @@ def main() -> None:
         pur = float(dirty[at_floor].float().mean())
         print(f"  floor block (G==0)  : n={int(at_floor.sum())}, "
               f"{100*pur:.1f}% dirty  (pool base {100*base:.1f}%)")
-        print(f"                        -> {pur/base:.2f}x enriched in corruption"
-              if base > 0 else "")
-        rec = float(dirty[at_floor].float().sum() / dirty.float().sum())
-        print(f"                        catches {100*rec:.1f}% of all dirty samples")
+        if base > 0:
+            print(f"                        -> {pur/base:.2f}x enriched in corruption")
+            rec = float(dirty[at_floor].float().sum() / dirty.float().sum())
+            print(f"                        catches {100*rec:.1f}% of all dirty samples")
     else:
         print("  floor block (G==0)  : EMPTY — the gate refuses nothing.")
     print()
