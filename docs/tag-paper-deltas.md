@@ -919,6 +919,45 @@ not claim TAG dominates every corruption type — it dominates in aggregate
 (17.2% vs 67.3% dirty) while losing this one axis to an accident of the
 baseline's own bias.
 
+### D4. On the clean pool the two arms land in different attractors — measured on the Table 2 pair
+
+Same diagnostic on the Table 2 pair (LLaMA-2-7B, clean Alpaca-GPT4, seed 42),
+where there are no corruption labels and the only readable quantity is
+overlap:
+
+| | Jaccard |
+|---|---|
+| cross-arm, epoch 1 | 0.266 |
+| cross-arm, epoch 2 | **0.052** |
+| within-arm legacy, ep1→ep2 | 0.221 |
+| within-arm legacy, ep2→ep3 | **0.818** |
+| within-arm tag, ep1→ep2 | 0.282 |
+
+Two facts and one mechanism:
+
+* **The ep1→ep2 churn is intrinsic, not gate-specific** — legacy re-selects
+  just as violently (0.221) as the gated arm (0.282). Epoch 1 is scored by
+  the BASE model; epoch 2 by a model after its first SFT epoch, and base
+  LLaMA-2 is not instruction-tuned, so that first epoch transforms the loss
+  landscape and both arms re-select nearly from scratch.
+* **The near-disjointness at epoch 2 (0.052) is persistent structure, not
+  noise.** If it were churn it would keep churning; instead legacy's own
+  selection then freezes (ep2→ep3 = 0.818). Each arm has settled into its own
+  attractor, and the two attractors share 10% of their mass.
+* Mechanism: G is static, but it reorders the epoch-1 subset (0.266), the
+  first SFT epoch amplifies that into a different model, and \(R^{(t)}\)
+  then locks each arm into its own basin. This is "training-adaptive" doing
+  real work, and it contrasts with the corrupted pool (D3), where strong
+  anchoring signals hold the arms' overlap steady at ~0.15 instead.
+
+Prediction recorded before the fact: if the attractor reading is right,
+tag's ep2→ep3 Jaccard should come out ≈0.8 when epoch 3's selection lands.
+
+Consequence for Table 2's interpretation: from epoch 2 the arms train on
+nearly disjoint subsets, so the row-pair gap measures the END-TO-END effect
+of G's initial reordering compounded through training — which is the paper's
+actual claim — and cannot be decomposed into "same data, better weighting".
+
 ## Checklist before submission
 
 - [ ] A1-A4 folded into the equations (these are correctness fixes)
