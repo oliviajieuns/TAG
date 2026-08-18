@@ -67,6 +67,18 @@ for _tag_disc in "$TAG_REPO_ROOT/discovered_env.sh" "$TAG_REPO_ROOT/../discovere
 done
 unset _tag_disc
 
+# `export VAR="${VAR:-default}"` makes a value STICKY: re-sourcing this file
+# in a shell that already has VAR keeps whatever was exported the first time,
+# so a path this file later corrected is silently ignored until a new shell.
+# That has cost real time twice (a stale MMLU_DATA_DIR resolving to one
+# subject, a stale ALPACA_GPT4_DIR pointing at a corpus that had been
+# renamed). For paths we DERIVE, an exported value only wins if it still
+# exists; a stale one falls back to the current default.
+_tag_sticky_dir() {  # <VARNAME> <default>
+  local cur="${!1:-}"
+  if [ -n "$cur" ] && [ -e "$cur" ]; then echo "$cur"; else echo "$2"; fi
+}
+
 # Reuse assets the machine already has rather than re-downloading ~1 GB.
 # First existing candidate wins; the workspace path is the download target.
 _tag_first_existing() {
@@ -181,12 +193,12 @@ export TAG_GATE_CACHE_CLEAN="${TAG_GATE_CACHE_CLEAN:-$POOLS/clean_ref/tag_gate_q
 # possibly by record count, which it does not. Whichever number a run
 # reports, the writeup has to name this mirror and the sha256 the pool
 # manifest records for it.
-export ALPACA_GPT4_DIR="${ALPACA_GPT4_DIR:-/group-volume/datasets/alpaca-gpt4}"
+export ALPACA_GPT4_DIR="$(_tag_sticky_dir ALPACA_GPT4_DIR /group-volume/datasets/alpaca-gpt4)"
 export ALPACA_GPT4_JSON="${ALPACA_GPT4_JSON:-$(_tag_first_existing "" \
   "$TAG_WORKSPACE/datasets/alpaca_gpt4.json" \
   "/group-volume/${USER:-nobody}/datasets/alpaca_gpt4.json")}"
-export TAG_MAIN_POOL="${TAG_MAIN_POOL:-$POOLS/alpaca_gpt4/pool.json}"
-export TAG_MAIN_CF="${TAG_MAIN_CF:-$POOLS/alpaca_gpt4/counterfactual.json}"
+export TAG_MAIN_POOL="$(_tag_sticky_dir TAG_MAIN_POOL "$POOLS/alpaca_gpt4/pool.json")"
+export TAG_MAIN_CF="$(_tag_sticky_dir TAG_MAIN_CF "$POOLS/alpaca_gpt4/counterfactual.json")"
 # Gate calibration is BACKBONE-specific and, for this row, should not be fit on
 # the pool it gates: pool == reference makes the floor rate exactly
 # target_zero_rate by construction rather than measured. Fit it on a different
@@ -388,7 +400,7 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] raw corpus: $ALPACA_RAW_JSON  [$(_tag_mark "$ALPACA_RAW_JSON")]"
   echo "[tag-env] lowq pool : $ALPACA_DATA_FILES  [$(_tag_mark "$ALPACA_DATA_FILES")]"
   echo "[tag-env] table2 pool: $TAG_MAIN_POOL  [$(_tag_mark "$TAG_MAIN_POOL")]"
-  echo "[tag-env] alpaca-gpt4: $ALPACA_GPT4_DIR  [$(_tag_mark "$ALPACA_GPT4_DIR")]  (liangxin mirror)"
+  echo "[tag-env] alpaca-gpt4: $ALPACA_GPT4_DIR  [$(_tag_mark "$ALPACA_GPT4_DIR")]"
   echo "[tag-env] gate ref 0.5b: $TAG_GATE_REF  [$(_tag_mark "$TAG_GATE_REF")]"
   echo "[tag-env] gate ref 7b  : $TAG_GATE_REF_7B  [$(_tag_mark "$TAG_GATE_REF_7B")]"
   echo "[tag-env] outputs   : $OUTPUT_ROOT"
