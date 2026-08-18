@@ -174,12 +174,14 @@ export TAG_GATE_CACHE_CLEAN="${TAG_GATE_CACHE_CLEAN:-$POOLS/clean_ref/tag_gate_q
 # make_corrupted_pool.py reads a parquet directory directly, so the
 # consolidated corpus is used as-is with no JSON step.
 #
-# alpaca_gpt4/ is liangxin/Alpaca_GPT4 — the mirror configs/base.yaml has
-# always named as its dataset_name fallback, so it is what earlier runs drew
-# from. alpaca-gpt4/ (hyphen) is vicgalle's: same corpus, plus a
-# pre-formatted `text` column and twice the bytes. They are NOT
-# interchangeable; using the other one changes the tokenised text.
-export ALPACA_GPT4_DIR="${ALPACA_GPT4_DIR:-/group-volume/datasets/alpaca_gpt4}"
+# The one Alpaca-GPT4 copy kept on this cluster (2026-08). It is the
+# vicgalle/alpaca-gpt4 mirror, NOT the liangxin/Alpaca_GPT4 that
+# configs/base.yaml names as its dataset_name fallback — the two differ by a
+# pre-formatted `text` column, which make_corrupted_pool.py drops, and
+# possibly by record count, which it does not. Whichever number a run
+# reports, the writeup has to name this mirror and the sha256 the pool
+# manifest records for it.
+export ALPACA_GPT4_DIR="${ALPACA_GPT4_DIR:-/group-volume/datasets/alpaca-gpt4}"
 export ALPACA_GPT4_JSON="${ALPACA_GPT4_JSON:-$(_tag_first_existing "" \
   "$TAG_WORKSPACE/datasets/alpaca_gpt4.json" \
   "/group-volume/${USER:-nobody}/datasets/alpaca_gpt4.json")}"

@@ -14,7 +14,7 @@ paths still appear in older scripts as fallbacks; they are historical.
 Present as of the consolidation:
 
 ```
-alpaca-cleaned  alpaca-gpt4   alpaca_gpt4     apps        bbh
+alpaca-cleaned  alpaca-gpt4   apps            bbh
 coconot         dapo-math-17k fineweb         gsm8k       hendrycks_math
 hh-rlhf         humaneval     kk              knights-and-knaves
 knowledge-pile  math500       mbpp            mmlu        muse-books
@@ -29,15 +29,15 @@ Layout inside a corpus is `<split>-00000-of-00001.parquet`, or
 this repo wrote carries a `SOURCE.json` naming the cache entry it came from
 and the row count per file.
 
-### Two Alpaca-GPT4 mirrors — they are not interchangeable
+### Alpaca-GPT4 is `alpaca-gpt4/` — and it is the vicgalle mirror
 
-`alpaca_gpt4/` is **liangxin/Alpaca_GPT4**, which `configs/base.yaml` has
-always named as its `dataset_name` fallback, so it is the mirror the earlier
-runs drew from and the one Table 2 must use.
-
-`alpaca-gpt4/` is **vicgalle/alpaca-gpt4** — same corpus, but it ships an
-extra pre-formatted `text` column and twice the bytes. Using it changes the
-tokenised text.
+One copy is kept: **`/group-volume/datasets/alpaca-gpt4`**, which is
+`vicgalle/alpaca-gpt4`. `configs/base.yaml` names `liangxin/Alpaca_GPT4` as
+its `dataset_name` fallback, so the corpus in use is NOT the one the config
+file names. The two differ by a pre-formatted `text` column, which
+`make_corrupted_pool.py` drops, and possibly by record count, which it does
+not — check `n_total` in the pool manifest against the 52 002 the paper
+assumes.
 
 A table row cannot be reproduced without saying which mirror produced it.
 Cite the sha256, not the name — `make_corrupted_pool.py` records it for the
