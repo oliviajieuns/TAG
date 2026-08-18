@@ -775,6 +775,61 @@ token counts in the paper match a reimplementation.
 
 ---
 
+## D. Evaluation protocol
+
+### D1. Benchmark generation is batched, and the batch size is part of the number
+
+Every generative evaluator decodes prompts in batches of `TAG_EVAL_GEN_BS`
+(default 16; `1` restores one prompt per `model.generate` call). This is what
+makes the eight-benchmark suite finishable — measured on BBH with a 7B
+backbone, **6.1x** on identical work, 20+ hours per arm down to under three.
+
+It is not bit-exact, and the paper must not claim it is.
+
+Greedy decoding is padding-invariant in exact arithmetic, and the
+implementation checks that directly: the first predicted token's argmax is
+compared batched-vs-alone at the start of every eval, and the max |logit
+diff| measured on LLaMA-class and Qwen-class 7B weights was **0**. The mask
+is right. What is not exact is the rest of the chain: cuBLAS reduces a
+`(16, T, H)` matmul in a different order than a `(1, T, H)` one, logits move
+by ~1e-3, and a 500-token chain-of-thought that passes near a tie takes the
+other branch. Measured on BBH, ~25% of continuations fork somewhere; most
+forks land *after* the answer and cost nothing.
+
+Measured, BBH at `--limit 8` (216 examples), Qwen2.5-7B-Instruct, the same
+checkpoint at `TAG_EVAL_GEN_BS` 16 vs 1:
+
+| | macro-avg |
+|---|---|
+| batch 16 | 0.6481 |
+| batch 1 | 0.6620 |
+
+Five of 27 tasks moved by one example each — four up, one down (a 4/1 split
+is p=0.19 under a symmetric null, i.e. no evidence of bias). That is a
+**correctness-flip rate of 5/216 = 2.31%**, and it propagates to the macro
+average as
+
+$$\mathrm{SD} \;=\; \sqrt{p/n}\,/\,\sqrt{27}, \qquad p = 0.0231$$
+
+with `n` the examples per task. The +1.39pp gap in the table above is a
+`--limit 8` artifact: at n=8 the predicted SD is **1.04pp** and 1.39pp is
+1.3 sigma, entirely expected. At the full n=250 the predicted SD is
+**0.19pp**.
+
+So, for the paper:
+
+* Hold `TAG_EVAL_GEN_BS` **fixed across every arm and every seed**. Within a
+  fixed batch size the decode is deterministic — the same checkpoint scored
+  0.6481 twice. The value is stamped into every benchmark summary JSON as
+  `generation_batch_size`; it is part of the run's provenance, like the git
+  sha.
+* Report the protocol, and the ~0.2pp figure, in the reproducibility note.
+  At three seeds this perturbation is inside the seed-to-seed SD and is
+  absorbed by the CI `make_table_v2` already computes.
+* If a headline gap ever lands *below* ~0.5pp on a generative benchmark,
+  re-score that benchmark alone at `TAG_EVAL_GEN_BS=1` before reporting it.
+  Do not re-score one arm and not the other.
+
 ## Checklist before submission
 
 - [ ] A1-A4 folded into the equations (these are correctness fixes)
@@ -800,4 +855,6 @@ token counts in the paper match a reimplementation.
 - [ ] `n_zero_weight_selected` from metrics.json reported, not `budget_fits@K`
       inferred — the dedup constraint can force a backfill even when the
       gated set is larger than the budget
+- [ ] D1 eval batch size stated in the reproducibility note, with the
+      measured ~0.2pp perturbation and the fixed-across-arms rule
 - [ ] measured numbers substituted for every placeholder above

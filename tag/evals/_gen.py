@@ -26,6 +26,14 @@ row:
 ``TAG_EVAL_GEN_BS`` overrides the batch size (default 16); ``1`` restores
 the old one-at-a-time behaviour exactly. ``TAG_EVAL_GEN_VERIFY=0`` skips the
 first-batch agreement check.
+
+Batching is **not bit-exact**, and the size is therefore part of the number:
+measured on BBH, batch 16 vs batch 1 flips the correctness of 2.31% of
+examples (unbiased in direction), which propagates to a ~0.2pp SD on the
+27-task macro average at the full 250 examples per task. Hold the batch size
+fixed across every arm and seed; it is stamped into each summary JSON as
+``generation_batch_size``. docs/tag-paper-deltas.md D1 has the measurement
+and what the paper has to say about it.
 """
 from __future__ import annotations
 
