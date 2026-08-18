@@ -11,6 +11,35 @@
 # Override the workspace before sourcing if you have a big scratch disk:
 #   TAG_WORKSPACE=/mnt/data/tag source scripts/gpu_cloud/env.sh
 
+# TAG_ENV_RESET=1 forgets everything this file manages before re-deriving it.
+#
+# Exported values are sticky across a re-source, and `exec bash` does NOT
+# clear them — it replaces the process and inherits the environment, so a
+# path corrected in this file keeps looking un-corrected. Most of that is
+# handled below by only honouring an exported path that still exists, but
+# when in doubt this is the blunt instrument:
+#
+#   TAG_ENV_RESET=1 source scripts/gpu_cloud/env.sh
+#
+# It does not touch VIRTUAL_ENV, PATH, or anything outside this file's scope.
+if [ -n "${TAG_ENV_RESET:-}" ]; then
+  unset TAG_WORKSPACE TAG_REPO_ROOT POOLS OUTPUT_ROOT DATA_CACHE \
+        EVAL_RESULTS_ROOT TAG_EVAL_DATA TAG_BENCH_ROOTS \
+        MODEL_PATH_QWEN25_05B MODEL_PATH_QWEN25_7B MODEL_PATH_LLAMA2_7B \
+        ALPACA_RAW_JSON ALPACA_DATA_FILES ALPACA_GPT4_JSON ALPACA_GPT4_DIR \
+        TAG_CF_FILES TAG_DEDUP_FILE \
+        TAG_GATE_REF TAG_GATE_REF_7B TAG_GATE_REF_7B_NONULL \
+        TAG_GATE_REF_7B_BAR TAG_GATE_REF_7B_PREFIX TAG_GATE_REF_LLAMA2 \
+        TAG_GATE_CACHE TAG_GATE_CACHE_NONULL TAG_GATE_CACHE_BAR \
+        TAG_GATE_CACHE_PREFIX TAG_GATE_CACHE_CLEAN TAG_GATE_CACHE_LLAMA2 \
+        TAG_CLEAN_POOL TAG_CLEAN_CF TAG_MAIN_POOL TAG_MAIN_CF \
+        TAG_EPISODE_BS TAG_EPISODE_BS_7B \
+        MMLU_DATA_DIR MMLU_PRO_DATA_DIR GSM8K_DATA_DIR SVAMP_DATA_DIR \
+        HUMANEVAL_DATA_DIR MBPP_DATA_DIR TYDIQA_DATA_DIR XQUAD_DATA_DIR \
+        BBH_DATA_DIR 2>/dev/null
+  echo "[tag-env] reset: re-deriving every path this file manages"
+fi
+
 # Resolve the repo root even when sourced from another directory.
 _TAG_ENV_SRC="${BASH_SOURCE[0]:-$0}"
 export TAG_REPO_ROOT="$(cd "$(dirname "$_TAG_ENV_SRC")/../.." && pwd)"
