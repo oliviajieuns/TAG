@@ -932,6 +932,7 @@ overlap:
 | within-arm legacy, ep1→ep2 | 0.221 |
 | within-arm legacy, ep2→ep3 | **0.818** |
 | within-arm tag, ep1→ep2 | 0.282 |
+| within-arm tag, ep2→ep3 | **0.773** |
 
 Two facts and one mechanism:
 
@@ -950,8 +951,12 @@ Two facts and one mechanism:
   real work, and it contrasts with the corrupted pool (D3), where strong
   anchoring signals hold the arms' overlap steady at ~0.15 instead.
 
-Prediction recorded before the fact: if the attractor reading is right,
-tag's ep2→ep3 Jaccard should come out ≈0.8 when epoch 3's selection lands.
+Prediction recorded before the fact — and confirmed: the attractor reading
+required tag's ep2→ep3 Jaccard to land near 0.8, and it landed at **0.773**.
+Both arms follow the same dynamic (violent re-selection when scoring moves
+from the base model to the once-trained one, then a frozen selection) and
+settle in different places. `n_zero_weight_selected` was 0 in every epoch:
+no G=0 record was ever forced into the selection.
 
 Consequence for Table 2's interpretation: from epoch 2 the arms train on
 nearly disjoint subsets, so the row-pair gap measures the END-TO-END effect
