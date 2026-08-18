@@ -291,7 +291,12 @@ _tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob required-cfg sub
   # levels above them, and honouring that blindly produced "No test-*.parquet
   # found" an hour into eval. A path that does not check out is searched
   # below, then falls through to the probe.
-  if [ -n "$cur" ]; then
+  # An exported path is only trusted when it can hold the full-coverage
+  # config. Without this a stale MMLU_DATA_DIR naming one subject directory
+  # is its own search root, hits the "the root itself is fine" exemption,
+  # and resolves to 1 subject of 57.
+  if [ -n "$cur" ] && { [ -z "$want" ] || _tag_config_ok "$want" "$cur" "" \
+                        || [ -d "$cur/${want%% *}" ]; }; then
     hit="$(_tag_locate "$cur" "$marker" "$want")" && { echo "$hit"; return; }
   fi
   # Spelling is the OUTER loop: the more specific one (mmlu/all) must beat a
@@ -304,7 +309,12 @@ _tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob required-cfg sub
   done
   # Nothing usable. Keep an explicit export if there was one — the operator
   # meant something by it and check_eval_data.py will say what is wrong —
-  # otherwise name the path the download scripts create.
+  # EXCEPT when it names one config of a multi-config dataset, where keeping
+  # it reports a wrong-but-plausible directory instead of "not found".
+  if [ -n "$cur" ] && [ -n "$want" ] && ! _tag_config_ok "$want" "$cur" ""; then
+    echo "$TAG_EVAL_DATA/$1"
+    return
+  fi
   echo "${cur:-$TAG_WORKSPACE/datasets/$1}"
 }
 

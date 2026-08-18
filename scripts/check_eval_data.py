@@ -243,6 +243,24 @@ def main() -> int:
             bad += 1
             continue
         missing = _check_dir(root, needs)
+        want = _REQUIRED_CONFIG.get(b)
+        # The config guard has to apply to the CONFIGURED path too, not only
+        # to the suggestion. MMLU_DATA_DIR pointing straight at
+        # .../mmlu/computer_security satisfies every marker and covers one
+        # subject of 57 — reported ok twice before this check existed here.
+        if not missing and want and root.name not in want:
+            bad += 1
+            print(f"FAIL {b:<10} {raw}")
+            print(f"     this is one config of a dataset that has several; "
+                  f"{b} must resolve to {' or '.join(want)}, not "
+                  f"{root.name!r}.")
+            alt = _suggest(root.parent if root.parent != root else root, needs, b)
+            if alt is not None:
+                print(f"     use:  export {var}={alt}")
+            else:
+                print(f"     no {'/'.join(want)} config on disk — build it:")
+                print(f"       python scripts/prepare_eval_data.py --apply --only {b}")
+            continue
         if not missing:
             if not args.quiet:
                 print(f"ok   {b:<10} {raw}")
