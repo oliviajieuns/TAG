@@ -231,21 +231,55 @@ _tag_has() {  # _tag_has <dir> <glob>[|<glob>...] — does the dir hold the good
   return 1
 }
 
+_tag_locate() {  # _tag_locate <root> <markers> — print the dir that satisfies them
+  # The corpora on this cluster are BUNDLES: the files a loader opens sit
+  # under <corpus>/datasets/<org>/<name>/..., not at the top. Checking only
+  # the top level reported seven of eight benchmarks as absent on a box that
+  # has all of them. Search down a bounded number of levels for one of the
+  # marker files, then walk back up until a directory satisfies the whole
+  # marker list — gsm8k's marker is "main/test.parquet", so the answer is the
+  # grandparent of the hit, not its parent.
+  local root="$1" markers="$2" rest alt base f d i
+  [ -d "$root" ] || return 1
+  _tag_has "$root" "$markers" && { echo "$root"; return 0; }
+  rest="$markers"
+  while [ -n "$rest" ]; do
+    alt="${rest%%|*}"
+    if [ "$alt" = "$rest" ]; then rest=""; else rest="${rest#*|}"; fi
+    base="${alt##*/}"
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      d="$(dirname "$f")"
+      i=0
+      while [ "$i" -lt 3 ] && [ "$d" != "/" ] && [ "$d" != "." ]; do
+        _tag_has "$d" "$markers" && { echo "$d"; return 0; }
+        d="$(dirname "$d")"
+        i=$((i+1))
+      done
+    done <<EOF
+$(find "$root" -maxdepth 6 -name "$base" 2>/dev/null | head -40)
+EOF
+  done
+  return 1
+}
+
 _tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob subdir [subdir...]
   local var="$1" marker="$2"; shift 2
-  local cur="${!var:-}"
-  # An explicit export wins — but only if it holds the files the evaluator
-  # opens. discovered_env.sh sets MMLU_DATA_DIR to the mmlu/ parent on this
-  # cluster while the parquet shards are in mmlu/all, and honouring that
-  # blindly produced "No test-*.parquet found" an hour into eval. A path that
-  # does not check out falls through to the probe below.
-  _tag_has "$cur" "$marker" && { echo "$cur"; return; }
+  local cur="${!var:-}" hit
+  # An explicit export wins — but only if it leads to the files the evaluator
+  # opens. discovered_env.sh names the bundle root, which is one or more
+  # levels above them, and honouring that blindly produced "No test-*.parquet
+  # found" an hour into eval. A path that does not check out is searched
+  # below, then falls through to the probe.
+  if [ -n "$cur" ]; then
+    hit="$(_tag_locate "$cur" "$marker")" && { echo "$hit"; return; }
+  fi
   # Spelling is the OUTER loop: the more specific one (mmlu/all) must beat a
   # bare mmlu found under an earlier root.
   local root sub
   for sub in "$@"; do
     for root in $_TAG_BENCH_ROOTS; do
-      _tag_has "$root/$sub" "$marker" && { echo "$root/$sub"; return; }
+      hit="$(_tag_locate "$root/$sub" "$marker")" && { echo "$hit"; return; }
     done
   done
   # Nothing usable. Keep an explicit export if there was one — the operator

@@ -79,24 +79,54 @@ def _check_dir(root: Path, needs: Sequence[str]) -> List[str]:
     return [p for p in needs if not _matches(root, p)]
 
 
+# How far below a corpus root to look. The corpora here are BUNDLES —
+# <corpus>/datasets/<org>/<name>/... — so the files a loader opens are
+# several levels down, and checking only the top reported seven of eight
+# benchmarks as absent on a box that has all of them.
+_MAX_DEPTH = 6
+
+
 def _suggest(root: Path, needs: Sequence[str]) -> Optional[Path]:
-    """A directory near ``root`` that DOES satisfy the requirement."""
-    cands: List[Path] = [root / n for n in _NEARBY]
-    if root.parent != root:
-        cands.append(root.parent)
-        cands.extend(root.parent / n for n in _NEARBY)
-    for parent in (root, root.parent):
-        try:
-            cands.extend(c for c in parent.iterdir() if c.is_dir())
-        except OSError:
-            pass
-    seen = set()
-    for c in cands:
+    """A directory at or below ``root`` that DOES satisfy the requirement.
+
+    Searches for one of the marker files, then walks back UP from each hit:
+    gsm8k's requirement is ``main/test.parquet``, so the directory that
+    satisfies it is the grandparent of the file, not its parent.
+    """
+    seen: set = set()
+
+    def _ok(c: Path) -> bool:
         if c in seen or not c.is_dir():
-            continue
+            return False
         seen.add(c)
-        if not _check_dir(c, needs):
-            return c
+        return not _check_dir(c, needs)
+
+    for n in _NEARBY:
+        if _ok(root / n):
+            return root / n
+
+    for pattern in needs:
+        for alt in pattern.split("|"):
+            base = alt.rsplit("/", 1)[-1]
+            try:
+                hits = root.rglob(base)
+            except OSError:
+                continue
+            for i, f in enumerate(hits):
+                if i >= 200:
+                    break
+                try:
+                    if len(f.relative_to(root).parts) > _MAX_DEPTH:
+                        continue
+                except ValueError:
+                    continue
+                d = f.parent
+                for _ in range(3):
+                    if _ok(d):
+                        return d
+                    if d.parent == d:
+                        break
+                    d = d.parent
     return None
 
 
