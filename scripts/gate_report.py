@@ -64,6 +64,13 @@ def average_precision(detector, labels) -> float:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--gate", required=True, help="tag_gate_*.pt from precompute_gate.sh")
+    p.add_argument("--config", default=None,
+                   help="arm YAML. Re-derives G from the cache's token losses "
+                        "under THAT config before reporting, which is what the "
+                        "arm itself does when the cached config differs. "
+                        "Without it you are reading whatever config the cache "
+                        "was stamped with, which may not be the one training "
+                        "uses. CPU only.")
     p.add_argument("--manifest", default=None,
                    help="corruption_manifest.json (default: beside the pool "
                         "recorded in the cache identity)")
@@ -96,6 +103,33 @@ def main() -> None:
             f"{args.gate}"
         )
     cache = torch.load(args.gate, map_location="cpu", weights_only=False)
+
+    if args.config:
+        # The cache and the arm can disagree — a gate cache stamped at
+        # prefix_tokens=0 while the arm gates on 32 reports a distribution
+        # for a statistic nothing trains on. Re-derive the way the arm does.
+        from tag.core import gate as _g
+        from tag.core.utils import load_config as _lc
+        from tag.pipelines.selection import (
+            _build_gate_config, _resolve_gate_calibration,
+        )
+        params = (_lc(args.config).get("selection") or {}).get("tag") or {}
+        _scale, _null = _resolve_gate_calibration(params)
+        gcfg = _build_gate_config(params, _scale, _null)
+        cached_cfg = cache.get("config") or {}
+        now = gcfg.identity()
+        diff = {k: (cached_cfg.get(k), now[k]) for k in now
+                if k in cached_cfg and cached_cfg[k] != now[k]}
+        print(f"(re-deriving under {args.config}; differs from the cache on "
+              f"{diff or 'nothing'})")
+        redone = _g.recompute_gate_from_cache(cache, gcfg)
+        if redone is None:
+            sys.exit(
+                "cannot re-derive from this cache (no token losses, or the "
+                "change is forward-bound). Rebuild it:\n"
+                f"  bash scripts/precompute_gate.sh {args.config} {args.gate}"
+            )
+        cache = {**cache, **redone, "config": now}
     G = cache["gate"].float().view(-1)
     n = G.numel()
 
