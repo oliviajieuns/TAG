@@ -545,6 +545,18 @@ def main() -> None:
                 "be updated and the next eval will land in a fresh run dir.",
                 exc,
             )
+        elif args.limit is not None:
+            # A --limit run is a rehearsal, not a result: it scores a few
+            # examples per task to prove the pipeline runs. make_table_v2
+            # reads exactly the run `_latest` names, so letting a limited run
+            # claim that pointer is how 216 examples end up in the table as
+            # if they were 6,511. Seal it — it IS a complete run of what it
+            # was asked to do — but leave `_latest` on the last full one.
+            logger.warning(
+                "Run used --limit %s, so _latest was NOT moved: this is a "
+                "rehearsal and must not be picked up as a table row. The "
+                "results are in %s.", args.limit, out_dir,
+            )
         else:
             try:
                 mech = update_latest(base_out_dir, eval_tag)

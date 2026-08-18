@@ -222,6 +222,40 @@ def _require_sealed(run_dir: Path) -> None:
             "— unsealed runs are evals that died mid-way "
             "(AUTO_EVAL_AGENT.md §0-3(b)) and must not enter the table"
         )
+    _require_unlimited(run_dir)
+
+
+def _require_unlimited(run_dir: Path) -> None:
+    """Refuse a run that scored only the first N examples per task.
+
+    ``tag.eval --limit`` is how the pipeline is rehearsed before a real run:
+    8 examples per BBH task instead of 250, three minutes instead of an
+    hour. The run seals normally, because it completed everything it was
+    asked to do — and it is sealed, complete, self-consistent, and utterly
+    unpublishable. Nothing else in this file could tell it apart from the
+    real thing, so a rehearsal that reached the ``_latest`` pointer would
+    have gone straight into the table as a full benchmark.
+
+    ``tag.eval`` no longer moves ``_latest`` for a limited run. This is the
+    second lock, for the pointers that were written before that, and for
+    ``--run-dir`` which bypasses the pointer entirely.
+    """
+    for jp in sorted(run_dir.glob("*eval_summary.json")):
+        try:
+            with open(jp, encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, ValueError):
+            continue  # _read_run_accuracies reports the unreadable JSON
+        if not isinstance(payload, dict):
+            continue
+        lim = payload.get("limit")
+        if lim is not None:
+            raise TableIntegrityError(
+                f"run dir {run_dir} was evaluated with --limit {lim} — it "
+                f"scored the first {lim} example(s) per task, not the "
+                f"benchmark. A rehearsal is not a table row. Re-run without "
+                f"--limit (scripts/run_eval_main_7b.sh without LIMIT=)."
+            )
 
 
 def _load_cfg(run_dir: Path) -> Optional[dict]:

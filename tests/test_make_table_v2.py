@@ -43,6 +43,7 @@ def write_run(
     sealed: bool = True,
     git_sha: Optional[str] = None,
     summary_accs: Optional[Dict[str, float]] = None,
+    limit: Optional[int] = None,
 ) -> Path:
     """Create one eval run dir: per-bench JSONs + combined summary + cfg.json.
 
@@ -60,6 +61,7 @@ def write_run(
         json.dumps(
             {
                 "experiment": label,
+                "limit": limit,
                 "summaries": [
                     {"benchmark": b, "accuracy": a} for b, a in summary.items()
                 ],
@@ -556,4 +558,35 @@ def test_unsealed_run_in_manifest_aborts(tmp_path: Path):
     )
     with pytest.raises(SystemExit) as ei:
         mtv2.main(["--manifest", str(manifest), "--benches", "mmlu"])
+    assert ei.value.code == 2
+
+
+def test_limited_run_in_manifest_aborts(tmp_path: Path):
+    """`tag.eval --limit 8` scores 8 examples per task. It seals normally and
+    is indistinguishable from a real run by every other check in the file —
+    which is exactly why it needs its own."""
+    run = write_run(tmp_path / "r", "l", {"mmlu": 0.5}, seed=1, limit=8)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [{"set": "m", "model": "llama2", "method": "legacy_10",
+              "seed": 1, "run_dir": str(run)}]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as ei:
+        mtv2.main(["--manifest", str(manifest), "--benches", "mmlu"])
+    assert ei.value.code == 2
+
+
+def test_limited_run_under_results_root_aborts(tmp_path: Path):
+    """Same guard on the --results-root path, where `_latest` chooses the
+    run and nobody has typed a path to look twice at."""
+    cell = tmp_path / "main_7b" / "llama2" / "legacy_10"
+    run = write_run(cell / "runs" / "20260818_1", "l", {"mmlu": 0.5},
+                    seed=1, limit=8)
+    (cell / "_latest.txt").write_text("20260818_1", encoding="utf-8")
+    assert run.is_dir()
+    with pytest.raises(SystemExit) as ei:
+        mtv2.main(["--results-root", str(tmp_path), "--benches", "mmlu"])
     assert ei.value.code == 2
