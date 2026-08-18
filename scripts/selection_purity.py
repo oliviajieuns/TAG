@@ -180,20 +180,37 @@ def main() -> None:
         )
 
     # ---- headline: dirty fraction of what was trained on ----
-    print("Corrupted fraction of the SELECTED subset")
-    print(f"{'arm':<22}{'ep':>3}{'selected':>10}{'dirty':>9}{'vs pool':>10}"
-          f"{'vs base':>9}")
-    print("-" * 63)
-    for label, ep, idx in rows:
-        c = compose(idx, types)
-        k = len(idx)
-        d = 1.0 - c.get("clean", 0) / k
-        print(f"{label:<22}{ep:>3}{k:>10}{100*d:>8.1f}%"
-              f"{100*(d - base_dirty):>+9.1f}pp{d / base_dirty:>8.2f}x")
-    print(f"{'(random / no signal)':<22}{'':>3}{'':>10}{100*base_dirty:>8.1f}%"
-          f"{0.0:>+9.1f}pp{1.0:>8.2f}x")
+    # A pool with no corruption — Table 2's is one — has nothing to divide by.
+    # The subset SIZES and the overlap below are still worth having, so report
+    # those rather than failing.
+    labelled = base_dirty > 0
+    if labelled:
+        print("Corrupted fraction of the SELECTED subset")
+        print(f"{'arm':<22}{'ep':>3}{'selected':>10}{'dirty':>9}{'vs pool':>10}"
+              f"{'vs base':>9}")
+        print("-" * 63)
+        for label, ep, idx in rows:
+            c = compose(idx, types)
+            k = len(idx)
+            d = 1.0 - c.get("clean", 0) / k
+            print(f"{label:<22}{ep:>3}{k:>10}{100*d:>8.1f}%"
+                  f"{100*(d - base_dirty):>+9.1f}pp{d / base_dirty:>8.2f}x")
+        print(f"{'(random / no signal)':<22}{'':>3}{'':>10}{100*base_dirty:>8.1f}%"
+              f"{0.0:>+9.1f}pp{1.0:>8.2f}x")
+    else:
+        print("The pool carries no corruption labels, so there is no dirty")
+        print("fraction to compare. What is still meaningful is how much the")
+        print("arms' subsets DIFFER — see the overlap at the bottom.")
+        print()
+        print(f"{'arm':<22}{'ep':>3}{'selected':>10}")
+        print("-" * 35)
+        for label, ep, idx in rows:
+            print(f"{label:<22}{ep:>3}{len(idx):>10}")
 
     # ---- per type: which corruption was actually removed ----
+    if not labelled:
+        _overlap(rows)
+        return
     print()
     print("Per-type share of the selected subset, vs that type's share of the pool")
     print("(1.00x = the type is selected exactly as often as it occurs;")
@@ -213,6 +230,10 @@ def main() -> None:
     print(f"{'(pool composition)':<22}{'':>3}"
           + "".join(f"{100*pool_counts[t]/n:>11.1f}%" for t in all_types))
 
+    _overlap(rows)
+
+
+def _overlap(rows) -> None:
     # ---- overlap between arms at the same epoch ----
     by_epoch: Dict[int, List[Tuple[str, List[int]]]] = {}
     for label, ep, idx in rows:

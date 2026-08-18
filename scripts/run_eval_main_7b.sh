@@ -35,9 +35,15 @@ if [ -z "${OUTPUT_ROOT:-}" ] || [ -z "${EVAL_RESULTS_ROOT:-}" ]; then
   source scripts/setup_env.sh
 fi
 
-MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
+MODELS=${MODELS-"llama2 qwen25 mistral deepseek"}
+# "-" is the no-per-model-level marker; smoke/lowq/clean lay out as
+# <set>/<method>. Note ${MODELS-...}, not ${MODELS:-...}: with :- an
+# explicit MODELS="" falls back to the default list, which is how a smoke
+# run went looking for configs under smoke/llama2/.
+[ -z "${MODELS// /}" ] && MODELS="-"
 METHODS=${METHODS:-"full_100 random_10 data_agent_10 legacy_10"}
-BENCHMARKS=${BENCHMARKS:-"mmlu,gsm8k,humaneval,tydiqa,bbh"}
+# The paper's Table 2, in its order.
+BENCHMARKS=${BENCHMARKS:-"mmlu,bbh,svamp,gsm8k,mbpp,humaneval,tydiqa,xquad"}
 LIMIT=${LIMIT:-}
 GPUS=${GPUS:-"0"}
 PARALLEL=0
@@ -159,7 +165,10 @@ if [ "$PARALLEL" = "1" ]; then
     for method in $METHODS; do
       gpu="${_gpus_arr[$((idx % n_gpus))]}"
       eval_one "$model" "$method" "$gpu"
-      pids+=($!)
+      # eval_one returns early when the config or the checkpoint is missing,
+      # leaving $! from whatever ran before — or unset, which `set -u` turns
+      # into a hard stop that takes the whole run down.
+      [ -n "${!:-}" ] && pids+=($!)
       idx=$((idx + 1))
     done
   done
