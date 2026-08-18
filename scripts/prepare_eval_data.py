@@ -123,6 +123,11 @@ def prep_bbh(src: Path, out: Path) -> str:
 
 _PREP = {"mmlu": prep_mmlu, "bbh": prep_bbh}
 
+# BBH built from the HF parquet has no cot-prompts/, and the evaluator then
+# falls back to a direct-answer baseline that is not what Table 2 reports.
+# scripts/download_bbh.sh fetches the upstream repo, which has both.
+_PREFER_DOWNLOADER = {"bbh": "scripts/download_bbh.sh"}
+
 # Everything else already has a way in that is better than converting a
 # clone, and duplicating it here would mean two paths to keep in agreement.
 _HANDLED_ELSEWHERE = {
@@ -161,6 +166,12 @@ def main() -> int:
             print(f"{n}: use {_HANDLED_ELSEWHERE[n]} — it writes the layout "
                   f"the evaluator opens, from upstream.", file=sys.stderr)
             return 2
+    for n in names:
+        if n in _PREFER_DOWNLOADER:
+            print(f"NOTE {n}: {_PREFER_DOWNLOADER[n]} fetches the upstream "
+                  f"repo, which also carries cot-prompts/. Building it from "
+                  f"the HF parquet here leaves those out, and the evaluator "
+                  f"then scores a non-CoT baseline that Table 2 does not use.")
     unknown = [n for n in names if n not in _PREP]
     if unknown:
         print(f"unknown benchmark(s): {unknown}; this script builds "

@@ -52,7 +52,12 @@ _SPEC: Dict[str, Tuple[str, List[str], str]] = {
     "mmlu_pro": ("MMLU_PRO_DATA_DIR", ["test-*.parquet", "validation-*.parquet"],
                  "MMLU-Pro parquet shards"),
     # tag/evals/bbh.py: data_dir.glob("*.json"), with one level of nesting handled
-    "bbh": ("BBH_DATA_DIR", ["*.json|*/*.json"], "one .json per BBH task"),
+    # cot-prompts/ is not optional in practice: without it bbh.py scores a
+    # direct-answer few-shot baseline instead of the CoT one Table 2 reports,
+    # and says so in a warning that is easy to miss mid-run.
+    "bbh": ("BBH_DATA_DIR", ["*.json|*/*.json", "cot-prompts/*.txt"],
+            "per-task .json AND cot-prompts/*.txt "
+            "(scripts/download_bbh.sh)"),
     # tag/evals/svamp.py
     "svamp": ("SVAMP_DATA_DIR", ["test-*.parquet|test.parquet"],
               "ChilleD/SVAMP test parquet"),
