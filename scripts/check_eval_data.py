@@ -29,16 +29,20 @@ from typing import Dict, List, Optional, Sequence, Tuple
 # bench -> (env var, [required glob relative to data_dir], human description)
 # A benchmark passes when EVERY entry in its list matches at least one file.
 #
-# Datasets that ship one config PER SUBSET need the config named here, or a
-# recursive search happily returns the first subset it trips over: MMLU
-# resolved to .../mmlu/computer_security, whose test-*.parquet satisfies
-# every pattern while covering one subject out of 57. A wrong number is
-# worse than a missing one, so where a full-coverage config exists it is
-# required by name.
-_REQUIRED_CONFIG: Dict[str, Tuple[str, ...]] = {
-    "mmlu": ("all",),          # 57 per-subject configs sit beside it
-    "mmlu_pro": ("default",),
-}
+# Datasets that ship one config PER SUBSET, where a recursive search happily
+# returns the first subset it trips over: MMLU resolved to
+# .../mmlu/computer_security, whose test-*.parquet satisfies every pattern
+# while covering one subject out of 57. A wrong number is worse than a
+# missing one.
+#
+# The test is NOT the directory's name. Requiring it to be called `all`
+# rejected the concatenation this repo builds, which is correct data under
+# a different name. What actually distinguishes a subset is that its
+# SIBLINGS look just like it — 56 other subject directories, each satisfying
+# the same markers. A directory that stands alone is the whole dataset,
+# whatever it is called.
+_SUBSET_PRONE: Tuple[str, ...] = ("mmlu", "mmlu_pro")
+_SIBLING_THRESHOLD = 2
 
 _SPEC: Dict[str, Tuple[str, List[str], str]] = {
     # tag/evals/mmlu.py: os.listdir(data_dir), test-*.parquet and dev-*.parquet
@@ -74,6 +78,7 @@ TABLE2 = ["mmlu", "bbh", "svamp", "gsm8k", "mbpp", "humaneval", "tydiqa", "xquad
 
 # Where else the same corpus might be sitting, relative to the configured dir.
 _NEARBY = ["all", "data", "sanitized", "main", "test"]
+_SKIP = {".git", ".github", "__pycache__"}
 
 
 def _matches(root: Path, pattern: str) -> bool:
@@ -98,14 +103,34 @@ def _check_dir(root: Path, needs: Sequence[str]) -> List[str]:
 _MAX_DEPTH = 6
 
 
-def _config_ok(bench: str, d: Path, root: Path) -> bool:
-    """Reject a hit that is one subset of a dataset that has a full config."""
-    want = _REQUIRED_CONFIG.get(bench)
-    if not want:
+def _is_one_of_many(d: Path, needs: Sequence[str]) -> bool:
+    """Do at least ``_SIBLING_THRESHOLD`` sibling directories look the same?
+
+    That is what makes a directory a per-subset config rather than the whole
+    dataset, and it holds regardless of what any of them is named.
+    """
+    parent = d.parent
+    if parent == d:
+        return False
+    n = 0
+    try:
+        for c in parent.iterdir():
+            if c == d or not c.is_dir() or c.name in _SKIP:
+                continue
+            if not _check_dir(c, needs):
+                n += 1
+                if n >= _SIBLING_THRESHOLD:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _config_ok(bench: str, d: Path, needs: Sequence[str]) -> bool:
+    """Reject a hit that is one subset of a dataset split per subset."""
+    if bench not in _SUBSET_PRONE:
         return True
-    if d == root:
-        return True
-    return d.name in want
+    return not _is_one_of_many(d, needs)
 
 
 def _suggest(root: Path, needs: Sequence[str], bench: str = "") -> Optional[Path]:
@@ -121,7 +146,7 @@ def _suggest(root: Path, needs: Sequence[str], bench: str = "") -> Optional[Path
         if c in seen or not c.is_dir():
             return False
         seen.add(c)
-        if not _config_ok(bench, c, root):
+        if bench and not _config_ok(bench, c, needs):
             return False
         return not _check_dir(c, needs)
 
@@ -243,22 +268,21 @@ def main() -> int:
             bad += 1
             continue
         missing = _check_dir(root, needs)
-        want = _REQUIRED_CONFIG.get(b)
-        # The config guard has to apply to the CONFIGURED path too, not only
+        # The subset guard has to apply to the CONFIGURED path too, not only
         # to the suggestion. MMLU_DATA_DIR pointing straight at
         # .../mmlu/computer_security satisfies every marker and covers one
-        # subject of 57 — reported ok twice before this check existed here.
-        if not missing and want and root.name not in want:
+        # subject of 57.
+        if not missing and not _config_ok(b, root, needs):
             bad += 1
             print(f"FAIL {b:<10} {raw}")
-            print(f"     this is one config of a dataset that has several; "
-                  f"{b} must resolve to {' or '.join(want)}, not "
-                  f"{root.name!r}.")
+            print(f"     this is ONE subset of {b} — sibling directories hold "
+                  f"the same files, so this covers a fraction of the "
+                  f"benchmark.")
             alt = _suggest(root.parent if root.parent != root else root, needs, b)
             if alt is not None:
                 print(f"     use:  export {var}={alt}")
             else:
-                print(f"     no {'/'.join(want)} config on disk — build it:")
+                print(f"     no whole-dataset copy on disk — build one:")
                 print(f"       python scripts/prepare_eval_data.py --apply --only {b}")
             continue
         if not missing:

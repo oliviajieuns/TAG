@@ -235,18 +235,29 @@ _tag_has() {  # _tag_has <dir> <glob>[|<glob>...] — does the dir hold the good
   return 1
 }
 
-# Directory names a deep hit may land on for datasets that ship one config
-# per subset. Without this, MMLU resolved to .../mmlu/computer_security —
-# one subject of 57, satisfying every marker, and silently the wrong number.
-# Empty means "any directory is fine".
-_tag_config_ok() {  # <required-names|empty> <hit> <root>
-  local want="$1" hit="$2" root="$3" n
-  [ -z "$want" ] && return 0
-  [ "$hit" = "$root" ] && return 0
-  for n in $want; do
-    [ "$(basename "$hit")" = "$n" ] && return 0
+# Datasets that ship one config per subset: MMLU resolved to
+# .../mmlu/computer_security once — one subject of 57, satisfying every
+# marker, silently the wrong number.
+#
+# The test is NOT the directory's name. Requiring "all" rejected the
+# concatenation prepare_eval_data.py builds, which is correct data under a
+# different name. What makes a directory a subset is that its SIBLINGS look
+# just like it; one that stands alone is the whole dataset. Second argument
+# empty means the benchmark is not subset-prone and anything passes.
+_tag_config_ok() {  # <subset-prone flag|empty> <hit> <markers>
+  local prone="$1" hit="$2" markers="$3" parent c n=0
+  [ -z "$prone" ] && return 0
+  parent="$(dirname "$hit")"
+  [ "$parent" = "$hit" ] && return 0
+  for c in "$parent"/*; do
+    [ -d "$c" ] || continue
+    [ "$c" = "$hit" ] && continue
+    if _tag_has "$c" "$markers"; then
+      n=$((n+1))
+      [ "$n" -ge 2 ] && return 1
+    fi
   done
-  return 1
+  return 0
 }
 
 _tag_locate() {  # _tag_locate <root> <markers> [required-config-names]
@@ -270,7 +281,7 @@ _tag_locate() {  # _tag_locate <root> <markers> [required-config-names]
       d="$(dirname "$f")"
       i=0
       while [ "$i" -lt 3 ] && [ "$d" != "/" ] && [ "$d" != "." ]; do
-        if _tag_has "$d" "$markers" && _tag_config_ok "$want" "$d" "$root"; then
+        if _tag_has "$d" "$markers" && _tag_config_ok "$want" "$d" "$markers"; then
           echo "$d"; return 0
         fi
         d="$(dirname "$d")"
@@ -291,12 +302,10 @@ _tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob required-cfg sub
   # levels above them, and honouring that blindly produced "No test-*.parquet
   # found" an hour into eval. A path that does not check out is searched
   # below, then falls through to the probe.
-  # An exported path is only trusted when it can hold the full-coverage
-  # config. Without this a stale MMLU_DATA_DIR naming one subject directory
-  # is its own search root, hits the "the root itself is fine" exemption,
-  # and resolves to 1 subject of 57.
-  if [ -n "$cur" ] && { [ -z "$want" ] || _tag_config_ok "$want" "$cur" "" \
-                        || [ -d "$cur/${want%% *}" ]; }; then
+  # An exported path is only trusted when it is not itself one subset of a
+  # subset-prone dataset — a stale MMLU_DATA_DIR naming a subject directory
+  # is its own search root, so nothing below would catch it.
+  if [ -n "$cur" ] && _tag_config_ok "$want" "$cur" "$marker"; then
     hit="$(_tag_locate "$cur" "$marker" "$want")" && { echo "$hit"; return; }
   fi
   # Spelling is the OUTER loop: the more specific one (mmlu/all) must beat a
@@ -311,7 +320,7 @@ _tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob required-cfg sub
   # meant something by it and check_eval_data.py will say what is wrong —
   # EXCEPT when it names one config of a multi-config dataset, where keeping
   # it reports a wrong-but-plausible directory instead of "not found".
-  if [ -n "$cur" ] && [ -n "$want" ] && ! _tag_config_ok "$want" "$cur" ""; then
+  if [ -n "$cur" ] && ! _tag_config_ok "$want" "$cur" "$marker"; then
     echo "$TAG_EVAL_DATA/$1"
     return
   fi
@@ -320,8 +329,8 @@ _tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob required-cfg sub
 
 # The marker globs mirror the loaders in tag/evals/*.py; scripts/check_eval_data.py
 # holds the full expectation and explains any mismatch.
-export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR 'test-*.parquet' 'all' mmlu/all mmlu)"
-export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR 'test-*.parquet' 'default' mmlu_pro mmlu-pro)"
+export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR 'test-*.parquet' subset-prone mmlu/all mmlu)"
+export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR 'test-*.parquet' subset-prone mmlu_pro mmlu-pro)"
 export GSM8K_DATA_DIR="$(_tag_bench_dir GSM8K_DATA_DIR 'main/test*.parquet' '' gsm8k)"
 export SVAMP_DATA_DIR="$(_tag_bench_dir SVAMP_DATA_DIR 'test*.parquet' '' svamp SVAMP)"
 export HUMANEVAL_DATA_DIR="$(_tag_bench_dir HUMANEVAL_DATA_DIR 'HumanEval.jsonl.gz' '' human-eval humaneval human_eval)"
