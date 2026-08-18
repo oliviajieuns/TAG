@@ -114,17 +114,67 @@ response_word_len = _corruption.response_word_len
 IN_PLACE = ("mismatch", "noisy", "truncated", "wrong_answer")
 
 
+# Only the fields the SFT prompt reads. A parquet corpus can carry extras
+# (the vicgalle Alpaca-GPT4 mirror ships a pre-formatted `text` column); a
+# stray field surviving into the pool would change the tokenised text
+# without appearing in any config.
+_POOL_FIELDS = ("instruction", "input", "output")
+
+
+def _load_parquet_records(path: Path) -> List[Dict[str, Any]]:
+    """Read a parquet file, a directory of shards, or a glob of them.
+
+    Corpora consolidated out of an HF arrow cache land as parquet, so the
+    pool generator has to read them directly — the arrow cache they came
+    from is deleted by then, and requiring a hand-made JSON step in between
+    is how a pool ends up built from a corpus nobody can point at.
+    """
+    import glob as _glob
+
+    import pandas as pd
+
+    if path.is_dir():
+        # Prefer the train split; a corpus with only one split names it
+        # anything, so fall back to every shard in a stable order.
+        files = sorted(path.glob("train-*.parquet")) or sorted(path.glob("*.parquet"))
+    elif any(c in str(path) for c in "*?["):
+        files = [Path(f) for f in sorted(_glob.glob(str(path)))]
+    else:
+        files = [path]
+    files = [f for f in files if f.is_file()]
+    if not files:
+        raise ValueError(f"{path}: no parquet file(s) found")
+    frames = [pd.read_parquet(f) for f in files]
+    df = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
+    missing = [c for c in ("instruction", "output") if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{path}: parquet is missing column(s) {missing}; has "
+            f"{sorted(df.columns)}. This is not an Alpaca-shaped corpus."
+        )
+    keep = [c for c in _POOL_FIELDS if c in df.columns]
+    dropped = [c for c in df.columns if c not in keep]
+    if dropped:
+        print(f"[pool] {path.name}: dropping non-prompt column(s) {dropped}")
+    recs = df[keep].fillna("").to_dict(orient="records")
+    return [{k: ("" if v is None else str(v)) for k, v in r.items()} for r in recs]
+
+
 def _load_records(path: str) -> List[Dict[str, Any]]:
-    # encoding pinned: pool records are UTF-8 JSON and the process default
-    # on Windows is cp949 — a locale-dependent decode must never corrupt or
-    # reject a pool.
-    with open(path, encoding="utf-8") as f:
-        if path.endswith(".jsonl"):
-            data = [json.loads(line) for line in f if line.strip()]
-        else:
-            data = json.load(f)
+    p = Path(path)
+    if path.endswith(".parquet") or p.is_dir() or "*" in path:
+        data = _load_parquet_records(p)
+    else:
+        # encoding pinned: pool records are UTF-8 JSON and the process default
+        # on Windows is cp949 — a locale-dependent decode must never corrupt or
+        # reject a pool.
+        with open(path, encoding="utf-8") as f:
+            if path.endswith(".jsonl"):
+                data = [json.loads(line) for line in f if line.strip()]
+            else:
+                data = json.load(f)
     if not isinstance(data, list) or not data:
-        raise ValueError(f"{path}: expected a non-empty JSON list of records")
+        raise ValueError(f"{path}: expected a non-empty list of records")
     for i, r in enumerate(data[:5]):
         if "instruction" not in r or "output" not in r:
             raise ValueError(

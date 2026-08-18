@@ -160,11 +160,20 @@ export TAG_GATE_CACHE_CLEAN="${TAG_GATE_CACHE_CLEAN:-$POOLS/clean_ref/tag_gate_q
 # index-aligned by construction:
 #   python scripts/make_corrupted_pool.py --input "$ALPACA_GPT4_JSON" \
 #       --out-dir $POOLS/alpaca_gpt4 --emit-counterfactual --seed 42
+# liangxin/Alpaca_GPT4, which is the mirror configs/base.yaml has always
+# named as its dataset_name fallback — so it is the one earlier runs used.
+# The vicgalle mirror is a different corpus for reproduction purposes: it
+# ships an extra pre-formatted `text` column and twice the bytes.
+# The consolidated parquet is listed first because the arrow cache it came
+# from is deleted once scripts/consolidate_hf_datasets.py has run.
 export ALPACA_GPT4_JSON="${ALPACA_GPT4_JSON:-$(_tag_first_existing "" \
   "$TAG_WORKSPACE/datasets/alpaca_gpt4.json" \
   "/group-volume/${USER:-nobody}/datasets/alpaca_gpt4.json" \
   /group-volume/datasets/alpaca_gpt4/data/train.json \
   /group-volume/IT-datasets/alpaca_gpt4/data/train.json)}"
+# make_corrupted_pool.py reads a parquet directory directly, so the
+# consolidated corpus needs no JSON step of its own.
+export ALPACA_GPT4_PARQUET="${ALPACA_GPT4_PARQUET:-/group-volume/datasets/alpaca_gpt4}"
 export TAG_MAIN_POOL="${TAG_MAIN_POOL:-$POOLS/alpaca_gpt4/pool.json}"
 export TAG_MAIN_CF="${TAG_MAIN_CF:-$POOLS/alpaca_gpt4/counterfactual.json}"
 # Gate calibration is BACKBONE-specific and, for this row, should not be fit on
