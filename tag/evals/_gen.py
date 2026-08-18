@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import torch
 
@@ -92,39 +92,153 @@ def _generate_once(model, tokenizer, prompts, *, device, max_new_tokens,
     return texts
 
 
+def _first_divergence(a: str, b: str) -> int:
+    """Index of the first differing character, or -1 if identical."""
+    n = min(len(a), len(b))
+    for i in range(n):
+        if a[i] != b[i]:
+            return i
+    return -1 if len(a) == len(b) else n
+
+
+def _check_padding_is_masked(model, tokenizer, prompts, *, device,
+                             max_input_tokens) -> None:
+    """Does left padding change the FIRST predicted token? It must not.
+
+    This is the check that separates the two reasons a batched continuation
+    can differ from an unbatched one:
+
+      * the padding is not masked — the model is attending to pad tokens, the
+        whole benchmark is wrong, and no amount of eyeballing the text will
+        show it; or
+      * the arithmetic reassociated — cuBLAS picks a different reduction
+        order for a (16, T, H) matmul than for a (1, T, H) one, logits move
+        by ~1e-3, and a long greedy chain that passes near a tie forks.
+
+    The first is a bug and aborts. The second is the same nondeterminism a
+    different GPU or a different transformers build already gives you.
+
+    One forward per prompt, no generation — cheap enough to always run.
+    """
+    n = min(len(prompts), 6)
+    sub = list(prompts[:n])
+    enc_b = _encode(tokenizer, sub, max_input_tokens, device)
+    with torch.inference_mode():
+        # Left padding means column -1 is a real token on every row.
+        lb = model(**enc_b).logits[:, -1, :].float()
+    bad, max_abs = [], 0.0
+    for j in range(n):
+        enc_s = _encode(tokenizer, [sub[j]], max_input_tokens, device)
+        with torch.inference_mode():
+            ls = model(**enc_s).logits[0, -1, :].float()
+        max_abs = max(max_abs, (lb[j] - ls).abs().max().item())
+        if int(lb[j].argmax()) != int(ls.argmax()):
+            bad.append(j)
+        del enc_s, ls
+    del enc_b, lb
+    if bad:
+        raise RuntimeError(
+            f"Left padding is changing the model's prediction: the first "
+            f"generated token differs between a padded batch and the same "
+            f"prompt alone on {len(bad)}/{n} prompts (max |logit diff| "
+            f"{max_abs:.3g}). That is a masking bug, not float noise — every "
+            f"number this eval produces would be wrong. Re-run with "
+            f"TAG_EVAL_GEN_BS=1 to fall back to one prompt per generate()."
+        )
+    logger.info(
+        "  padding check: first-token argmax identical on %d/%d prompts "
+        "(max |logit diff| %.3g) — the mask is right", n, n, max_abs,
+    )
+
+
 def _verify_first_batch(model, tokenizer, prompts, batched, *, device,
-                        max_new_tokens, max_input_tokens, gen_kwargs) -> None:
-    """Decode the same prompts one at a time and compare."""
+                        max_new_tokens, max_input_tokens, gen_kwargs,
+                        score_key=None) -> None:
+    """Compare the batched decode against one-at-a-time decoding.
+
+    Reports on two levels, because they mean different things:
+
+      raw text   how many continuations are character-identical, and where
+                 the first difference is. A divergence 200 characters into a
+                 chain-of-thought is a coin landing the other way on a
+                 near-tie; a divergence at character 0 is a bug.
+      graded     how many produce the SAME answer once the evaluator's own
+                 extractor has run. This is the one that moves a table cell,
+                 and it is the number to judge the change by.
+    """
     global _VERIFIED
     _VERIFIED = True
+
+    _check_padding_is_masked(model, tokenizer, prompts, device=device,
+                             max_input_tokens=max_input_tokens)
+
     n = min(len(prompts), 8)
-    agree = 0
+    same_raw = 0
+    same_key = 0
+    n_key = 0
+    diverge_at = []
     for j in range(n):
         one = _generate_once(
             model, tokenizer, [prompts[j]], device=device,
             max_new_tokens=max_new_tokens, max_input_tokens=max_input_tokens,
             gen_kwargs=gen_kwargs,
         )[0]
-        if one.strip() == batched[j].strip():
-            agree += 1
-        elif agree + (n - j - 1) < n:  # only log the first few disagreements
-            logger.warning(
-                "  batched-vs-single mismatch on example %d:\n"
-                "    batched: %r\n    single : %r",
-                j, batched[j][:200], one[:200],
-            )
-    if agree == n:
-        logger.info("  batched generation verified: %d/%d identical to "
-                    "one-at-a-time decoding", agree, n)
+        a, b = batched[j], one
+        d = _first_divergence(a, b)
+        if d < 0:
+            same_raw += 1
+        else:
+            diverge_at.append((d, max(len(a), len(b))))
+        if score_key is not None:
+            n_key += 1
+            try:
+                ka, kb = score_key(a), score_key(b)
+            except Exception:  # an extractor that throws is not our business
+                n_key -= 1
+            else:
+                if ka == kb:
+                    same_key += 1
+                else:
+                    logger.warning(
+                        "  graded answer DIFFERS on example %d: batched=%r "
+                        "single=%r  (%s)", j, ka, kb,
+                        "raw text is identical" if d < 0
+                        else f"texts first differ at char {d}",
+                    )
+
+    if same_raw == n:
+        logger.info("  batched generation verified: %d/%d continuations "
+                    "character-identical to one-at-a-time decoding", n, n)
     else:
-        logger.warning(
-            "  batched generation DIFFERS from one-at-a-time decoding on "
-            "%d/%d prompts. Greedy decoding is padding-invariant in exact "
-            "arithmetic, so a few late-token drifts on near-ties are "
-            "expected; a large fraction is a bug. Re-run with "
-            "TAG_EVAL_GEN_BS=1 to reproduce the unbatched numbers.",
-            n - agree, n,
+        where = ", ".join(f"{d}/{t}" for d, t in diverge_at[:5])
+        logger.info(
+            "  batched vs one-at-a-time: %d/%d continuations identical; the "
+            "other %d fork at char %s (position/length). Left padding is "
+            "exact in real arithmetic and the padding check above passed, so "
+            "this is float reassociation across batch shapes — a long greedy "
+            "chain that passes near a tie takes the other branch.",
+            same_raw, n, n - same_raw, where,
         )
+
+    # The graded verdict is reported whenever anything at all disagreed. It
+    # is the only one that can move a table cell, so it must not be skipped
+    # just because the raw texts happened to match — an extractor is a pure
+    # function of the text, and if it disagrees on identical text, the
+    # extractor itself is nondeterministic and that is worse.
+    if n_key and (same_key < n_key or same_raw < n):
+        if same_key == n_key:
+            logger.info(
+                "  and it does not reach the score: the extracted answer is "
+                "identical on %d/%d — those forks are downstream of the "
+                "answer, in the trailing reasoning.", same_key, n_key,
+            )
+        else:
+            logger.warning(
+                "  AND IT REACHES THE SCORE: the extracted answer differs on "
+                "%d/%d examples. Do not report this run. Re-run with "
+                "TAG_EVAL_GEN_BS=1, or lower it until the graded answers "
+                "agree.", n_key - same_key, n_key,
+            )
 
 
 def generate_texts(
@@ -138,6 +252,7 @@ def generate_texts(
     batch_size: Optional[int] = None,
     stop_strings: Optional[Sequence[str]] = None,
     extra_gen_kwargs: Optional[Dict[str, Any]] = None,
+    score_key: Optional[Callable[[str], Any]] = None,
     progress_every: int = 0,
     progress_label: str = "",
 ) -> List[str]:
@@ -195,6 +310,7 @@ def generate_texts(
                 model, tokenizer, chunk, texts, device=device,
                 max_new_tokens=max_new_tokens,
                 max_input_tokens=max_input_tokens, gen_kwargs=gen_kwargs,
+                score_key=score_key,
             )
 
         for i, t in zip(idx, texts):

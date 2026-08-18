@@ -163,3 +163,66 @@ def test_empty_prompts_is_empty(tiny):
     model, tok = tiny
     assert generate_texts(model, tok, [], device="cpu", max_new_tokens=4,
                           max_input_tokens=64) == []
+
+
+# ---------------------------------------------------------------------------
+# The verification path itself — it has to have teeth
+# ---------------------------------------------------------------------------
+
+def test_padding_check_passes_on_correct_left_padding(tiny, caplog):
+    from tag.evals import _gen
+    model, tok = tiny
+    with caplog.at_level("INFO"):
+        _gen._check_padding_is_masked(
+            model, tok, _PROMPTS, device="cpu", max_input_tokens=64,
+        )
+    assert "the mask is right" in caplog.text
+
+
+def test_padding_check_catches_a_broken_mask(tiny, monkeypatch):
+    """If the padding lands on the RIGHT, the last column of a short row is a
+    pad token and the model predicts from it. That is the failure this check
+    exists for, so break it deliberately and confirm it aborts."""
+    from tag.evals import _gen
+    model, tok = tiny
+
+    def _right_padded(tokenizer, prompts, max_input_tokens, device):
+        tokenizer.padding_side = "right"
+        enc = tokenizer(list(prompts), return_tensors="pt", padding=True,
+                        truncation=True, max_length=max_input_tokens)
+        return {k: v for k, v in enc.items()}
+
+    monkeypatch.setattr(_gen, "_encode", _right_padded)
+    with pytest.raises(RuntimeError, match="padding is changing"):
+        _gen._check_padding_is_masked(
+            model, tok, _PROMPTS, device="cpu", max_input_tokens=64,
+        )
+
+
+def test_score_key_divergence_is_reported(tiny, caplog, monkeypatch):
+    """A fork that reaches the graded answer must be logged as such — that is
+    the difference between 'harmless float noise' and 'do not report this
+    run'."""
+    from tag.evals import _gen
+    model, tok = tiny
+    monkeypatch.setattr(_gen, "_VERIFIED", False)
+    calls = {"n": 0}
+
+    def _alternating_key(_text):
+        calls["n"] += 1
+        return calls["n"] % 2  # batched and single never agree
+
+    with caplog.at_level("INFO"):
+        _gen.generate_texts(
+            model, tok, _PROMPTS, device="cpu", max_new_tokens=6,
+            max_input_tokens=64, batch_size=4, score_key=_alternating_key,
+        )
+    assert "IT REACHES THE SCORE" in caplog.text
+
+
+def test_first_divergence_index():
+    from tag.evals._gen import _first_divergence
+    assert _first_divergence("abc", "abc") == -1
+    assert _first_divergence("abc", "abd") == 2
+    assert _first_divergence("abc", "abcd") == 3
+    assert _first_divergence("", "") == -1

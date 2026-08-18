@@ -45,7 +45,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-from ._gen import generate_texts
+from ._gen import gen_batch_size, generate_texts
 from .base import BenchmarkEvaluator, register
 
 logger = logging.getLogger(__name__)
@@ -617,6 +617,7 @@ class MBPPEvaluator(BenchmarkEvaluator):
                 max_input_tokens=max_input_tokens,
                 stop_strings=list(_base_stops),
                 progress_every=100, progress_label="MBPP",
+                score_key=_extract_completion,
             )]
 
         # Execution is CPU-side and stays exactly as it was.
@@ -685,6 +686,11 @@ class MBPPEvaluator(BenchmarkEvaluator):
             "exec_timeout_sec": exec_timeout,
             "per_problem": per_problem,
             "benchmark": "mbpp",
+            # The batch size prompts were decoded at. Greedy decoding is
+            # padding-invariant in exact arithmetic but not in float, so a
+            # long chain-of-thought can fork on a near-tie; recording the
+            # batch size is what makes this number reproducible.
+            "generation_batch_size": gen_batch_size(),
         }
         log_extra = ""
         if n_samples >= 10:

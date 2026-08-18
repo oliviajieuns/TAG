@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-from ._gen import generate_texts
+from ._gen import gen_batch_size, generate_texts
 from .base import BenchmarkEvaluator, register
 
 logger = logging.getLogger(__name__)
@@ -331,6 +331,7 @@ class BBHEvaluator(BenchmarkEvaluator):
                 max_input_tokens=max_input_tokens,
                 stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
                 progress_every=200, progress_label=task_name,
+                score_key=lambda r: _normalize(_extract_answer(r.strip())),
             )
 
             correct = 0
@@ -379,6 +380,11 @@ class BBHEvaluator(BenchmarkEvaluator):
             "tasks_with_official_cot_prompt": used_cot_count,
             "per_task": per_task,
             "benchmark": "bbh",
+            # The batch size prompts were decoded at. Greedy decoding is
+            # padding-invariant in exact arithmetic but not in float, so a
+            # long chain-of-thought can fork on a near-tie; recording the
+            # batch size is what makes this number reproducible.
+            "generation_batch_size": gen_batch_size(),
         }
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)

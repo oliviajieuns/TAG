@@ -8,7 +8,7 @@ import re
 from typing import Any, Dict, Optional
 
 
-from ._gen import generate_texts
+from ._gen import gen_batch_size, generate_texts
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import build_cot_prompt_prefix
 
@@ -160,6 +160,8 @@ class GSM8KEvaluator(BenchmarkEvaluator):
                 *_wrap_stops,
             ],
             progress_every=200, progress_label="GSM8K",
+            score_key=lambda r: _normalize_answer(
+                _extract_predicted_number(r.strip())),
         )
 
         correct = 0
@@ -189,6 +191,11 @@ class GSM8KEvaluator(BenchmarkEvaluator):
             "correct": correct,
             "total": len(test_data),
             "benchmark": "gsm8k",
+            # The batch size prompts were decoded at. Greedy decoding is
+            # padding-invariant in exact arithmetic but not in float, so a
+            # long chain-of-thought can fork on a near-tie; recording the
+            # batch size is what makes this number reproducible.
+            "generation_batch_size": gen_batch_size(),
             "per_question": results,
         }
         with open(output_file, "w") as f:

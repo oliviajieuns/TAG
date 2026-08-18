@@ -17,7 +17,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 
-from ._gen import generate_texts
+from ._gen import gen_batch_size, generate_texts
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import tydiqa_generation_prefix
 
@@ -691,6 +691,8 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
             model, tokenizer, prompts, device=device,
             max_new_tokens=max_new_tokens, max_input_tokens=2048,
             progress_every=500, progress_label="TyDiQA",
+            score_key=lambda r: _normalize(
+                r.strip().splitlines()[0] if r.strip() else ""),
         )
 
         for ex, pred in zip(examples, raw_preds):
@@ -771,6 +773,11 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 fewshot_fallback_reason is None and n_silent_zero_shot == 0
             ),
             "benchmark": "tydiqa",
+            # The batch size prompts were decoded at. Greedy decoding is
+            # padding-invariant in exact arithmetic but not in float, so a
+            # long chain-of-thought can fork on a near-tie; recording the
+            # batch size is what makes this number reproducible.
+            "generation_batch_size": gen_batch_size(),
             "per_language": per_lang_acc,
             "per_question": results,
         }

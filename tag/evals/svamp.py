@@ -22,10 +22,10 @@ import os
 from typing import Any, Dict, Optional
 
 
-from ._gen import generate_texts
+from ._gen import gen_batch_size, generate_texts
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import build_cot_prompt_prefix
-from .gsm8k import _grade
+from .gsm8k import _extract_predicted_number, _grade, _normalize_answer
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,8 @@ class SVAMPEvaluator(BenchmarkEvaluator):
             max_new_tokens=max_new_tokens, max_input_tokens=2048,
             stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
             progress_every=200, progress_label="SVAMP",
+            score_key=lambda r: _normalize_answer(
+                _extract_predicted_number(r.strip())),
         )
 
         correct = 0
@@ -152,6 +154,11 @@ class SVAMPEvaluator(BenchmarkEvaluator):
             "correct": correct,
             "total": len(test_data),
             "benchmark": "svamp",
+            # The batch size prompts were decoded at. Greedy decoding is
+            # padding-invariant in exact arithmetic but not in float, so a
+            # long chain-of-thought can fork on a near-tie; recording the
+            # batch size is what makes this number reproducible.
+            "generation_batch_size": gen_batch_size(),
             "per_question": results,
         }
         with open(output_file, "w") as f:

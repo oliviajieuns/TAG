@@ -38,7 +38,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 
-from ._gen import generate_texts
+from ._gen import gen_batch_size, generate_texts
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import tydiqa_generation_prefix
 
@@ -339,6 +339,8 @@ class XQuADEvaluator(BenchmarkEvaluator):
                     "\nAnswer:", "\n\nAnswer:",
                 ],
                 progress_every=500, progress_label=f"XQuAD/{lang}",
+            score_key=lambda r: _normalize(_strip_pred_preamble(
+                r.strip().splitlines()[0] if r.strip() else "")),
             )
 
             n_correct = 0
@@ -426,6 +428,11 @@ class XQuADEvaluator(BenchmarkEvaluator):
             "per_language": per_lang_em,
             "per_question": per_question,
             "benchmark": "xquad",
+            # The batch size prompts were decoded at. Greedy decoding is
+            # padding-invariant in exact arithmetic but not in float, so a
+            # long chain-of-thought can fork on a near-tie; recording the
+            # batch size is what makes this number reproducible.
+            "generation_batch_size": gen_batch_size(),
         }
         with open(output_file, "w") as f:
             json.dump(summary, f, indent=2)
