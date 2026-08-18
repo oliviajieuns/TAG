@@ -166,14 +166,18 @@ export TAG_GATE_CACHE_CLEAN="${TAG_GATE_CACHE_CLEAN:-$POOLS/clean_ref/tag_gate_q
 # ships an extra pre-formatted `text` column and twice the bytes.
 # The consolidated parquet is listed first because the arrow cache it came
 # from is deleted once scripts/consolidate_hf_datasets.py has run.
+# make_corrupted_pool.py reads a parquet directory directly, so the
+# consolidated corpus is used as-is with no JSON step.
+#
+# alpaca_gpt4/ is liangxin/Alpaca_GPT4 — the mirror configs/base.yaml has
+# always named as its dataset_name fallback, so it is what earlier runs drew
+# from. alpaca-gpt4/ (hyphen) is vicgalle's: same corpus, plus a
+# pre-formatted `text` column and twice the bytes. They are NOT
+# interchangeable; using the other one changes the tokenised text.
+export ALPACA_GPT4_DIR="${ALPACA_GPT4_DIR:-/group-volume/datasets/alpaca_gpt4}"
 export ALPACA_GPT4_JSON="${ALPACA_GPT4_JSON:-$(_tag_first_existing "" \
   "$TAG_WORKSPACE/datasets/alpaca_gpt4.json" \
-  "/group-volume/${USER:-nobody}/datasets/alpaca_gpt4.json" \
-  /group-volume/datasets/alpaca_gpt4/data/train.json \
-  /group-volume/IT-datasets/alpaca_gpt4/data/train.json)}"
-# make_corrupted_pool.py reads a parquet directory directly, so the
-# consolidated corpus needs no JSON step of its own.
-export ALPACA_GPT4_PARQUET="${ALPACA_GPT4_PARQUET:-/group-volume/datasets/alpaca_gpt4}"
+  "/group-volume/${USER:-nobody}/datasets/alpaca_gpt4.json")}"
 export TAG_MAIN_POOL="${TAG_MAIN_POOL:-$POOLS/alpaca_gpt4/pool.json}"
 export TAG_MAIN_CF="${TAG_MAIN_CF:-$POOLS/alpaca_gpt4/counterfactual.json}"
 # Gate calibration is BACKBONE-specific and, for this row, should not be fit on
@@ -208,7 +212,11 @@ export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-$TAG_WORKSPACE/eval-results}"
 # present. So: try every root we have seen, and for each benchmark try the
 # spellings it actually appears under. An explicit export always wins, and
 # TAG_BENCH_ROOTS prepends more roots without editing this file.
-_TAG_BENCH_ROOTS="${TAG_BENCH_ROOTS:-} $TAG_WORKSPACE/datasets /group-volume/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/${USER:-nobody}/datasets"
+# /group-volume/datasets is THE location (see CLAUDE.md): every corpus and
+# benchmark was consolidated there and the HF arrow caches deleted. It goes
+# first so a stale copy left in a workspace cannot shadow the real one. The
+# rest are historical and kept only so an older box still resolves.
+_TAG_BENCH_ROOTS="${TAG_BENCH_ROOTS:-} /group-volume/datasets $TAG_WORKSPACE/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/${USER:-nobody}/datasets"
 
 _tag_has() {  # _tag_has <dir> <glob>[|<glob>...] — does the dir hold the goods?
   local d="$1" rest="$2" g
@@ -293,6 +301,7 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] raw corpus: $ALPACA_RAW_JSON  [$(_tag_mark "$ALPACA_RAW_JSON")]"
   echo "[tag-env] lowq pool : $ALPACA_DATA_FILES  [$(_tag_mark "$ALPACA_DATA_FILES")]"
   echo "[tag-env] table2 pool: $TAG_MAIN_POOL  [$(_tag_mark "$TAG_MAIN_POOL")]"
+  echo "[tag-env] alpaca-gpt4: $ALPACA_GPT4_DIR  [$(_tag_mark "$ALPACA_GPT4_DIR")]  (liangxin mirror)"
   echo "[tag-env] gate ref 0.5b: $TAG_GATE_REF  [$(_tag_mark "$TAG_GATE_REF")]"
   echo "[tag-env] gate ref 7b  : $TAG_GATE_REF_7B  [$(_tag_mark "$TAG_GATE_REF_7B")]"
   echo "[tag-env] outputs   : $OUTPUT_ROOT"
