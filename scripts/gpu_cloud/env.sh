@@ -27,6 +27,7 @@ if [ -n "${TAG_ENV_RESET:-}" ]; then
         EVAL_RESULTS_ROOT TAG_EVAL_DATA TAG_BENCH_ROOTS \
         MODEL_PATH_QWEN25_05B MODEL_PATH_QWEN25_7B MODEL_PATH_LLAMA2_7B \
         MODEL_PATH_LLAMA31_8B TAG_GATE_REF_L31 TAG_GATE_CACHE_L31 \
+        TAG_GATE_REF_Q7 TAG_GATE_CACHE_Q7 \
         ALPACA_RAW_JSON ALPACA_DATA_FILES ALPACA_GPT4_JSON ALPACA_GPT4_DIR \
         TAG_CF_FILES TAG_DEDUP_FILE \
         TAG_GATE_REF TAG_GATE_REF_7B TAG_GATE_REF_7B_NONULL \
@@ -246,6 +247,8 @@ export MODEL_PATH_LLAMA31_8B="$(_tag_first_existing config.json \
   "$TAG_WORKSPACE/models/llama31-8b")"
 export TAG_GATE_REF_L31="${TAG_GATE_REF_L31:-$POOLS/clean_ref/delta_hat_llama31_prefix.pt}"
 export TAG_GATE_CACHE_L31="${TAG_GATE_CACHE_L31:-$POOLS/alpaca_gpt4/tag_gate_llama31-8b_prefix.pt}"
+export TAG_GATE_REF_Q7="${TAG_GATE_REF_Q7:-$POOLS/clean_ref/delta_hat_qwen7b_main_prefix.pt}"
+export TAG_GATE_CACHE_Q7="${TAG_GATE_CACHE_Q7:-$POOLS/alpaca_gpt4/tag_gate_qwen2.5-7b_prefix.pt}"
 export TAG_GATE_CACHE_LLAMA2="${TAG_GATE_CACHE_LLAMA2:-$POOLS/alpaca_gpt4/tag_gate_llama2-7b_prefix.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub

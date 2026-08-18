@@ -1,0 +1,30 @@
+# PIPELINE REHEARSAL — not a table row.
+#
+# Qwen2.5-7B-INSTRUCT standing in for LLaMA-2-7B-base while the real
+# checkpoint uploads. It exercises everything the Table 2 run does — gate
+# calibration, the shared cache, selection, SFT, the eight-benchmark eval,
+# the table — so a wiring fault surfaces here instead of four hours into the
+# real thing.
+#
+# Its numbers are NOT comparable to Table 2 and must never be merged into it:
+#   - different family (Qwen2.5-7B vs LLaMA-2-7B)
+#   - INSTRUCT, not base. An instruction-tuned model follows instructions
+#     better, so Delta_hat separates more easily and the gate looks stronger
+#     than the base-model setting would show.
+#   - one epoch, not three
+# output_subdir keeps the results under smoke/, out of the Table 2 tree.
+defaults:
+  - configs/base.yaml
+  - configs/methods/legacy.yaml
+  - configs/models/qwen2.5-7b.yaml
+  - configs/modes/full_ft.yaml
+
+output_subdir: smoke/legacy_q7
+data_files: ${oc.env:TAG_MAIN_POOL,}
+selection_ratio: 0.1
+train_epochs: 1
+# Full FT 7B needs 8-bit AdamW to fit on one 80 GB card (full_ft.yaml);
+# legacy_10.yaml turns it off for a 4-GPU DDP run; a rehearsal keeps it on.
+use_8bit_optimizer: true
+warmup_ratio: 0.06
+gradient_clip: 0.5
