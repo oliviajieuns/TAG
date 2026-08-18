@@ -44,6 +44,15 @@ Cite the sha256, not the name — `make_corrupted_pool.py` records it for the
 corpus a pool was built from, under `inputs` in that pool's
 `corruption_manifest.json`.
 
+The Table 2 pool (`$POOLS/alpaca_gpt4`, built 2026-08, seed 42) came from:
+
+```
+vicgalle/alpaca-gpt4   /group-volume/datasets/alpaca-gpt4
+train-00000-of-00001.parquet
+sha256 7f16a6f433119e28a9ff906cdb74752c28a721dffd1f6e45600a1d90e57f2543
+n_total 52002
+```
+
 ## Two experiments that are easy to confuse
 
 | | Table 2 row | lowq robustness grid |
