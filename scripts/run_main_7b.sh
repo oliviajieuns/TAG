@@ -50,6 +50,12 @@ NPROC=${NPROC:-}                 # if empty, derived from GPUS
 # Override with --master_port=29500 (or env MASTER_PORT=29500) for a fixed
 # port — typically only useful for multi-node debugging.
 MASTER_PORT=${MASTER_PORT:-$(( 29500 + $$ % 1000 ))}
+# Passed straight through to tag.train --override. The one that matters:
+# full_ft.yaml sizes batch_size 8 x grad_accum 4 x world_size 4 = 128, so a
+# single-GPU run needs grad_accum=16 to keep the same effective batch. Set it
+# for EVERY arm of a comparison or the arms differ by more than the method.
+#   OVERRIDES="grad_accum=16" SET=smoke MODELS="" ... --parallel
+OVERRIDES=${OVERRIDES:-}
 PARALLEL=0
 
 # ----- CLI args -----
@@ -77,7 +83,7 @@ fi
 IFS=',' read -r -a _gpus_arr <<< "$GPUS"
 
 echo "[run_main_7b] GPUS=$GPUS  NPROC=$NPROC  PARALLEL=$PARALLEL"
-echo "[run_main_7b] SET=$SET MODELS=$MODELS"
+echo "[run_main_7b] SET=$SET MODELS=$MODELS OVERRIDES=${OVERRIDES:-<none>}"
 echo "[run_main_7b] METHODS=$METHODS"
 
 mkdir -p logs
@@ -96,7 +102,8 @@ run_ddp() {
   CUDA_VISIBLE_DEVICES="${GPUS}" torchrun \
     --nproc_per_node="${NPROC}" \
     --master_port="${MASTER_PORT}" \
-    -m tag.train --config "$cfg" 2>&1 | tee -a "$log"
+    -m tag.train --config "$cfg" \
+    ${OVERRIDES:+--override $OVERRIDES} 2>&1 | tee -a "$log"
 }
 
 run_parallel_single_gpu() {
@@ -112,6 +119,7 @@ run_parallel_single_gpu() {
   echo "=== ${SET}${seg}/${method} (GPU ${gpu}, background) ==="
   CUDA_VISIBLE_DEVICES="$gpu" \
     nohup python -m tag.train --config "$cfg" \
+    ${OVERRIDES:+--override $OVERRIDES} \
     >> "$log" 2>&1 &
 }
 
@@ -128,7 +136,7 @@ if [ "$PARALLEL" = "1" ]; then
     done
   done
   echo "Launched ${#pids[@]} jobs (cycled across GPUs ${GPUS}). PIDs: ${pids[*]}"
-  echo "Tail logs/main_7b_*.log for progress."
+  echo "Tail logs/${SET}_*.log for progress."
   wait "${pids[@]}"
 else
   for model in $MODELS; do
