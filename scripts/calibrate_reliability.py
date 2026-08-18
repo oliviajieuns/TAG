@@ -285,13 +285,22 @@ def main() -> None:
                 "%.1f%%.", 100.0 * fit["zero_rate"],
             )
         logger.info("  calibrated s = %.6f  →  export TAG_GATE_SCALE=%.6f", s, s)
+        # prefix_tokens is FIRST because with prefix_tokens > 0 it is the
+        # statistic — the span partition W governs only the Eq. 5 tail, which
+        # is off in the measured-best configuration. The old message printed
+        # W and omitted prefix_tokens entirely, so the one field that decides
+        # what was calibrated was the one field you could not read off the
+        # log. A gate cache stamped prefix_tokens=0 under an arm using 32 is
+        # exactly the mismatch this line is supposed to make visible.
         logger.info(
             "Gate config used for calibration MUST match the training config "
-            "(W=%d, tau=%.3f/%s, min_span=%d, tail=%s, include_eos=%s, "
-            "target_zero_rate=%.3f) — a different span partition yields a different "
-            "Δ̂ distribution and silently mis-scales the gate.",
+            "(prefix_tokens=%d, tail=%s/q=%.3f, W=%d, tau=%.3f/%s, "
+            "min_span=%d, include_eos=%s, c_trunc=%.3f, target_zero_rate=%.3f) "
+            "— a different support statistic yields a different Δ̂ "
+            "distribution and silently mis-scales the gate.",
+            gcfg.prefix_tokens, gcfg.tail_mode, gcfg.tail_quantile,
             gcfg.span_tokens, gcfg.tau, gcfg.tau_mode, gcfg.min_span_tokens,
-            gcfg.tail_mode, gcfg.include_eos, target_zero_rate,
+            gcfg.include_eos, gcfg.c_trunc, target_zero_rate,
         )
         # The generic contamination check below judges what Eq. 6 will
         # actually see, which is the CENTRED statistic when the correction is
