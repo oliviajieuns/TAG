@@ -18,6 +18,11 @@
 #   MODELS="llama2 qwen25" METHODS="legacy_10 random_10" \
 #       bash scripts/run_main_7b.sh
 #
+# SET names the directory under configs/experiments/ and under OUTPUT_ROOT.
+# Sets without a per-model level (smoke, lowq, clean) pass MODELS="":
+#   SET=smoke MODELS="" METHODS="legacy_q7 tag_q7" \
+#       bash scripts/run_main_7b.sh --gpus 0,1,2,3
+#
 # Legacy parallel mode (1 GPU per concurrent experiment, e.g. for the
 # 0.5B / LoRA experiments): pass `--parallel`. Each experiment is then
 # bound to a single GPU from the GPUS list, cycled through.
@@ -30,7 +35,11 @@ if [ -z "${OUTPUT_ROOT:-}" ]; then
   source scripts/setup_env.sh
 fi
 
-MODELS=${MODELS:-"llama2 qwen25 mistral deepseek"}
+SET=${SET:-main_7b}
+MODELS=${MODELS-"llama2 qwen25 mistral deepseek"}
+# "-" is the no-per-model-level marker; smoke/lowq/clean lay out as
+# <set>/<method> with no model directory between them.
+[ -z "${MODELS// /}" ] && MODELS="-"
 # Default methods = 4-experiment main matrix (paper-faithful 10% / full).
 METHODS=${METHODS:-"full_100 random_10 data_agent_10 legacy_10"}
 GPUS=${GPUS:-"0,1,2,3"}
@@ -68,20 +77,22 @@ fi
 IFS=',' read -r -a _gpus_arr <<< "$GPUS"
 
 echo "[run_main_7b] GPUS=$GPUS  NPROC=$NPROC  PARALLEL=$PARALLEL"
-echo "[run_main_7b] MODELS=$MODELS"
+echo "[run_main_7b] SET=$SET MODELS=$MODELS"
 echo "[run_main_7b] METHODS=$METHODS"
 
 mkdir -p logs
 
 run_ddp() {
   local model=$1 method=$2
-  local cfg="configs/experiments/main_7b/${model}/${method}.yaml"
-  local log="logs/main_7b_${model}_${method}.log"
+  local seg=""
+  [ "$model" != "-" ] && seg="/${model}"
+  local cfg="configs/experiments/${SET}${seg}/${method}.yaml"
+  local log="logs/${SET}_${model}_${method}.log"
   if [ ! -f "$cfg" ]; then
     echo "[skip] missing config: $cfg" >&2
     return 0
   fi
-  echo "=== ${model} / ${method} (GPUs=${GPUS}, nproc=${NPROC}) ==="
+  echo "=== ${SET}${seg}/${method} (GPUs=${GPUS}, nproc=${NPROC}) ==="
   CUDA_VISIBLE_DEVICES="${GPUS}" torchrun \
     --nproc_per_node="${NPROC}" \
     --master_port="${MASTER_PORT}" \
@@ -90,13 +101,15 @@ run_ddp() {
 
 run_parallel_single_gpu() {
   local model=$1 method=$2 gpu=$3
-  local cfg="configs/experiments/main_7b/${model}/${method}.yaml"
-  local log="logs/main_7b_${model}_${method}.log"
+  local seg=""
+  [ "$model" != "-" ] && seg="/${model}"
+  local cfg="configs/experiments/${SET}${seg}/${method}.yaml"
+  local log="logs/${SET}_${model}_${method}.log"
   if [ ! -f "$cfg" ]; then
     echo "[skip] missing config: $cfg" >&2
     return 0
   fi
-  echo "=== ${model} / ${method} (GPU ${gpu}, background) ==="
+  echo "=== ${SET}${seg}/${method} (GPU ${gpu}, background) ==="
   CUDA_VISIBLE_DEVICES="$gpu" \
     nohup python -m tag.train --config "$cfg" \
     >> "$log" 2>&1 &
