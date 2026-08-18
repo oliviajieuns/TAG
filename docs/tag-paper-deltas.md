@@ -830,18 +830,110 @@ So, for the paper:
   re-score that benchmark alone at `TAG_EVAL_GEN_BS=1` before reporting it.
   Do not re-score one arm and not the other.
 
+### D2. Measured on the Table 2 backbone (LLaMA-2-7B, clean Alpaca-GPT4)
+
+Numbers from the calibration and gate precompute for the Table 2 row
+(`main_7b/llama2/tag_10`, pool sha `d5d8ccc6…`, n=52 002, dirty 0.0%;
+clean reference `pools/clean_ref`, n=51 760 — **a different snapshot from
+the training pool, and the paper's provenance has to say so**).
+
+Calibrated `s = 0.031586` (P10 = 0.0438, target_q = 0.80), null curve fit
+on 15 length bins at W=16.
+
+**G on the training pool** — the measured share of intermediate weights that
+C7 asks for:
+
+| | |
+|---|---|
+| `G == 0` | 5.0% (2 590) |
+| `0 < G < 0.99` | **42.3%** |
+| `G >= 0.99` | 52.7% |
+
+Nearly half the pool carries a weight strictly between the floor and 1. "Gate"
+must not be described as binary; on clean data it is overwhelmingly a
+reweighting, and the exact zero reaches only the configured 5%. The Qwen
+rehearsal on the same corpus gave 4.8% / 49.3%, so the shape is not a
+backbone accident.
+
+**A5, the per-length-bin clean zero-weight rates: they are NOT uniform.**
+The Eq. 5\('\) centring targets 5.0% in every bin and delivers 3.3%–9.1%:
+
+| M | 1 | 2 | 3 | 4 | 5-6 | 7-8 | 9-10 | 11-12 | 13-14 | 15-16 | 17-18 | 19-20 | 21-23 | 24-26 | 27-30 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| zero % | 5.0 | 5.0 | **9.1** | **7.9** | 6.1 | 5.0 | 3.8 | 4.7 | 4.3 | 4.1 | **3.3** | 3.9 | 4.0 | 4.6 | 5.0 |
+
+The PAVA monotone projection ties \(\mu\) to a single value (+0.2005) across
+bins 3-26, so short responses overshoot the target and mid-length ones
+undershoot. Only M=1 (+0.2586) and M=2 (+0.2072) get their own level — which
+is itself the length effect, since a 32-token prefix covers a 1-span response
+entirely. With `tail_mode: none` there is no span minimum and the
+M-dependence *should* vanish; that it does not, at the short end, is a
+residual length bias and belongs in the limitations, not in a claim that the
+correction is uniform.
+
+**B4, the completeness heuristic's cost on clean data.** On the clean Table 2
+corpus it flags **4 336 of 52 002 records (8.3%)** as incomplete, each taking
+`c_trunc = 0.20` — a five-fold demotion. That is the largest single lever the
+gate pulls on a clean pool: the hard zero touches 5%, this touches 8.3% and
+divides by five. Not all of them are false positives (Alpaca-GPT4 does
+contain truncated responses), but a string heuristic demoting one record in
+twelve of a clean corpus is the number `scripts/audit_completeness.py` has to
+be pointed at before the paper claims the demotion is targeted.
+
+### D3. The selection advantage saturates at epoch 2, and part of it is the baseline getting worse
+
+Measured on the lowq grid (composite20, n=59 516, 30.4% corrupted,
+Qwen2.5-7B-Instruct, seed 42), corrupted fraction of the selected subset:
+
+| epoch | legacy | tag_prefix | gap | Jaccard |
+|---|---|---|---|---|
+| 1 | 66.4% | 20.1% | 46.3pp | 0.191 |
+| 2 | 67.2% | 16.8% | **50.4pp** | 0.146 |
+| 3 | 67.3% | 17.2% | 50.1pp | 0.146 |
+
+**92% of the final separation is already present after one epoch**, and both
+the gap and the subset overlap reach a fixed point at epoch 2. There is no
+compounding curve to plot over three epochs, and no case for keeping
+per-epoch checkpoints to chase one.
+
+What *does* move across epochs is the baseline, in the wrong direction:
+legacy's over-selection of `noisy` goes 4.82x → 7.03x → 7.02x, a 46% increase
+after one epoch of training on it. A selector with no reliability term becomes
+more attracted to noise as it trains on noise. A fair share of the +4.1pp the
+gap gains from epoch 1 to 2 is that, not TAG improving.
+
+**The one corruption type where the baseline wins.** Per-type selection rate
+against each type's share of the pool, epoch 3:
+
+| | duplicate | mismatch | noisy | truncated | wrong_answer |
+|---|---|---|---|---|---|
+| legacy | 0.89x | 3.37x | 7.02x | 2.18x | **0.24x** |
+| tag_prefix | 0.37x | 0.61x | 0.69x | 0.88x | 0.66x |
+
+TAG is 2.4x–10.2x better on four of five types and **2.8x worse on
+`wrong_answer`**, and the mechanism is legible: legacy's \(R\) is effectively
+loss-seeking, so it hoovers up high-loss garbage (noisy, 7x) and avoids
+fluent-but-wrong answers precisely because they are fluent and score low loss.
+The gate has no such bias and selects them near the base rate. The paper must
+not claim TAG dominates every corruption type — it dominates in aggregate
+(17.2% vs 67.3% dirty) while losing this one axis to an accident of the
+baseline's own bias.
+
 ## Checklist before submission
 
 - [ ] A1-A4 folded into the equations (these are correctness fixes)
 - [ ] A6 per-type AP table reported; Eqs. 4-5 demoted to an ablation;
       wrong_answer limitation and c_i's role in T3 stated
 - [ ] A5 Eq. 5\('\) added; \(\alpha\) stated; per-length-bin clean zero-weight rates
-      reported; the `tag_nonull_7b` ablation in the results table
+      reported (measured in D2 — they range 3.3-9.1% against a 5.0% target,
+      so report the spread, not the target); the `tag_nonull_7b` ablation in
+      the results table
 - [ ] B1 \(\mathcal{C}_i\) redefined on the per-token mean
 - [ ] B2 \(W\) sweep run and reported; length-bias profile reported
 - [ ] B3 calibration statistic named as the CENTRED \(\hat\Delta\)
 - [ ] B4 completeness heuristic's precision / recall / FP rate measured with
-      `scripts/audit_completeness.py` and reported
+      `scripts/audit_completeness.py` and reported — D2 has the exposure it
+      needs to be measured against: 8.3% of a CLEAN corpus demoted 5-fold
 - [ ] C1 "single forward pass" -> "one forward pass per pool, then cached"
 - [ ] C2 non-compensation split into the exact-zero case and the
       small-gate ratio, with the measured reward ratio
@@ -851,10 +943,13 @@ So, for the paper:
 - [ ] C6 "length-matched instruction" -> "same response-length stratum"
 - [ ] C7 decision vocabulary ('veto', 'reject') replaced; G described as a
       continuous weight with an ATTAINABLE floor, with the measured share
-      of intermediate weights; the two-sided cost noted in limitations
+      of intermediate weights (D2: 42.3% graded, 5.0% at the floor); the
+      two-sided cost noted in limitations
 - [ ] `n_zero_weight_selected` from metrics.json reported, not `budget_fits@K`
       inferred — the dedup constraint can force a backfill even when the
       gated set is larger than the budget
 - [ ] D1 eval batch size stated in the reproducibility note, with the
       measured ~0.2pp perturbation and the fixed-across-arms rule
+- [ ] D3's two negative results stated: the advantage saturates at epoch 2,
+      and `wrong_answer` is selected 2.8x MORE by TAG than by the baseline
 - [ ] measured numbers substituted for every placeholder above
