@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
+from ._gen import generate_texts
 from .base import BenchmarkEvaluator, register
 
 logger = logging.getLogger(__name__)
@@ -570,44 +571,60 @@ class MBPPEvaluator(BenchmarkEvaluator):
         # per-problem list of pass/fail (length = n_samples per problem) for
         # unbiased pass@k estimation (Chen et al. codex Eq.1).
         problem_results: List[List[bool]] = []
-        for i, ex in enumerate(test_records):
+
+        prompts = []
+        for ex in test_records:
             raw_prompt = _build_mbpp_prompt(demos, ex)
-            prompt = (
+            prompts.append(
                 _wrap(raw_prompt, prompt_style=prompt_style)
-                if _wrap is not None
-                else raw_prompt
+                if _wrap is not None else raw_prompt
             )
-            inputs = tokenizer(
-                prompt, return_tensors="pt",
-                truncation=True, max_length=max_input_tokens,
-            ).to(device)
-            gen_kwargs = dict(
-                max_new_tokens=max_new_tokens,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                stop_strings=list(_base_stops),
-                tokenizer=tokenizer,
-            )
-            if use_sampling:
-                gen_kwargs.update(
-                    do_sample=True,
-                    temperature=temperature,
-                    top_p=top_p,
+
+        # Greedy is one completion per problem, so the whole benchmark is
+        # one batched decode (see tag/evals/_gen.py). The sampling path
+        # already batches its n_samples inside a single generate() call and
+        # is left alone — batching across problems on top of that would
+        # multiply the peak KV cache by n_samples.
+        raw_samples: List[List[str]] = []
+        if use_sampling:
+            for ex, prompt in zip(test_records, prompts):
+                inputs = tokenizer(
+                    prompt, return_tensors="pt",
+                    truncation=True, max_length=max_input_tokens,
+                ).to(device)
+                out = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                    stop_strings=list(_base_stops),
+                    tokenizer=tokenizer,
+                    do_sample=True, temperature=temperature, top_p=top_p,
                     num_return_sequences=n_samples,
                 )
-            else:
-                gen_kwargs.update(do_sample=False, temperature=0.0)
+                prompt_tok_len = inputs["input_ids"].shape[1]
+                raw_samples.append([
+                    tokenizer.decode(out[j, prompt_tok_len:],
+                                     skip_special_tokens=True)
+                    for j in range(out.shape[0])
+                ])
+                del inputs, out
+                if torch.cuda.is_available() and len(raw_samples) % 50 == 0:
+                    torch.cuda.empty_cache()
+        else:
+            raw_samples = [[t] for t in generate_texts(
+                model, tokenizer, prompts, device=device,
+                max_new_tokens=max_new_tokens,
+                max_input_tokens=max_input_tokens,
+                stop_strings=list(_base_stops),
+                progress_every=100, progress_label="MBPP",
+            )]
 
-            out = model.generate(**inputs, **gen_kwargs)
-            prompt_tok_len = inputs["input_ids"].shape[1]
-
-            # `out` is (n_samples, seq_len) under sampling, (1, seq_len) greedy.
+        # Execution is CPU-side and stays exactly as it was.
+        for i, (ex, raws) in enumerate(zip(test_records, raw_samples)):
             this_pass_flags: List[bool] = []
             this_completions: List[str] = []
             this_errors: List[Optional[str]] = []
-            for sample_idx in range(out.shape[0]):
-                raw = tokenizer.decode(
-                    out[sample_idx, prompt_tok_len:], skip_special_tokens=True,
-                )
+            for raw in raws:
                 completion = _extract_completion(raw)
                 run = _run_in_subprocess(
                     completion, ex["test_list"], ex["test_setup_code"], exec_timeout,
@@ -627,11 +644,6 @@ class MBPPEvaluator(BenchmarkEvaluator):
                 "error": this_errors[0],
                 "completion": this_completions[0],
             })
-
-            del inputs, out
-            # Throttle empty_cache to every 50 iters (matches xquad.py).
-            if torch.cuda.is_available() and (i + 1) % 50 == 0:
-                torch.cuda.empty_cache()
 
             if (i + 1) % 25 == 0:
                 _so_far_p1 = sum(r[0] for r in problem_results) / (i + 1)

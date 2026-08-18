@@ -37,8 +37,8 @@ import string
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
 
+from ._gen import generate_texts
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import tydiqa_generation_prefix
 
@@ -270,10 +270,10 @@ class XQuADEvaluator(BenchmarkEvaluator):
         per_lang_total: Dict[str, int] = {}
         per_lang_f1_sum: Dict[str, float] = {}
         per_question: List[Dict[str, Any]] = []
-        # Global counter for empty_cache interval. KV cache for a 30-token
-        # generation is small enough that we don't need to drain after
-        # every item; interval of empty_cache_interval keeps the allocator
-        # tidy without the per-step sync cost.
+        # Kept as a progress/telemetry counter. Allocator hygiene moved
+        # into generate_texts(), which drains between batches;
+        # `empty_cache_interval` is accepted for call-site compatibility and
+        # no longer drives anything here.
         _seen_global = 0
 
         # Audit A5: pull demos from the English split for all non-English target
@@ -313,47 +313,39 @@ class XQuADEvaluator(BenchmarkEvaluator):
             if limit is not None:
                 test_items = test_items[:limit]
 
+            # One generate() per example was the whole cost of this
+            # benchmark (14k questions across 11 languages). Prompts are
+            # built up front and decoded in batches; the prompt text, the
+            # stop strings and every post-processing step below are
+            # unchanged. See tag/evals/_gen.py.
+            prompts = [
+                tydiqa_generation_prefix(
+                    ex["context"], ex["question"],
+                    prompt_style=prefix_style, demos=demos,
+                )
+                for ex in test_items
+            ]
+            # Stop on the next demo's header — the model often hallucinates
+            # a continuation like "\nContext: <next>" or "\nQuestion:".
+            # The post-decode trim below stays as belt-and-braces for any
+            # separator variant that slips through.
+            raw_preds = generate_texts(
+                model, tokenizer, prompts, device=device,
+                max_new_tokens=max_new_tokens,
+                max_input_tokens=max_input_tokens,
+                stop_strings=[
+                    "\nContext:", "\n\nContext:",
+                    "\nQuestion:", "\n\nQuestion:",
+                    "\nAnswer:", "\n\nAnswer:",
+                ],
+                progress_every=500, progress_label=f"XQuAD/{lang}",
+            )
+
             n_correct = 0
             n_total = 0
-            for ex in test_items:
-                prompt = tydiqa_generation_prefix(
-                    ex["context"], ex["question"],
-                    prompt_style=prefix_style,
-                    demos=demos,
-                )
-                inputs = tokenizer(
-                    prompt, return_tensors="pt",
-                    truncation=True, max_length=max_input_tokens,
-                ).to(device)
-                out = model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    temperature=0.0,
-                    pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                    # Stop on the next demo's header — model often
-                    # hallucinates a continuation like "\nContext: <next>"
-                    # or "\nQuestion:". transformers ≥ 4.34 uses a fast
-                    # C path for stop_strings so the per-token overhead
-                    # is negligible, AND it short-circuits generation
-                    # ~15–30 steps earlier than letting it run to
-                    # max_new_tokens. The post-decode trim below stays as
-                    # a belt-and-braces in case any separator variant
-                    # slipped through.
-                    stop_strings=[
-                        "\nContext:", "\n\nContext:",
-                        "\nQuestion:", "\n\nQuestion:",
-                        "\nAnswer:", "\n\nAnswer:",
-                    ],
-                    tokenizer=tokenizer,
-                )
-                prompt_tok_len = inputs["input_ids"].shape[1]
-                gen_ids = out[0, prompt_tok_len:]
-                pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-                # XQuAD gold is a short extractive span. Defense-in-depth
-                # alongside stop_strings: trim at the next demo header that
-                # may have slipped through anyway, then take only the
-                # first line.
+            for ex, pred in zip(test_items, raw_preds):
+                pred = pred.strip()
+                # XQuAD gold is a short extractive span.
                 for sep in ("\nContext:", "\nQuestion:", "\nAnswer:",
                             "\n\nContext:", "\n\nQuestion:", "\n\nAnswer:"):
                     idx = pred.find(sep)
@@ -382,15 +374,7 @@ class XQuADEvaluator(BenchmarkEvaluator):
                     "correct": ok,
                     "f1": round(f1, 4),
                 })
-
-                del inputs, out, gen_ids
                 _seen_global += 1
-                if (
-                    torch.cuda.is_available()
-                    and empty_cache_interval > 0
-                    and _seen_global % empty_cache_interval == 0
-                ):
-                    torch.cuda.empty_cache()
 
             per_lang_correct[lang] = n_correct
             per_lang_total[lang] = n_total

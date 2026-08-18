@@ -35,7 +35,7 @@ if [ -n "${TAG_ENV_RESET:-}" ]; then
         TAG_GATE_CACHE TAG_GATE_CACHE_NONULL TAG_GATE_CACHE_BAR \
         TAG_GATE_CACHE_PREFIX TAG_GATE_CACHE_CLEAN TAG_GATE_CACHE_LLAMA2 \
         TAG_CLEAN_POOL TAG_CLEAN_CF TAG_MAIN_POOL TAG_MAIN_CF \
-        TAG_EPISODE_BS TAG_EPISODE_BS_7B \
+        TAG_EPISODE_BS TAG_EPISODE_BS_7B TAG_EVAL_GEN_BS \
         MMLU_DATA_DIR MMLU_PRO_DATA_DIR GSM8K_DATA_DIR SVAMP_DATA_DIR \
         HUMANEVAL_DATA_DIR MBPP_DATA_DIR TYDIQA_DATA_DIR XQUAD_DATA_DIR \
         BBH_DATA_DIR 2>/dev/null
@@ -412,6 +412,17 @@ export BBH_DATA_DIR="$(_tag_bench_dir BBH_DATA_DIR '*.json|*/*.json' '' bbh BIG-
 export TAG_EPISODE_BS="${TAG_EPISODE_BS:-64}"        # 0.5B
 export TAG_EPISODE_BS_7B="${TAG_EPISODE_BS_7B:-32}"  # 7B
 
+# How many benchmark prompts are decoded per model.generate() call. Every
+# evaluator except HumanEval used to generate one example at a time, which
+# is bandwidth-bound at 7B: BBH ran at ~16 examples/min, i.e. ~7 h for BBH
+# alone and >20 h for the eight Table 2 benchmarks, per arm. Batching does
+# not change what is computed (tests/test_evals_batched_gen.py pins
+# batched == unbatched); it changes how many times the weights are read.
+#   16 fits a 7B MHA model (LLaMA-2) with 3k-token BBH prompts on an 80GB
+#   card; the evaluator halves it automatically on OOM.
+#   TAG_EVAL_GEN_BS=1 restores the old one-at-a-time path exactly.
+export TAG_EVAL_GEN_BS="${TAG_EVAL_GEN_BS:-16}"
+
 # The PCA in TrajectoryAnchor.update runs torch.linalg.eigh per layer; on
 # hosts with many cores each call spawns OMP_NUM_THREADS workers in tight
 # succession and can blow past the container's pids limit.
@@ -450,6 +461,7 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
   echo "[tag-env] outputs   : $OUTPUT_ROOT"
   echo "[tag-env] eval out  : $EVAL_RESULTS_ROOT"
   echo "[tag-env] fwd batch : 0.5b=$TAG_EPISODE_BS  7b=$TAG_EPISODE_BS_7B"
+  echo "[tag-env] eval gen bs: $TAG_EVAL_GEN_BS  (per generate() call)"
   # The paper's Table 2 is these eight, in this order.
   _tag_have=""; _tag_missing=""
   for _pair in mmlu:MMLU_DATA_DIR bbh:BBH_DATA_DIR svamp:SVAMP_DATA_DIR \

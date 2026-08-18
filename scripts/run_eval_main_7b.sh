@@ -69,6 +69,7 @@ if ! python scripts/check_eval_data.py --benchmarks "$BENCHMARKS"; then
 fi
 
 echo "[run_eval] SET=$SET  GPUS=$GPUS  PARALLEL=$PARALLEL  BENCHMARKS=$BENCHMARKS"
+echo "[run_eval] generation batch size: ${TAG_EVAL_GEN_BS:-16} (TAG_EVAL_GEN_BS; 1 = old one-at-a-time path)"
 echo "[run_eval] MODELS=$MODELS"
 echo "[run_eval] METHODS=$METHODS"
 

@@ -23,8 +23,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
 
+from ._gen import generate_texts
 from .base import BenchmarkEvaluator, register
 
 logger = logging.getLogger(__name__)
@@ -433,7 +433,10 @@ class MMLUProEvaluator(BenchmarkEvaluator):
         per_question: List[Dict[str, Any]] = []
         n_extract_fail = 0
 
-        for i, ex in enumerate(test_records):
+        prompts: List[str] = []
+        cats: List[str] = []
+        n_opts_all: List[int] = []
+        for ex in test_records:
             cat = _safe_str(ex.get("category"), "unknown")
             demos = demos_by_cat.get(cat, [])
             # Pass options through as-is (None / list / ndarray all handled by
@@ -449,26 +452,24 @@ class MMLUProEvaluator(BenchmarkEvaluator):
             prompt, n_opts = _build_prompt(
                 demos, _safe_str(ex.get("question")), raw_opts, cat,
             )
+            prompts.append(prompt)
+            cats.append(cat)
+            n_opts_all.append(n_opts)
 
-            inputs = tokenizer(
-                prompt, return_tensors="pt",
-                truncation=True, max_length=max_input_tokens,
-            ).to(device)
-            out = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                temperature=0.0,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                # Stop on a new "Question:" — model often hallucinates the
-                # next demonstration after answering.
-                stop_strings=["\nQuestion:", "\n\nQuestion:"],
-                tokenizer=tokenizer,
-            )
-            prompt_tok_len = inputs["input_ids"].shape[1]
-            response = tokenizer.decode(
-                out[0, prompt_tok_len:], skip_special_tokens=True,
-            ).strip()
+        # Batched greedy decoding — see tag/evals/_gen.py. Stop on a new
+        # "Question:": the model often hallucinates the next demonstration
+        # after answering.
+        responses = generate_texts(
+            model, tokenizer, prompts, device=device,
+            max_new_tokens=max_new_tokens, max_input_tokens=max_input_tokens,
+            stop_strings=["\nQuestion:", "\n\nQuestion:"],
+            progress_every=500, progress_label="MMLU-Pro",
+        )
+
+        for i, (ex, cat, n_opts, response) in enumerate(
+            zip(test_records, cats, n_opts_all, responses)
+        ):
+            response = response.strip()
             # Trim hallucinated next-demo (safety net besides stop_strings).
             for stop in ("\n\nQuestion:", "\nQuestion:"):
                 idx = response.find(stop)
@@ -491,14 +492,7 @@ class MMLUProEvaluator(BenchmarkEvaluator):
                 "correct": ok,
             })
 
-            # Release CUDA tensors before the next 3K-token prompt. Same
-            # pattern as bbh.py / gsm8k.py / tydiqa.py — throttled to every
-            # 50 iters (matches xquad.py).
-            del inputs, out
-            if torch.cuda.is_available() and (i + 1) % 50 == 0:
-                torch.cuda.empty_cache()
-
-            if (i + 1) % 200 == 0:
+            if (i + 1) % 500 == 0:
                 running = sum(per_cat_correct.values()) / max(1, sum(per_cat_total.values()))
                 logger.info(
                     "  Progress: %d/%d | acc=%.4f", i + 1, len(test_records), running,

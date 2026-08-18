@@ -32,8 +32,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
 
+from ._gen import generate_texts
 from .base import BenchmarkEvaluator, register
 
 logger = logging.getLogger(__name__)
@@ -310,54 +310,34 @@ class BBHEvaluator(BenchmarkEvaluator):
             if limit is not None:
                 test_examples = test_examples[: limit]
 
-            correct = 0
-            for i, ex in enumerate(test_examples):
-                prompt, used_cot = _build_prompt(
-                    examples, ex["input"], n_fewshot, cot_prefix,
-                )
-                inputs = tokenizer(
-                    prompt, return_tensors="pt",
-                    truncation=True, max_length=max_input_tokens,
-                ).to(device)
-                # stop_strings: BBH cot-prompts 포맷에서 "Q:" 는 다음
-                # demonstration의 시작. 모델이 현재 답변을 마치고 "Q:"를
-                # 다시 emit하면 그 시점에 generation 중단 — 평균 ~30-40%
-                # token 절약 + 정답 추출에는 영향 없음(이미 답 부분은
-                # 직전에 생성 완료). "Question:" 는 chat-style 변형 대비.
-                # transformers >= 4.34 필수 (requirements.txt: >=4.40 OK).
-                out = model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    temperature=0.0,
-                    pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                    stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
-                    tokenizer=tokenizer,
-                )
-                # Token-id slicing — see tydiqa.py comment for the
-                # decode-round-trip BOS / whitespace mismatch the old
-                # `response[len(prompt):]` couldn't survive.
-                prompt_tok_len = inputs["input_ids"].shape[1]
-                response = tokenizer.decode(
-                    out[0, prompt_tok_len:], skip_special_tokens=True,
-                ).strip()
+            # Build every prompt first, then decode them in batches. The
+            # per-example generate() this replaced was the entire eval
+            # budget: greedy decoding at batch 1 is bandwidth-bound, so
+            # BBH's 6.5k examples ran at ~16/min. Nothing about the prompts
+            # or the extraction changed — see tag/evals/_gen.py for why the
+            # batched decode is the same computation.
+            prompts = [
+                _build_prompt(examples, ex["input"], n_fewshot, cot_prefix)[0]
+                for ex in test_examples
+            ]
+            # stop_strings: in the BBH cot-prompts format "Q:" starts the
+            # next demonstration, so a model that emits it has finished its
+            # answer — cutting there saves ~30-40% of the decoded tokens and
+            # cannot affect extraction. "Question:" covers chat-style
+            # variants. transformers >= 4.34 required (we pin >= 4.40).
+            responses = generate_texts(
+                model, tokenizer, prompts, device=device,
+                max_new_tokens=max_new_tokens,
+                max_input_tokens=max_input_tokens,
+                stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
+                progress_every=200, progress_label=task_name,
+            )
 
-                pred = _extract_answer(response)
+            correct = 0
+            for ex, response in zip(test_examples, responses):
+                pred = _extract_answer(response.strip())
                 if _normalize(pred) == _normalize(ex["target"]):
                     correct += 1
-
-                # Drop the per-example CUDA tensors and reclaim allocator
-                # blocks before the next 3072-token prompt is built. BBH
-                # accumulates ~6500 generate() calls per benchmark with
-                # prompt lengths near max_input_tokens; without periodic
-                # empty_cache the allocator fragments enough that a long
-                # task late in the run (notably tracking_shuffled_objects_*)
-                # can hang or OOM when it can't find a contiguous KV cache
-                # block. Mirrors the same hygiene humaneval.py:320 uses.
-                # Throttle to every 50 iters (matches xquad.py).
-                del inputs, out
-                if torch.cuda.is_available() and (i + 1) % 50 == 0:
-                    torch.cuda.empty_cache()
 
             n = len(test_examples)
             acc = correct / n if n else 0.0

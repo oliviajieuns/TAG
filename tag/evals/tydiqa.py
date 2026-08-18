@@ -16,8 +16,8 @@ import string
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
 
+from ._gen import generate_texts
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import tydiqa_generation_prefix
 
@@ -674,40 +674,28 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
         # were available for that language. Visible in the summary so a
         # custom dev.json doesn't silently downgrade to 0-shot.
         n_silent_zero_shot = 0
-        for i, ex in enumerate(examples):
-            gold = ex["answers"].get("text") or ["No answer"]
+        prompts = []
+        for ex in examples:
             ex_lang = ex.get("language", "unknown")
             demos = demos_by_lang.get(ex_lang) if effective_fewshot else None
             if effective_fewshot and not demos:
                 n_silent_zero_shot += 1
-            prompt = tydiqa_generation_prefix(
+            prompts.append(tydiqa_generation_prefix(
                 ex.get("context", ""), ex["question"],
-                prompt_style=prefix_style,
-                demos=demos,
-            )
-            inputs = tokenizer(
-                prompt, return_tensors="pt", truncation=True, max_length=2048,
-            ).to(device)
-            out = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                temperature=0.0,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-            )
-            # Slice on input_ids length, NOT on the decoded prompt string.
-            # tokenizer(...) auto-prepends BOS (e.g. <s> for Llama / Mistral)
-            # AND decode(skip_special_tokens=True) removes it again; the same
-            # round-trip also normalises whitespace and renders some special
-            # tokens differently. The result is that
-            # decode(out[0], skip_special_tokens=True)[:len(prompt)] is NOT
-            # the original prompt — slicing by prompt length lopped off
-            # characters from the generated answer too, which silently
-            # turned every EM into a near-empty / leading-fragment match and
-            # produced the all-zero EM the user reported.
-            prompt_tok_len = inputs["input_ids"].shape[1]
-            gen_ids = out[0, prompt_tok_len:]
-            pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+                prompt_style=prefix_style, demos=demos,
+            ))
+
+        # Batched greedy decoding — see tag/evals/_gen.py. Same prompts,
+        # same decode, same post-processing; only the batch axis is new.
+        raw_preds = generate_texts(
+            model, tokenizer, prompts, device=device,
+            max_new_tokens=max_new_tokens, max_input_tokens=2048,
+            progress_every=500, progress_label="TyDiQA",
+        )
+
+        for ex, pred in zip(examples, raw_preds):
+            gold = ex["answers"].get("text") or ["No answer"]
+            pred = pred.strip()
             # TyDiQA gold answers are short extractive spans. Take just the
             # first line so trailing prose / next "Question:" demonstrations
             # the model continued into don't poison the EM compare.
@@ -725,26 +713,6 @@ class TyDiQAEvaluator(BenchmarkEvaluator):
                 "correct": ok,
                 "f1": round(f1, 4),
             })
-
-            # Release per-example CUDA tensors so the next 5-shot prompt
-            # (~1.5k input + up to max_new_tokens generated) doesn't peak
-            # at 2× KV cache. Mirrors bbh.py / gsm8k.py / humaneval.py.
-            # ~5500 examples × ~10ms = ~55s overhead vs the OOM /
-            # fragmentation hang risk under concurrent multi-GPU eval.
-            # gen_ids is a slice-view of out, so it keeps the underlying
-            # storage alive even after `del out` — must drop it too for
-            # empty_cache() to actually reclaim the KV block.
-            del inputs, out, gen_ids
-            # Throttle empty_cache to every 50 iters (matches xquad.py).
-            if torch.cuda.is_available() and (i + 1) % 50 == 0:
-                torch.cuda.empty_cache()
-
-            if (i + 1) % 100 == 0:
-                logger.info(
-                    "  Progress: %d/%d | EM: %.4f | F1: %.4f",
-                    i + 1, len(examples),
-                    correct / (i + 1), f1_sum / (i + 1),
-                )
 
         em_score = correct / len(examples) if examples else 0.0
         f1_score = f1_sum / len(examples) if examples else 0.0

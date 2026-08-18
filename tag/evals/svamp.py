@@ -21,8 +21,8 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-import torch
 
+from ._gen import generate_texts
 from .base import BenchmarkEvaluator, register
 from ..data.sft_prompts import build_cot_prompt_prefix
 from .gsm8k import _grade
@@ -111,28 +111,24 @@ class SVAMPEvaluator(BenchmarkEvaluator):
         # Same left-truncation rationale as GSM8K.
         tokenizer.truncation_side = "left"
 
+        # Batched greedy decoding — see tag/evals/_gen.py. Prompt text,
+        # stop strings and grading are unchanged.
+        questions = [_combine_question(ex) for ex in test_data]
+        prompts = [build_cot_prompt_prefix(q) for q in questions]
+        responses = generate_texts(
+            model, tokenizer, prompts, device=device,
+            max_new_tokens=max_new_tokens, max_input_tokens=2048,
+            stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
+            progress_every=200, progress_label="SVAMP",
+        )
+
         correct = 0
         results = []
-        for i, ex in enumerate(test_data):
-            question = _combine_question(ex)
+        for i, (ex, question, response) in enumerate(
+            zip(test_data, questions, responses)
+        ):
             gold = _gold_answer(ex)
-            prompt = build_cot_prompt_prefix(question)
-            inputs = tokenizer(
-                prompt, return_tensors="pt", truncation=True, max_length=2048,
-            ).to(device)
-            out = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                temperature=0.0,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                stop_strings=["\nQ:", "\n\nQ:", "Question:", "\n\nQuestion:"],
-                tokenizer=tokenizer,
-            )
-            prompt_tok_len = inputs["input_ids"].shape[1]
-            response = tokenizer.decode(
-                out[0, prompt_tok_len:], skip_special_tokens=True,
-            ).strip()
+            response = response.strip()
             # Trim hallucinated next-demo (safety net besides stop_strings).
             for stop in ("\n\nQ:", "\nQ:", "\n\nQuestion:", "\nQuestion:"):
                 idx = response.find(stop)
@@ -149,18 +145,6 @@ class SVAMPEvaluator(BenchmarkEvaluator):
                 "predicted": response,
                 "correct": ok,
             })
-
-            del inputs, out
-            # Throttle empty_cache to every 50 iters (matches xquad.py /
-            # gsm8k.py). Eliminates ~80% of per-iter sync overhead.
-            if torch.cuda.is_available() and (i + 1) % 50 == 0:
-                torch.cuda.empty_cache()
-
-            if (i + 1) % 100 == 0:
-                logger.info(
-                    "  Progress: %d/%d | Acc: %.4f",
-                    i + 1, len(test_data), correct / (i + 1),
-                )
 
         accuracy = correct / len(test_data) if test_data else 0.0
         summary = {
