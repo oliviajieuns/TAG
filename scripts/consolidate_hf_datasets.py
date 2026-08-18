@@ -46,6 +46,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Bumped when the on-disk layout changes. A destination written by an older
+# version is not "already materialised" — the pre-config-aware layout merged
+# subsets into one file and has to be rewritten.
+_LAYOUT_VERSION = 2
+
 _SPLIT_RE = re.compile(r"-(train|test|validation|dev|eval)(?:-\d+)?\.arrow$", re.I)
 
 
@@ -89,19 +94,45 @@ def _split_of(f: Path) -> str:
     return "train"
 
 
-def _load_splits(files: List[Path]) -> Dict[str, Any]:
+def _config_of(f: Path, entry_dir: Path) -> str:
+    """The HF *config* (subset) a shard belongs to.
+
+    The cache nests as ``<ns>___<name>/<config>/<version>/<hash>/*.arrow``.
+    Ignoring that level merges subsets that are separate datasets with
+    separate schemas — jinzhuoran/rwku alone ships forget_level1,
+    neighbor_level2 and friends, and concatenating them fails on mismatched
+    features. The existing corpora in the destination keep the level too
+    (gsm8k/main/test.parquet), so preserving it also matches what the
+    evaluators already expect.
+    """
+    try:
+        rel = f.relative_to(entry_dir)
+    except ValueError:
+        return "default"
+    return rel.parts[0] if len(rel.parts) > 1 else "default"
+
+
+def _load_groups(files: List[Path], entry_dir: Path) -> Dict[Tuple[str, str], Any]:
+    """``{(config, split): Dataset}``, skipping groups that cannot be built."""
     from datasets import Dataset, concatenate_datasets
 
-    by_split: Dict[str, List[Any]] = {}
+    buckets: Dict[Tuple[str, str], List[Any]] = {}
     for f in files:
+        key = (_config_of(f, entry_dir), _split_of(f))
         try:
-            by_split.setdefault(_split_of(f), []).append(Dataset.from_file(str(f)))
+            buckets.setdefault(key, []).append(Dataset.from_file(str(f)))
         except Exception as e:  # noqa: BLE001 — one bad shard is not fatal
             print(f"      ! unreadable {f.name}: {e}", file=sys.stderr)
-    return {
-        s: (parts[0] if len(parts) == 1 else concatenate_datasets(parts))
-        for s, parts in by_split.items() if parts
-    }
+    out: Dict[Tuple[str, str], Any] = {}
+    for key, parts in buckets.items():
+        if not parts:
+            continue
+        try:
+            out[key] = parts[0] if len(parts) == 1 else concatenate_datasets(parts)
+        except Exception as e:  # noqa: BLE001 — a subset with mixed shard
+            # schemas is one subset's problem, not the dataset's.
+            print(f"      ! cannot merge {key[0]}/{key[1]}: {e}", file=sys.stderr)
+    return out
 
 
 def scan(hf_cache: Path) -> List[Dict[str, Any]]:
@@ -124,6 +155,20 @@ def scan(hf_cache: Path) -> List[Dict[str, Any]]:
     return out
 
 
+def _prior_version(target: Path, entry: Dict[str, Any]) -> Optional[int]:
+    """Layout version of a destination THIS tool wrote from ``entry``, else None."""
+    src = target / "SOURCE.json"
+    if not src.is_file():
+        return None
+    try:
+        meta = json.loads(src.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if meta.get("hf_cache_entry") != entry["cache_name"]:
+        return None
+    return int(meta.get("layout_version", 1))
+
+
 def _already_materialised(target: Path, entry: Dict[str, Any]) -> bool:
     """Did an earlier run of THIS tool write ``target`` from ``entry``?
 
@@ -140,13 +185,15 @@ def _already_materialised(target: Path, entry: Dict[str, Any]) -> bool:
         return False
     if meta.get("hf_cache_entry") != entry["cache_name"]:
         return False
-    rows = meta.get("rows_by_split") or {}
+    if int(meta.get("layout_version", 1)) != _LAYOUT_VERSION:
+        return False
+    rows = meta.get("rows") or {}
     if not rows:
         return False
     try:
         import pandas as pd
-        for split, n in rows.items():
-            f = target / f"{split}-00000-of-00001.parquet"
+        for rel, n in rows.items():
+            f = target / rel
             if not f.is_file() or len(pd.read_parquet(f)) != n:
                 return False
     except Exception:  # noqa: BLE001 — unreadable means "not verified"
@@ -222,9 +269,16 @@ def main() -> int:
             # collision, it is work already done — otherwise the documented
             # two-step (--apply, then --apply --delete-source) would skip
             # everything on the second pass and delete nothing.
+            prior = _prior_version(target, e)
             if _already_materialised(target, e):
                 already.append(e)
                 status = "already materialised here (source removable)"
+            elif prior is not None:
+                # Ours, but written before the layout changed — the older one
+                # merged a dataset's subsets into a single file. Say so
+                # instead of reporting a generic collision.
+                status = (f"REWRITE NEEDED — written by layout v{prior}, now v"
+                          f"{_LAYOUT_VERSION}: --force --only {e['cache_name']}")
             else:
                 status = "SKIP — destination exists (use --force to replace)"
         else:
@@ -250,9 +304,14 @@ def main() -> int:
     ok: List[Dict[str, Any]] = []
     for e, target in plan:
         print(f"[{e['cache_name']}]")
-        splits = _load_splits(e["arrow"])
-        if not splits:
-            print("   no readable split — leaving the source alone")
+        try:
+            groups = _load_groups(e["arrow"], e["path"])
+        except Exception as ex:  # noqa: BLE001 — one dataset must not abort
+            # the run; a crash halfway leaves the rest of the cache in limbo.
+            print(f"   FAILED to read: {ex} — source left in place", file=sys.stderr)
+            continue
+        if not groups:
+            print("   nothing readable — leaving the source alone")
             continue
         tmp = target.with_name(target.name + ".partial")
         if tmp.exists():
@@ -260,16 +319,23 @@ def main() -> int:
         tmp.mkdir(parents=True)
         written: Dict[str, int] = {}
         try:
-            for split, ds in splits.items():
-                f = tmp / f"{split}-00000-of-00001.parquet"
-                ds.to_parquet(str(f))
-                written[split] = ds.num_rows
-                print(f"   {split:<11} {ds.num_rows:>8} rows  "
+            for (config, split), ds in sorted(groups.items()):
+                # A single "default" config flattens; anything else keeps its
+                # own directory, matching gsm8k/main/test.parquet.
+                sub = tmp if config == "default" else tmp / config
+                sub.mkdir(parents=True, exist_ok=True)
+                rel = (f"{split}-00000-of-00001.parquet" if config == "default"
+                       else f"{config}/{split}-00000-of-00001.parquet")
+                ds.to_parquet(str(tmp / rel))
+                written[rel] = ds.num_rows
+                label = split if config == "default" else f"{config}/{split}"
+                print(f"   {label:<28} {ds.num_rows:>8} rows  "
                       f"{sorted(ds.column_names)}")
             (tmp / "SOURCE.json").write_text(json.dumps({
                 "hf_cache_entry": e["cache_name"],
                 "hf_cache_path": str(e["path"]),
-                "rows_by_split": written,
+                "layout_version": _LAYOUT_VERSION,
+                "rows": written,
                 "note": "materialised by scripts/consolidate_hf_datasets.py",
             }, indent=2))
         except Exception as ex:  # noqa: BLE001
@@ -280,10 +346,10 @@ def main() -> int:
         # ---- verify by re-reading what was written, before anything is removed
         try:
             import pandas as pd
-            for split, n in written.items():
-                got = len(pd.read_parquet(tmp / f"{split}-00000-of-00001.parquet"))
+            for rel, n in written.items():
+                got = len(pd.read_parquet(tmp / rel))
                 if got != n:
-                    raise ValueError(f"{split}: wrote {n} rows, read back {got}")
+                    raise ValueError(f"{rel}: wrote {n} rows, read back {got}")
         except Exception as ex:  # noqa: BLE001
             print(f"   VERIFY FAILED: {ex} — source left in place", file=sys.stderr)
             shutil.rmtree(tmp, ignore_errors=True)
