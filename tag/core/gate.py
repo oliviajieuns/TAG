@@ -1619,10 +1619,30 @@ def recompute_gate_from_cache(
     if n_true is None or len(n_cf) != len(token_cf):
         return None
     completeness = cache["completeness"].float()
+    # Naming the fields is the point. "a new config" says nothing, and the
+    # difference decides whether G is the one a gate_report already vetted or
+    # a different vector entirely — which is the whole comparison, for a pair
+    # of arms that are supposed to differ by G alone.
+    now = cfg.identity()
+    changed = {
+        k: (cached_cfg.get(k), now[k])
+        for k in now
+        if k in cached_cfg and cached_cfg[k] != now[k]
+    }
+    added = sorted(k for k in now if k not in cached_cfg)
     logger.info(
-        "Recomputing TAG gate from cached token losses under a new config "
-        "(no forward pass needed)."
+        "Recomputing TAG gate from cached token losses (no forward pass "
+        "needed). Fields that differ from the cache: %s%s",
+        changed or "none",
+        f" | absent from the cached config: {added}" if added else "",
     )
+    if not changed and not added:
+        logger.warning(
+            "...but nothing actually differs. The cache was rejected on an "
+            "identity comparison that found no field-level change, so G is "
+            "being rebuilt to the same value. Harmless, but it means the "
+            "cache-hit path is not firing when it should."
+        )
     return compute_gate(
         token_true, n_true, token_cf, n_cf, completeness, cfg=cfg,
     )
