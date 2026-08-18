@@ -1,22 +1,32 @@
 #!/usr/bin/env python
-"""Convert the HF-clone benchmark corpora into the layout each evaluator reads.
+"""Build MMLU and BBH from the HF clones on disk — the two with no downloader.
 
     python scripts/prepare_eval_data.py            # look, convert nothing
     python scripts/prepare_eval_data.py --apply
 
-The corpora on /group-volume/datasets are git clones of HF dataset repos.
-Five of the eight are laid out differently from what tag/evals/*.py opens:
+PREFER THE DOWNLOAD SCRIPTS. scripts/download_{humaneval,tydiqa,xquad,svamp,
+mbpp}.sh each fetch from the canonical upstream and write exactly the layout
+their evaluator opens — that is the intended path, and it gives the corpus a
+provenance a paper can name. Converting somebody's clone of xquad into SQuAD
+JSON is not the same artifact as the official google/xquad files that
+tag/evals/xquad.py was written against.
 
-    mmlu       57 per-subject configs, no `all`  -> one concatenated pair
-    bbh        <task>/test-*.parquet             -> <task>.json {examples:[...]}
-    humaneval  openai_humaneval/*.parquet        -> HumanEval.jsonl.gz
-    tydiqa     dev/*.jsonl, one per language     -> one flat validation.jsonl
-    xquad      xquad.<lang>/*.parquet            -> xquad.<lang>.json (SQuAD)
+What has no downloader is MMLU and BBH. setup_env.sh assumes both are
+already on the cluster, and the clones that are there do not match:
 
-The evaluators are deliberately NOT changed. They define how each benchmark
-is scored, and the numbers already in the paper came out of them; editing a
-loader to accept a new layout risks moving a score for reasons that have
-nothing to do with the method. Converting the data leaves scoring identical.
+    mmlu   57 per-subject configs and no `all`  -> one concatenated pair
+    bbh    <task>/test-*.parquet                -> <task>.json {examples:[...]}
+
+Those two are this script's job, and they are what it converts by default.
+
+The other three are implemented here as well, but only as a fallback for a
+box that cannot reach the network (HF_HUB_OFFLINE, blocked egress) — ask for
+them by name with --only. Where a downloader can run, run it instead.
+
+No evaluator is changed either way. They define how each benchmark is
+scored and the published numbers came out of them; editing a loader to
+accept a new layout risks moving a score for reasons unrelated to the
+method.
 
 Output goes to a directory of our own (default $TAG_WORKSPACE/eval-data),
 never into the shared corpus tree. env.sh searches it first.
@@ -217,12 +227,17 @@ def prep_xquad(src: Path, out: Path) -> str:
     return f"{len(langs)} language(s), {total} questions"
 
 
+# Converted by default: no downloader exists for either.
 _PREP = {
     "mmlu": prep_mmlu,
     "bbh": prep_bbh,
-    "humaneval": prep_humaneval,
-    "tydiqa": prep_tydiqa,
-    "xquad": prep_xquad,
+}
+# Available with --only, as a fallback for a box that cannot reach the
+# network. Each names the downloader that should be used instead.
+_FALLBACK = {
+    "humaneval": (prep_humaneval, "scripts/download_humaneval.sh"),
+    "tydiqa": (prep_tydiqa, "scripts/download_tydiqa.sh"),
+    "xquad": (prep_xquad, "scripts/download_xquad.sh"),
 }
 # Already in a shape the evaluators read; converting them would only add a
 # second copy to keep in sync.
@@ -250,12 +265,20 @@ def main() -> int:
         return 2
 
     names = [n.strip() for n in args.only.split(",") if n.strip()] or list(_PREP)
-    unknown = [n for n in names if n not in _PREP]
+    known = {**_PREP, **{k: v[0] for k, v in _FALLBACK.items()}}
+    unknown = [n for n in names if n not in known]
     if unknown:
-        print(f"unknown benchmark(s): {unknown}; known: {sorted(_PREP)} "
+        print(f"unknown benchmark(s): {unknown}; known: {sorted(known)} "
               f"(already fine and not converted: {list(_ALREADY_OK)})",
               file=sys.stderr)
         return 2
+    for n in names:
+        if n in _FALLBACK:
+            print(f"NOTE {n}: {_FALLBACK[n][1]} fetches this from upstream in "
+                  f"the layout the evaluator expects. Converting the local "
+                  f"clone instead is a fallback for a box that cannot reach "
+                  f"the network — and it is a different artifact.")
+    print()
 
     print(f"src : {src_root}")
     print(f"out : {out_root}")
@@ -282,7 +305,7 @@ def main() -> int:
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True, exist_ok=True)
         try:
-            summary = _PREP[n](src, tmp)
+            summary = known[n](src, tmp)
         except Exception as e:  # noqa: BLE001 — one benchmark must not stop the rest
             print(f"   FAILED: {e}", file=sys.stderr)
             shutil.rmtree(tmp, ignore_errors=True)

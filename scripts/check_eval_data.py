@@ -273,8 +273,14 @@ def main() -> int:
     if bad:
         print(f"{bad} of {len(names)} benchmark(s) not usable. Eval would fail "
               f"on those, so it will refuse to start.")
-        print("TAG_BENCH_ROOTS=/parent/of/corpora source scripts/gpu_cloud/env.sh")
-        print("re-probes; scripts/download_<bench>.sh fetches what is truly absent.")
+        print("Fixes, in the order to try them:")
+        print("  1. scripts/download_<bench>.sh <dir> — humaneval, tydiqa, xquad,")
+        print("     svamp, mbpp each have one, and each writes exactly the")
+        print("     layout its evaluator opens. This is the intended path.")
+        print("  2. scripts/prepare_eval_data.py --apply — mmlu and bbh have no")
+        print("     downloader; this builds them from the clones on disk.")
+        print("  3. TAG_BENCH_ROOTS=/parent/of/corpora source scripts/gpu_cloud/env.sh")
+        print("     — if the corpus is on this box under a path not searched.")
         return 1
     print(f"all {len(names)} benchmark(s) ready")
     return 0

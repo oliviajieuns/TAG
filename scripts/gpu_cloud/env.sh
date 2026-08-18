@@ -216,11 +216,11 @@ export EVAL_RESULTS_ROOT="${EVAL_RESULTS_ROOT:-$TAG_WORKSPACE/eval-results}"
 # benchmark was consolidated there and the HF arrow caches deleted. It goes
 # first so a stale copy left in a workspace cannot shadow the real one. The
 # rest are historical and kept only so an older box still resolves.
-# scripts/prepare_eval_data.py writes here: five of the eight corpora are HF
-# clones laid out differently from what the evaluators open, and converting
-# the data (rather than the loaders) keeps scoring identical to what produced
-# the published numbers. It goes FIRST so the converted copy wins over the
-# clone it was built from.
+# Where the corpora that had to be built or fetched land: the download
+# scripts take a target directory, and prepare_eval_data.py writes MMLU and
+# BBH here (those two have no downloader, and the clones on disk are laid
+# out differently from what their evaluators open). It goes FIRST so a built
+# copy wins over the clone it came from.
 export TAG_EVAL_DATA="${TAG_EVAL_DATA:-$TAG_WORKSPACE/eval-data}"
 _TAG_BENCH_ROOTS="${TAG_BENCH_ROOTS:-} $TAG_EVAL_DATA /group-volume/datasets $TAG_WORKSPACE/datasets /group-volume/IT-datasets /group-volume/data/datasets /group-volume/${USER:-nobody}/datasets"
 
@@ -382,9 +382,10 @@ if [ -z "${TAG_ENV_QUIET:-}" ]; then
     echo "[tag-env]   if a corpus is on this box under another path, either"
     echo "[tag-env]   export TAG_BENCH_ROOTS=/its/parent before sourcing, or"
     echo "[tag-env]   run: bash scripts/gpu_cloud/n9_discover.sh --write"
-    echo "[tag-env]   Five corpora are HF clones the loaders cannot read"
-    echo "[tag-env]   as-is: python scripts/prepare_eval_data.py --apply"
-    echo "[tag-env]   Otherwise fetch it with scripts/download_<bench>.sh."
+    echo "[tag-env]   scripts/download_<bench>.sh fetches humaneval, tydiqa,"
+    echo "[tag-env]   xquad, svamp, mbpp in the layout their evaluator opens."
+    echo "[tag-env]   mmlu and bbh have no downloader — build them from the"
+    echo "[tag-env]   clones with: python scripts/prepare_eval_data.py --apply"
   fi
   echo "[tag-env]   verify before a run: python scripts/check_eval_data.py"
   # The resolution above picks between several spellings per benchmark, and
