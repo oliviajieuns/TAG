@@ -231,7 +231,21 @@ _tag_has() {  # _tag_has <dir> <glob>[|<glob>...] — does the dir hold the good
   return 1
 }
 
-_tag_locate() {  # _tag_locate <root> <markers> — print the dir that satisfies them
+# Directory names a deep hit may land on for datasets that ship one config
+# per subset. Without this, MMLU resolved to .../mmlu/computer_security —
+# one subject of 57, satisfying every marker, and silently the wrong number.
+# Empty means "any directory is fine".
+_tag_config_ok() {  # <required-names|empty> <hit> <root>
+  local want="$1" hit="$2" root="$3" n
+  [ -z "$want" ] && return 0
+  [ "$hit" = "$root" ] && return 0
+  for n in $want; do
+    [ "$(basename "$hit")" = "$n" ] && return 0
+  done
+  return 1
+}
+
+_tag_locate() {  # _tag_locate <root> <markers> [required-config-names]
   # The corpora on this cluster are BUNDLES: the files a loader opens sit
   # under <corpus>/datasets/<org>/<name>/..., not at the top. Checking only
   # the top level reported seven of eight benchmarks as absent on a box that
@@ -239,7 +253,7 @@ _tag_locate() {  # _tag_locate <root> <markers> — print the dir that satisfies
   # marker files, then walk back up until a directory satisfies the whole
   # marker list — gsm8k's marker is "main/test.parquet", so the answer is the
   # grandparent of the hit, not its parent.
-  local root="$1" markers="$2" rest alt base f d i
+  local root="$1" markers="$2" want="${3:-}" rest alt base f d i
   [ -d "$root" ] || return 1
   _tag_has "$root" "$markers" && { echo "$root"; return 0; }
   rest="$markers"
@@ -252,7 +266,9 @@ _tag_locate() {  # _tag_locate <root> <markers> — print the dir that satisfies
       d="$(dirname "$f")"
       i=0
       while [ "$i" -lt 3 ] && [ "$d" != "/" ] && [ "$d" != "." ]; do
-        _tag_has "$d" "$markers" && { echo "$d"; return 0; }
+        if _tag_has "$d" "$markers" && _tag_config_ok "$want" "$d" "$root"; then
+          echo "$d"; return 0
+        fi
         d="$(dirname "$d")"
         i=$((i+1))
       done
@@ -263,8 +279,8 @@ EOF
   return 1
 }
 
-_tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob subdir [subdir...]
-  local var="$1" marker="$2"; shift 2
+_tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob required-cfg subdir...
+  local var="$1" marker="$2" want="$3"; shift 3
   local cur="${!var:-}" hit
   # An explicit export wins — but only if it leads to the files the evaluator
   # opens. discovered_env.sh names the bundle root, which is one or more
@@ -272,14 +288,14 @@ _tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob subdir [subdir..
   # found" an hour into eval. A path that does not check out is searched
   # below, then falls through to the probe.
   if [ -n "$cur" ]; then
-    hit="$(_tag_locate "$cur" "$marker")" && { echo "$hit"; return; }
+    hit="$(_tag_locate "$cur" "$marker" "$want")" && { echo "$hit"; return; }
   fi
   # Spelling is the OUTER loop: the more specific one (mmlu/all) must beat a
   # bare mmlu found under an earlier root.
   local root sub
   for sub in "$@"; do
     for root in $_TAG_BENCH_ROOTS; do
-      hit="$(_tag_locate "$root/$sub" "$marker")" && { echo "$hit"; return; }
+      hit="$(_tag_locate "$root/$sub" "$marker" "$want")" && { echo "$hit"; return; }
     done
   done
   # Nothing usable. Keep an explicit export if there was one — the operator
@@ -290,15 +306,15 @@ _tag_bench_dir() {  # usage: _tag_bench_dir VARNAME marker-glob subdir [subdir..
 
 # The marker globs mirror the loaders in tag/evals/*.py; scripts/check_eval_data.py
 # holds the full expectation and explains any mismatch.
-export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR 'test-*.parquet' mmlu/all mmlu)"
-export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR 'test-*.parquet' mmlu_pro mmlu-pro)"
-export GSM8K_DATA_DIR="$(_tag_bench_dir GSM8K_DATA_DIR 'main/test*.parquet' gsm8k)"
-export SVAMP_DATA_DIR="$(_tag_bench_dir SVAMP_DATA_DIR 'test*.parquet' svamp SVAMP)"
-export HUMANEVAL_DATA_DIR="$(_tag_bench_dir HUMANEVAL_DATA_DIR 'HumanEval.jsonl.gz' human-eval humaneval human_eval)"
-export MBPP_DATA_DIR="$(_tag_bench_dir MBPP_DATA_DIR 'sanitized/test-*.parquet' mbpp)"
-export TYDIQA_DATA_DIR="$(_tag_bench_dir TYDIQA_DATA_DIR 'validation*.parquet|validation*.json*|data/validation*.parquet' tydiqa tydi_qa)"
-export XQUAD_DATA_DIR="$(_tag_bench_dir XQUAD_DATA_DIR 'xquad.*.json' xquad)"
-export BBH_DATA_DIR="$(_tag_bench_dir BBH_DATA_DIR '*.json|*/*.json' bbh BIG-Bench-Hard)"
+export MMLU_DATA_DIR="$(_tag_bench_dir MMLU_DATA_DIR 'test-*.parquet' 'all' mmlu/all mmlu)"
+export MMLU_PRO_DATA_DIR="$(_tag_bench_dir MMLU_PRO_DATA_DIR 'test-*.parquet' 'default' mmlu_pro mmlu-pro)"
+export GSM8K_DATA_DIR="$(_tag_bench_dir GSM8K_DATA_DIR 'main/test*.parquet' '' gsm8k)"
+export SVAMP_DATA_DIR="$(_tag_bench_dir SVAMP_DATA_DIR 'test*.parquet' '' svamp SVAMP)"
+export HUMANEVAL_DATA_DIR="$(_tag_bench_dir HUMANEVAL_DATA_DIR 'HumanEval.jsonl.gz' '' human-eval humaneval human_eval)"
+export MBPP_DATA_DIR="$(_tag_bench_dir MBPP_DATA_DIR 'sanitized/test-*.parquet' '' mbpp)"
+export TYDIQA_DATA_DIR="$(_tag_bench_dir TYDIQA_DATA_DIR 'validation*.parquet|validation*.json*|data/validation*.parquet' '' tydiqa tydi_qa)"
+export XQUAD_DATA_DIR="$(_tag_bench_dir XQUAD_DATA_DIR 'xquad.*.json' '' xquad)"
+export BBH_DATA_DIR="$(_tag_bench_dir BBH_DATA_DIR '*.json|*/*.json' '' bbh BIG-Bench-Hard)"
 
 # Forward-only batch size for the pool scoring passes. The config default
 # (_shared_7b.yaml: ${oc.env:TAG_EPISODE_BS_7B,8}) is sized for a small GPU,

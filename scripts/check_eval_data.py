@@ -28,6 +28,18 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 # bench -> (env var, [required glob relative to data_dir], human description)
 # A benchmark passes when EVERY entry in its list matches at least one file.
+#
+# Datasets that ship one config PER SUBSET need the config named here, or a
+# recursive search happily returns the first subset it trips over: MMLU
+# resolved to .../mmlu/computer_security, whose test-*.parquet satisfies
+# every pattern while covering one subject out of 57. A wrong number is
+# worse than a missing one, so where a full-coverage config exists it is
+# required by name.
+_REQUIRED_CONFIG: Dict[str, Tuple[str, ...]] = {
+    "mmlu": ("all",),          # 57 per-subject configs sit beside it
+    "mmlu_pro": ("default",),
+}
+
 _SPEC: Dict[str, Tuple[str, List[str], str]] = {
     # tag/evals/mmlu.py: os.listdir(data_dir), test-*.parquet and dev-*.parquet
     "mmlu": ("MMLU_DATA_DIR", ["test-*.parquet", "dev-*.parquet"],
@@ -86,7 +98,17 @@ def _check_dir(root: Path, needs: Sequence[str]) -> List[str]:
 _MAX_DEPTH = 6
 
 
-def _suggest(root: Path, needs: Sequence[str]) -> Optional[Path]:
+def _config_ok(bench: str, d: Path, root: Path) -> bool:
+    """Reject a hit that is one subset of a dataset that has a full config."""
+    want = _REQUIRED_CONFIG.get(bench)
+    if not want:
+        return True
+    if d == root:
+        return True
+    return d.name in want
+
+
+def _suggest(root: Path, needs: Sequence[str], bench: str = "") -> Optional[Path]:
     """A directory at or below ``root`` that DOES satisfy the requirement.
 
     Searches for one of the marker files, then walks back UP from each hit:
@@ -99,6 +121,8 @@ def _suggest(root: Path, needs: Sequence[str]) -> Optional[Path]:
         if c in seen or not c.is_dir():
             return False
         seen.add(c)
+        if not _config_ok(bench, c, root):
+            return False
         return not _check_dir(c, needs)
 
     for n in _NEARBY:
@@ -130,6 +154,55 @@ def _suggest(root: Path, needs: Sequence[str]) -> Optional[Path]:
     return None
 
 
+def _show_layout(args) -> int:
+    """One bounded listing per corpus: subdirectories and file extensions."""
+    names = [b.strip() for b in args.benchmarks.split(",") if b.strip()]
+    for root_s in [r.strip() for r in args.roots.split(",") if r.strip()]:
+        root = Path(root_s)
+        print(f"### {root}")
+        for b in names:
+            for cand in (root / b, root / b.replace("_", "-"),
+                         root / b.replace("-", "_")):
+                if cand.is_dir():
+                    break
+            else:
+                print(f"  {b:<10} <no directory>")
+                continue
+            print(f"  {b:<10} {cand}")
+            try:
+                kids = sorted(c.name + "/" for c in cand.iterdir() if c.is_dir())
+                tops = sorted(c.name for c in cand.iterdir() if c.is_file())
+            except OSError as e:
+                print(f"      <unreadable: {e}>")
+                continue
+            if kids:
+                shown = ", ".join(kids[:12])
+                print(f"      dirs : {shown}"
+                      f"{f' (+{len(kids)-12})' if len(kids) > 12 else ''}")
+            if tops:
+                shown = ", ".join(tops[:8])
+                print(f"      files: {shown}"
+                      f"{f' (+{len(tops)-8})' if len(tops) > 8 else ''}")
+            exts: Dict[str, int] = {}
+            deep: Dict[str, int] = {}
+            for i, f in enumerate(cand.rglob("*")):
+                if i > 5000:
+                    break
+                if f.is_file():
+                    exts[f.suffix or "<none>"] = exts.get(f.suffix or "<none>", 0) + 1
+                    rel = f.relative_to(cand).parent.as_posix()
+                    deep[rel] = deep.get(rel, 0) + 1
+            if exts:
+                top = sorted(exts.items(), key=lambda kv: -kv[1])[:5]
+                print(f"      ext  : {', '.join(f'{k}x{v}' for k, v in top)}")
+            busiest = sorted(deep.items(), key=lambda kv: -kv[1])[:3]
+            for rel, n in busiest:
+                if rel and rel != ".":
+                    print(f"      {n:>5} files under {rel}")
+        print()
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--benchmarks", default=",".join(TABLE2),
@@ -137,7 +210,16 @@ def main() -> int:
                         f"Known: {','.join(sorted(_SPEC))}")
     p.add_argument("--quiet", action="store_true",
                    help="print only failures")
+    p.add_argument("--show-layout", action="store_true",
+                   help="print what each corpus directory actually contains, "
+                        "then exit. Use this instead of guessing when a "
+                        "benchmark will not resolve.")
+    p.add_argument("--roots", default="/group-volume/datasets",
+                   help="with --show-layout: comma-separated corpus roots")
     args = p.parse_args()
+
+    if args.show_layout:
+        return _show_layout(args)
 
     names = [b.strip() for b in args.benchmarks.split(",") if b.strip()]
     unknown = [b for b in names if b not in _SPEC]
@@ -182,7 +264,7 @@ def main() -> int:
             print(f"     contains: {shown}{more}")
         else:
             print(f"     contains: <empty>")
-        alt = _suggest(root, needs)
+        alt = _suggest(root, needs, b)
         if alt is not None:
             print(f"     found it here instead — fix with:")
             print(f"       export {var}={alt}")
