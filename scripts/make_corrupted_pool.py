@@ -375,11 +375,31 @@ def main() -> None:
     # value in the run — with no symptom other than a wrong zero-weight rate. Only
     # the manifest can catch that later, so it has to be written here.
     def _corpus_id(path):
+        # --input now also takes a parquet DIRECTORY (a consolidated corpus),
+        # which cannot be opened as one file. Hash the shards it is actually
+        # built from, in a fixed order, with their names — so a reshard or a
+        # renamed file changes the digest, as it should.
+        src = Path(path)
         h = hashlib.sha256()
-        with open(path, "rb") as f:
+        if src.is_dir():
+            files = sorted(src.glob("train-*.parquet")) or sorted(src.glob("*.parquet"))
+            if not files:
+                files = sorted(f for f in src.rglob("*") if f.is_file())
+            for f in files:
+                h.update(f.name.encode("utf-8"))
+                with open(f, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        h.update(chunk)
+            return {
+                "path": str(src.resolve()),
+                "sha256": h.hexdigest(),
+                "n_files": len(files),
+                "files": [f.name for f in files],
+            }
+        with open(src, "rb") as f:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
-        return {"path": str(Path(path).resolve()), "sha256": h.hexdigest()}
+        return {"path": str(src.resolve()), "sha256": h.hexdigest()}
 
     manifest_out = {
         "seed": args.seed,
