@@ -4,6 +4,18 @@
 #   source scripts/gpu_cloud/env.sh
 #   bash scripts/run_lowq_all_arms.sh [seed] [arm ...]
 #
+# OVERRIDES is passed through to `tag.train --override`, the same way
+# run_main_7b.sh does it. The one that matters here: the 7B configs size
+# grad_accum for DDP x 4 (8 x 4 x 4 = effective batch 128), so a
+# 1-arm-per-GPU launch needs grad_accum=16 to train on the same effective
+# batch:
+#
+#   OVERRIDES="grad_accum=16" ARM_DIR=configs/experiments/main_7b/llama2 \
+#     SCALE=7b bash scripts/run_lowq_all_arms.sh 42 legacy_10 tag_10
+#
+# It applies to EVERY arm in the launch by construction, which is the
+# property that keeps the arms comparable.
+#
 # At 0.5B a single H100 is far faster than DDP across four of them (the
 # gradient sync dominates), so the right use of a 4-GPU box is four
 # CONCURRENT arms rather than one distributed arm.
@@ -104,7 +116,14 @@ unset arm cfg var path
 
 echo "[arms] scale=$SCALE seed=$SEED gpus=$N_GPU arm_dir=$ARM_DIR"
 if [ "$SCALE" = "7b" ]; then
-  echo "[arms] episode_bs=${TAG_EPISODE_BS_7B:-8} grad_accum=${TAG_GRAD_ACCUM_7B:-16} (1 arm/GPU)"
+  echo "[arms] episode_bs=${TAG_EPISODE_BS_7B:-8} (1 arm/GPU)"
+  echo "[arms] overrides=${OVERRIDES:-<none>}"
+  if [ "${OVERRIDES:-}" = "${OVERRIDES#*grad_accum}" ]; then
+    echo "[arms] WARNING: no grad_accum override. The 7B configs set" >&2
+    echo "[arms]          grad_accum=4 for DDP x 4 (effective batch 128); at" >&2
+    echo "[arms]          1 arm/GPU that trains on 32, not 128. Pass" >&2
+    echo "[arms]          OVERRIDES=\"grad_accum=16\" unless you mean it." >&2
+  fi
 else
   echo "[arms] episode_bs=${TAG_EPISODE_BS:-2}"
 fi
@@ -130,7 +149,7 @@ for arm in "${ARMS[@]}"; do
   CUDA_VISIBLE_DEVICES="$gpu" \
     python -m tag.train --config "$cfg" \
       --run_suffix "seed${SEED}" \
-      --override "seed=${SEED}" \
+      --override "seed=${SEED}" ${OVERRIDES:+$OVERRIDES} \
       > "$log" 2>&1 &
   pids+=($!)
   _pids_all+=($!)
@@ -153,7 +172,13 @@ done
 
 echo ""
 echo "[arms] seed $SEED done — ${n_fail}/${#pids[@]} arm(s) failed"
-echo "       run dirs: $OUTPUT_ROOT/lowq/*/runs/*seed${SEED}"
+# Print the real paths, read out of each arm's own output_subdir. The old
+# line hardcoded "lowq" and was wrong the moment ARM_DIR became a knob.
+for _n in ${names[@]+"${names[@]}"}; do
+  _sub="$(sed -n 's/^output_subdir:[[:space:]]*//p' "$ARM_DIR/${_n}.yaml" | head -1)"
+  echo "       run dir: $OUTPUT_ROOT/${_sub:-$_n}/runs/*seed${SEED}"
+done
+unset _n _sub
 if [ "$n_fail" -gt 0 ]; then
   echo "[arms] NOTE: a failed arm can leave a process holding GPU memory while" >&2
   echo "[arms]       its CUDA context tears down. Check nvidia-smi before" >&2
