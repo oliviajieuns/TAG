@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import re
+import sys
 import os
 from datetime import datetime
 from pathlib import Path
@@ -388,6 +390,39 @@ def main() -> None:
             eval_tag = make_run_tag(args.eval_suffix)
         out_dir = run_dir_for(base_out_dir, eval_tag)
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Stamp provenance into the eval run dir. make_table_v2 pairs rows
+        # by the seed in cfg.json, and the eval tag is a bare timestamp —
+        # without this stamp a sealed eval run cannot say which training
+        # seed produced it, and every row silently falls out of the paired
+        # comparison. Seed source, most authoritative first: the training
+        # run's own cfg.json (sitting one level above epoch_last/), then a
+        # seedNN segment in the checkpoint path.
+        _prov: Dict[str, Any] = {"ckpt": str(args.ckpt),
+                                 "config": str(args.config)}
+        _train_cfg: Dict[str, Any] = {}
+        _train_cfg_path = Path(args.ckpt).parent / "cfg.json"
+        if _train_cfg_path.is_file():
+            try:
+                with open(_train_cfg_path) as _f:
+                    _train_cfg = json.load(_f) or {}
+            except (OSError, ValueError) as _exc:
+                print(f"[eval] unreadable training cfg.json "
+                      f"({_train_cfg_path}): {_exc}", file=sys.stderr)
+        _seed = _train_cfg.get("seed")
+        if _seed is None:
+            _m = re.search(r"seed(\d+)", str(args.ckpt))
+            _seed = int(_m.group(1)) if _m else None
+        if _seed is not None:
+            _prov["seed"] = int(_seed)
+        if _train_cfg.get("git_sha"):
+            _prov["git_sha"] = _train_cfg["git_sha"]
+        try:
+            with open(out_dir / "cfg.json", "w") as _f:
+                json.dump(_prov, _f, indent=2)
+        except OSError as _exc:
+            print(f"[eval] could not write provenance cfg.json: {_exc}",
+                  file=sys.stderr)
 
     log_dir = out_dir / "logs"
     logger = setup_logger(str(log_dir), name="eval")
