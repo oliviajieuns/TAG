@@ -963,6 +963,46 @@ nearly disjoint subsets, so the row-pair gap measures the END-TO-END effect
 of G's initial reordering compounded through training — which is the paper's
 actual claim — and cannot be decomposed into "same data, better weighting".
 
+### D5. The sealed seed-42 tables (2026-08-18)
+
+Official numbers from `make_table_v2` over sealed runs — 7-bench macro
+(mmlu, bbh, svamp, gsm8k, mbpp, tydiqa, xquad; **humaneval excluded**: its
+harness died identically in all four runs with "os.fork is unsafe while
+filelock is changing descriptor ownership" — a scoring-harness bug, not a
+model result; fix pending). Single seed: **no CI, not final** until seeds
+1 and 7 land.
+
+**Robustness (lowq: Qwen2.5-7B-Instruct, composite20, 30.4% corrupted):**
+
+| | mmlu | bbh | svamp | gsm8k | mbpp | tydiqa | xquad | macro |
+|---|---|---|---|---|---|---|---|---|
+| legacy_7b | 74.30 | 63.26 | 6.00 | 20.55 | 71.60 | 46.88 | 46.01 | 46.94 |
+| tag_prefix_7b | 74.24 | 63.46 | **31.33** | **33.66** | 70.82 | **52.89** | 45.70 | **53.16** |
+| Δ | −0.1 | +0.2 | **+25.3** | **+13.1** | −0.8 | **+6.0** | −0.3 | **+6.22** |
+
+**Table 2 row pair (main_7b: LLaMA-2-7B, clean Alpaca-GPT4, ρ=10%):**
+
+| | mmlu | bbh | svamp | gsm8k | mbpp | tydiqa | xquad | macro |
+|---|---|---|---|---|---|---|---|---|
+| legacy_10 (TADS) | 46.15 | 36.69 | 38.00 | 14.94 | 36.96 | 61.31 | 49.89 | 40.56 |
+| tag_10 | 45.90 | 36.79 | 39.67 | 16.53 | 33.85 | 59.87 | 49.96 | 40.37 |
+| Δ | −0.3 | +0.1 | +1.7 | +1.6 | −3.1 | −1.4 | +0.1 | **−0.20** |
+
+No per-bench difference in the clean pair is significant (MBPP's −3.1pp is
+8 problems of 257, inside the ~4.2pp paired SE; TyDiQA's −1.4pp is ~1.4σ).
+The clean-pool claim is a TIE, and a tie survives the ±0.2pp batching
+perturbation (D1) without a batch-1 rescore — that rule exists for claimed
+GAPS.
+
+The sentence the two tables license together: *the gate buys +6.2pp macro
+when the pool is corrupted and costs nothing measurable when it is clean.*
+
+Run provenance: lowq pair `runs/20260818_071841`, main pair
+`runs/20260818_075532` / `20260818_083139`, all sealed, all
+`generation_batch_size=16`, seed 42 pinned via manifest (these four predate
+the eval-side cfg.json provenance stamp; every later eval run records seed
+and git sha itself).
+
 ## Checklist before submission
 
 - [ ] A1-A4 folded into the equations (these are correctness fixes)
@@ -996,4 +1036,8 @@ actual claim — and cannot be decomposed into "same data, better weighting".
       measured ~0.2pp perturbation and the fixed-across-arms rule
 - [ ] D3's two negative results stated: the advantage saturates at epoch 2,
       and `wrong_answer` is selected 2.8x MORE by TAG than by the baseline
+- [ ] seeds 1 and 7 run for both pairs; CIs from make_table_v2 replace the
+      single-seed D5 point estimates
+- [ ] humaneval scoring harness fork/filelock crash fixed and the column
+      restored (all four D5 runs lost it identically)
 - [ ] measured numbers substituted for every placeholder above
