@@ -124,10 +124,12 @@ probe subset. We use these sign-oriented directions as a
 state-conditioned representation anchor. The parameter
 \(\lambda\ge0\) controls the modulation strength, so the anchor
 factor is confined to \([1,1+\lambda]\) and can be ablated by
-setting \(\lambda=0\). The multiplicative gate is not a binary
-accept--reject rule: it continuously attenuates each candidate
-according to its estimated reliability, while the two dynamic terms
-determine its usefulness to the evolving model.
+setting \(\lambda=0\). The multiplicative gate is not a hard binary
+filter: for \(G_i>0\) it continuously attenuates each candidate
+according to its estimated reliability, while its zero anchor makes
+\(G_i=0\) an exact veto that no amount of dynamic utility can
+compensate; the two dynamic terms determine a credible pair's
+usefulness to the evolving model.
 
 \paragraph{Design rationale.}
 Three choices support this construction. First, the reliability gate

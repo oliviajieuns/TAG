@@ -33,9 +33,11 @@ Let \(\mathcal D=\{x_i\}_{i=1}^N\) be a pool, where
 \end{equation}
 where \(G_i\) is computed once with the base checkpoint \(\theta_0\),
 \(\mathcal R_i^{(t)}\) is a dynamically refreshed
-difficulty--uncertainty reward, and
+difficulty--uncertainty reward,
 \(\widetilde a_i^{(t)}\in[0,1]\) is the candidate's normalized
-projection onto the current representation anchor. Given budget \(B\le N\),
+projection onto the current representation anchor, and
+\(\lambda\ge 0\) is a fixed anchor-modulation strength, confining the
+anchor factor to \([1,1+\lambda]\). Given budget \(B\le N\),
 the implementation uses the lexicographic key
 \begin{equation}
   \kappa_i^{(t)}
@@ -79,8 +81,10 @@ subtly wrong response is often perfectly fluent, which is precisely
 why perplexity-style filters pass it. We therefore require a signal
 that (i) measures pair-level credibility on an axis orthogonal to
 model-state utility, (ii) uses no external judge, reward model, or
-trusted reference response, and (iii) is cheap enough to run once
-over the full pool and cache. The construction below meets these
+per-pair trusted reference response---the only supervision assumed
+is a small pool of responses presumed clean, used once to calibrate
+the null---and (iii) is cheap enough to run once over the full pool
+and cache. The construction below meets these
 requirements with two forward passes per pair at the base
 checkpoint.
 
@@ -113,9 +117,11 @@ two prompts, define at the frozen base checkpoint
 A positive \(\overline{\Delta}_i\) says that the paired instruction
 predicts the fixed response better than a matched in-pool
 alternative. Because the reference condition is a real instruction
-rather than an empty or generic one, effects common to any
-condition---response fluency, length, boilerplate---cancel in the
-ratio. This matched negative control distinguishes the contrast
+rather than an empty or generic one, loss mass that does not depend
+on the condition---fluency, boilerplate, length effects---enters
+both terms equally and is differenced out of the contrast; its
+residual dilutive effect on long responses is removed by the
+calibration below. This matched negative control distinguishes the contrast
 from conditional-versus-unconditional difficulty scores such as
 IFD~\cite{q2q}, while following the broader principle of measuring
 model-relative input contribution through changes in conditional
@@ -174,7 +180,8 @@ matched in-pool counterfactual, the conservative span minimum, and
 the zero-anchored length-conditioned calibration form a
 pre-selection reliability stage that existing dynamic selectors
 lack (Section~\ref{sec:related}); none of the three components
-requires labels, judges, or selector training. The gate decides
+requires per-pair labels, external judges, or selector training
+beyond the one-time clean-reference calibration above. The gate decides
 admissibility only; the next two views measure usefulness under the
 current checkpoint.
 
@@ -457,7 +464,9 @@ constants depend on the realized covariance trajectory, so it is not
 a training-time certificate, and it says nothing about candidate
 projections or the full ranking. What it does supply is an
 observable prediction---anchor displacement at the optimizer
-scale---which we now check on a realized trajectory.
+scale---which we now check on a realized trajectory using a
+post-hoc verifier that re-extracts each layer's anchor at fixed
+intervals during training (protocol below).
 
 \paragraph{Step-to-step anchor displacement.}
 \label{sec:empirical-anchor-stability}
@@ -527,8 +536,18 @@ layer--refresh pairs. The global plug-in envelope
 \((2\widehat C_{\Sigma}/\gamma_{\min})\eta=46.24\) is too conservative
 to be informative at the scale of \(d_l^{(t)}\), as it exceeds the
 maximum sign-calibrated displacement \(\sqrt{2}\). The meaningful
-comparison is the trajectory-aware Davis--Kahan envelope reported in
-Appendix~\ref{app:anchor-stability-diagnostics}.
+comparison is the trajectory-aware Davis--Kahan envelope of
+Fig.~\ref{fig:anchor-drift}, which accumulates realized
+per-transition drift-to-gap ratios into an upper envelope on the
+remaining drift to the final anchor,
+\(\|v_l^{(t)}-v_l^{(T)}\|\); its construction is given in
+Appendix~\ref{app:anchor-stability-diagnostics}. The measured
+\textsc{TAG} drift stays roughly two orders of magnitude below this
+envelope throughout training. Unlike
+Table~\ref{tab:dstep-spread}, which aggregates only the
+\(22\times68\) retained pairs, the figure traces the full
+24-layer, 78-point trajectory including warm-up, so the two views
+are complementary rather than identical.
 
 \begin{table}[t]
 \centering
@@ -713,11 +732,10 @@ space the score is simply the additive pool
 +\log\bigl(1+\lambda\,\widetilde a_i^{(t)}\bigr)\).
 What the design contributes is the deliberate \emph{asymmetry of the
 three roles} within that pool. The gate is absolute and
-zero-anchored: \(G_i=0\) annihilates the score, and the selection
-key in Eq.~\eqref{eq:tag-selection-key} orders every positive-gate
-candidate ahead of the zero block, so the veto is exact and
-non-compensatory---no value of the dynamic terms can re-admit a
-vetoed pair while admissible candidates remain. Additive or
+zero-anchored: \(G_i=0\) annihilates the score and, via the
+selection key of Eq.~\eqref{eq:tag-selection-key}, cannot be
+re-admitted ahead of any positive-gate candidate, whatever the
+dynamic terms---the veto is non-compensatory. Additive or
 averaging fusion cannot provide this behavior: a sufficiently large
 utility term always outweighs a zero reliability score,
 re-admitting exactly the corrupted-but-difficult candidates the
@@ -735,9 +753,9 @@ carrier and anchor at every refresh---so reliability screening adds
 no recurring cost. Finally, each view is independently ablatable:
 setting \(G_i\equiv 1\) removes the gate without changing the
 underlying selector, and setting \(\lambda=0\) removes
-representation-anchor modulation and yields the gated carrier
-\(G_i\mathcal R_i^{(t)}\), the CO baseline of
-Section~\ref{sec:experiments}.
+representation-anchor modulation, leaving the carrier-only
+configuration CO used as the matched control above and as a
+baseline in Section~\ref{sec:experiments}.
 
 \subsection{Algorithm and implementation}
 \label{sec:algorithm-implementation}

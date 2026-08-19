@@ -113,7 +113,8 @@ stability of the recomputed principal direction. The fused
 score is simply \(s_i^{(t)} = G_i \cdot \mathcal{R}_i^{(t)}
 \bigl(1+\lambda\,\widetilde a_i^{(t)}\bigr)\). This
 multiplicative form continuously attenuates candidates according to
-estimated reliability, while the dynamic terms keep selection
+estimated reliability---the zero-anchored gate acting as an exact,
+non-compensatory veto---while the dynamic terms keep selection
 adaptive to the evolving model state. On
 instruction pools with typed, manifest-verified corruptions
 (mismatched, noisy, truncated, wrong-answer, duplicated),

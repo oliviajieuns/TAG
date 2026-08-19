@@ -13,8 +13,8 @@
 the IT data.} This table shows the results of various tasks across
 multiple baselines. \textbf{Bold} and \underline{underline} represent the best and 
 second-best performance respectively in each column 
-\emph{among 10\% selection methods (R10, ID~02--09);} ID~00 and 
-ID~01 are shown as lower/upper-bound references and excluded 
+\emph{among 10\% selection methods (R10, ID~02--09);} ID~00 and
+ID~01 are shown as no-tuning and full-data references and excluded
 from the ranking. $\Delta\,(\uparrow)$ indicates the performance improvement
 relative to ID~01.}
 \label{tab:main-results}
@@ -145,7 +145,8 @@ backbone, using Qwen2.5-0.5B, Qwen2.5-7B~\cite{qwen2025technical},
 and Mistral-7B~\cite{jiang2023mistral}, and the source dataset, using
 WizardLM Evol-Instruct~\cite{xu2024wizardlm}. Within each
 (backbone, dataset) setting, all selectors share the same training
-hyperparameters and evaluation protocol; only the selected subset
+hyperparameters and evaluation protocol
+(Appendix~\ref{app:hyperparams}); only the selected subset
 differs. Full FT uses the full pool, while all selection methods use
 \(10\%\), a budget chosen because random ratio sweeps show that
 increasing random subsets up to \(50\%\) provides little additional
@@ -388,9 +389,9 @@ $\lambda{=}1.0$ serving as our empirical default.}
 \subsection{$\lambda$-ablation of the anchor-modulation strength}
 \label{sec:lambda-ablation}
 \paragraph{Inverted-U effect of anchor modulation.}
-Figure~\ref{fig:lambda-ablation} shows an inverted-U effect. When
-\(\lambda{=}0\), the method removes representation-anchor modulation
-and recovers the CO baseline to within noise. As \(\lambda\) grows,
+Figure~\ref{fig:lambda-ablation} shows an inverted-U effect. At
+\(\lambda{=}0\), the score reduces identically to the CO baseline
+by construction. As \(\lambda\) grows,
 high-projection candidates exert increasing influence on the carrier
 ranking; beyond \(\lambda{=}1\), the gains decline. This pattern
 supports using the projection as a bounded auxiliary signal rather
