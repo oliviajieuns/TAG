@@ -63,9 +63,9 @@ across refreshes, whereas usefulness is re-evaluated as
 \paragraph{Notation.}
 We write \(\mathcal L_i^{(t)}\) for response-token cross-entropy,
 \(\mathcal H_i^{(t)}\) for mean predictive entropy, and
-\(w^{(t)}\) for their variance-ratio coefficient. Superscript \(0\)
-denotes a quantity evaluated once at \(\theta_0\); superscript \(t\)
-denotes a quantity refreshed under \(\theta_{t-1}\).
+\(w^{(t)}\) for their variance-ratio coefficient. Superscript \(t\)
+denotes a quantity refreshed under \(\theta_{t-1}\); gate quantities
+are computed once at \(\theta_0\) and carry no refresh superscript.
 
 \subsection{Reliability gate}
 \label{sec:reliability-gate}
@@ -157,7 +157,8 @@ comparable span count \(M_i\), whose lower envelope we denote
 \end{aligned}
   \label{eq:reliability-gate}
 \end{equation}
-Here \(s_G\) is fixed from the same reference distribution and
+Here \(\sigma(z)=1/(1+e^{-z})\) is the logistic sigmoid,
+\(s_G\) is fixed from the same reference distribution, and
 \(c_i\in[0,1]\) attenuates visibly incomplete responses. Exact span
 construction, calibration, completeness checks, and edge-case
 handling are given in Appendix~\ref{app:gate-implementation}.
@@ -192,8 +193,9 @@ limitation}
 \paragraph{Difficulty--uncertainty carrier.}
 At refresh step \(t\), \(\mathcal{L}_i^{(t)}\) and
 \(\mathcal{H}_i^{(t)}\) are computed under the current checkpoint
-\(\theta_{t-1}\). Following dynamic difficulty--uncertainty selection,
-we define the carrier reward
+\(\theta_{t-1}\). Following dynamic difficulty--uncertainty
+selection~\cite{kung2023activeit,dataagent}, we define the carrier
+reward
 \begin{equation}
   \mathcal{R}_i^{(t)}
   =
@@ -214,14 +216,11 @@ where the variance-ratio weight is
         \varepsilon}.
   \label{eq:w}
 \end{equation}
-In \textsc{TAG}, this loss--entropy reward is kept as a deterministic
-carrier modulated by the representation anchor~\cite{kung2023activeit,dataagent}.
-
 \paragraph{Structural limitation.}
 The variance-ratio carrier can mix within-family informativeness with
 between-family scale effects in heterogeneous pools. To see this,
 suppose for analysis only that \(\mathcal D\) is partitioned into
-task-family groups \(\{\mathcal D_g\}_{g=1}^G\), and let
+task-family groups \(\{\mathcal D_g\}_{g=1}^{J}\), and let
 \(\mu_g^{(t)}=\mathbb E_{x\in\mathcal D_g}[\mathcal L^{(t)}(x)]\).
 By the law of total variance,
 \begin{equation}
@@ -253,7 +252,9 @@ projection}
 
 \paragraph{Principal-direction construction.}
 Let \(h_l^{(k)}(x;\theta)\in\mathbb R^d\) denote the hidden state of
-sequence \(x\) at layer \(l\) and token position \(k\). We define the
+sequence \(x\) at layer \(l\) and token position \(k\), where
+\(k=1,\dots,K_x\) indexes the \(K_x\) token positions of \(x\) and
+\(l=1,\dots,L\) the retained layers. We define the
 within-sequence representation displacement and sequence-mean
 activation as
 \begin{equation}
@@ -330,8 +331,10 @@ activation onto the current anchor:
 Although \(v_l^{(t)}\) has unit norm, \(\bar h_l\) is not
 normalized. Thus \(a_i^{(t)}\) is a signed projection, not a cosine
 similarity; it retains both directional and activation-magnitude
-information. The raw scores are min--max normalized over the candidate
-pool. Let
+information. Figure~\ref{fig:anchor} illustrates the one-layer
+geometry: probe displacements, the oriented anchor \(v_l^{(t)}\),
+and a candidate's projection contribution. The raw scores are
+min--max normalized over the candidate pool. Let
 \(m_t=\min_{j\in\mathcal D}a_j^{(t)}\) and
 \(M_t=\max_{j\in\mathcal D}a_j^{(t)}\). We set
 \begin{equation}
@@ -469,7 +472,6 @@ post-hoc verifier that re-extracts each layer's anchor at fixed
 intervals during training (protocol below).
 
 \paragraph{Step-to-step anchor displacement.}
-\label{sec:empirical-anchor-stability}
 For each retained layer \(l\) and consecutive refreshes
 \(t-1\!\to\!t\), we measure the step-to-step anchor displacement
 \begin{equation}
@@ -486,11 +488,11 @@ adjacent-refresh sign calibration. Equivalently, if
 \begin{equation}
   d_l^{(t)}
   =
-  \min_{\sigma\in\{\pm1\}}
+  \min_{\varsigma\in\{\pm1\}}
   \left\|
   \tilde v_l^{(t)}
   -
-  \sigma \tilde v_l^{(t-1)}
+  \varsigma \tilde v_l^{(t-1)}
   \right\|_2
   =
   \sqrt{
@@ -551,11 +553,13 @@ are complementary rather than identical.
 
 \begin{table}[t]
 \centering
-\caption{Anchor-displacement diagnostic for \textsc{TAG} and matched
-CO~\((\lambda{=}0)\). The invariant statistic is
-\(d_l^{(t)}\in[0,\sqrt{2}]\). Med. and peak are transition-level layer
-summaries aggregated over post-warmup refreshes; worst step is the
-maximum retained layer--refresh pair.}
+\caption{Anchor-displacement diagnostic for \textsc{TAG} and the
+matched Carrier-Only control CO~\((\lambda{=}0)\). The invariant
+statistic is \(d_l^{(t)}\in[0,\sqrt{2}]\). Med. and peak are
+transition-level layer summaries aggregated over post-warmup
+refreshes; worst step is the maximum retained layer--refresh pair.
+Status: PASS if no retained pair exceeds \(d_l^{(t)}=1\)
+(sign-calibrated angle \(<60^\circ\)); see text.}
 \label{tab:dstep-spread}
 
 \small
@@ -685,7 +689,7 @@ $78$ cosine-scheduled refresh points; Qwen2.5-0.5B + LoRA).
 \emph{Blue dashed}: empirical Davis--Kahan tail
 $\sum_{s\ge t} 2\|\Sigma^{(s+1)}-\Sigma^{(s)}\|_F/\gamma^{(s)}$.
 \emph{Grey dotted}: matched
-CO~($\lambda{=}0$) control;
+Carrier-Only CO~($\lambda{=}0$) control;
 circled markers denote the final two refreshes.}}
 \label{fig:anchor-drift}
 \end{figure}
@@ -726,10 +730,11 @@ Equation~\eqref{eq:tag-score-method} fuses the three views
 multiplicatively. The product form itself is classical---product-rule
 and log-opinion-pool combination of evidence goes back at least to
 combining-classifier and expert-aggregation
-theory~\cite{kittler1998combining,genest1986combining}---and in log
-space the score is simply the additive pool
+theory~\cite{kittler1998combining,genest1986combining}---and for
+\(G_i>0\) the score is, in log space, simply the additive pool
 \(\log s_i^{(t)}=\log G_i+\log\mathcal R_i^{(t)}
-+\log\bigl(1+\lambda\,\widetilde a_i^{(t)}\bigr)\).
++\log\bigl(1+\lambda\,\widetilde a_i^{(t)}\bigr)\), with
+\(G_i=0\) playing the role of the pool's \(-\infty\) veto.
 What the design contributes is the deliberate \emph{asymmetry of the
 three roles} within that pool. The gate is absolute and
 zero-anchored: \(G_i=0\) annihilates the score and, via the
@@ -747,10 +752,9 @@ weight. The two dynamic factors are, by design, weaker: the carrier
 \(\mathcal R_i^{(t)}\) is pool-relative and carries the dynamic
 ranking, while the anchor factor is confined to
 \([1,1+\lambda]\), so it modulates the carrier by at most a factor
-of \(1{+}\lambda\) and can neither veto nor dominate. The views
-also differ in acquisition schedule---\(G_i\) once at \(\theta_0\),
-carrier and anchor at every refresh---so reliability screening adds
-no recurring cost. Finally, each view is independently ablatable:
+of \(1{+}\lambda\) and can neither veto nor dominate; as noted in
+Section~\ref{sec:reliability-gate}, only these two dynamic views
+recur per refresh. Finally, each view is independently ablatable:
 setting \(G_i\equiv 1\) removes the gate without changing the
 underlying selector, and setting \(\lambda=0\) removes
 representation-anchor modulation, leaving the carrier-only
