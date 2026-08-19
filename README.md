@@ -149,7 +149,14 @@ under one workspace, no cluster mounts needed:
 See `docs/gpu-cloud-quickstart.md`. `scripts/setup_env.sh` is the n9-cluster
 equivalent and points at `/group-volume` paths. On the n9 cluster every
 dataset and benchmark lives under `/group-volume/datasets/<corpus>/` —
-one location, no fallbacks (`CLAUDE.md` has the inventory and layout).
+one location, no fallbacks (`CLAUDE.md` has the inventory and layout) —
+and every fresh shell starts with:
+
+    source /group-volume/jieuns.shin/venvs/exp/bin/activate
+    source scripts/gpu_cloud/env.sh
+
+The launchers refuse to start when `python` cannot import torch, but the
+refusal costs a round trip; the two lines cost nothing.
 
 ### The Table 2 pair (LLaMA-2-7B, clean Alpaca-GPT4, ρ=10%)
 

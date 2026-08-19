@@ -53,6 +53,21 @@ sha256 7f16a6f433119e28a9ff906cdb74752c28a721dffd1f6e45600a1d90e57f2543
 n_total 52002
 ```
 
+## Every n9 shell needs two lines before anything runs
+
+```
+source /group-volume/jieuns.shin/venvs/exp/bin/activate   # (exp) in the prompt
+source scripts/gpu_cloud/env.sh                            # [tag-env] banner
+```
+
+The venv lives at **/group-volume/jieuns.shin/venvs/exp** — not ./exp, not
+~/exp. (`venvs/vllm` beside it belongs to the vLLM serving box.) A shell
+with only env.sh sourced looks healthy — the banner prints — and then every
+launcher dies on `import torch` after grabbing its GPUs; this happened
+three times before the launchers grew a guard that refuses up front. The
+guard names the fix, but the right move is to never see it: activate first,
+check for `(exp)` in the prompt.
+
 ## Two experiments that are easy to confuse
 
 | | Table 2 row | lowq robustness grid |
