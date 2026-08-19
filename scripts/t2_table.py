@@ -26,6 +26,8 @@ rows = []
 missing = []
 for arm in ARMS:
     edir = W / "eval-results/main_7b/llama2" / arm / "runs"
+    if not edir.is_dir():
+        sys.exit(f"no eval results at {edir} — wrong TAG_WORKSPACE, or wrong machine")
     best = {}  # seed -> (run_dir, n_bench)
     for rd in sorted(edir.iterdir()):
         cfg = rd / "cfg.json"
