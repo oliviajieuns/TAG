@@ -1,0 +1,315 @@
+\appendix
+\vspace{-0.8em}
+\section{Reliability-Gate Implementation}
+\label{app:gate-implementation}
+This appendix records the exact construction behind the compact gate
+definition in Section~\ref{sec:reliability-gate}. These choices specify
+token accounting and numerical edge cases; the substantive statistic is
+the conditional-support contrast in Eq.~\eqref{eq:gate-counterfactual-support}.
+
+\paragraph{Counterfactual construction and token support.}
+We group examples by response length and derange records within each
+bucket. The donor's instruction and optional input replace the observed
+condition, while the original response \(y_i\) is held fixed. Thus the
+negative control breaks the pairing without generating a synthetic
+response. After max-length truncation, let
+\(K_i:=\min(K_i^+,K_i^-)\) be the common response-token length under the
+observed and counterfactual prompts; terminal EOS is excluded. For
+\(k=1,\ldots,K_i\), the stored token losses are
+\begin{equation}
+  \ell_{ik}^{+}:=-\log p_{\theta_0}(y_{ik}\mid u_i,y_{i,<k}),
+  \qquad
+  \ell_{ik}^{-}:=-\log p_{\theta_0}(y_{ik}\mid u_i^-,y_{i,<k}).
+  \label{eq:app-gate-token-nll}
+\end{equation}
+
+\paragraph{Global evidence.}
+The sequence-level relative conditional-loss reduction is
+\begin{equation}
+  \overline{\Delta}_i
+  :=1-
+  \frac{\sum_{k=1}^{K_i}\ell_{ik}^{+}}
+       {\max\!\left(\sum_{k=1}^{K_i}\ell_{ik}^{-},
+                     \varepsilon_{\mathrm{den}}\right)}.
+  \label{eq:app-gate-global-gain}
+\end{equation}
+
+\paragraph{Local evidence.}
+We partition the common prefix into contiguous spans \(S_{im}\) of width
+\(W\). A span is admissible only if it contains at least \(m_{\min}\)
+tokens and its mean counterfactual loss is at least \(\tau\).
+For each span, define
+\begin{equation}
+\begin{aligned}
+  \Delta_{im}
+  &:=1-
+  \frac{\sum_{k\in S_{im}}\ell_{ik}^{+}}
+       {\max\!\left(\sum_{k\in S_{im}}\ell_{ik}^{-},
+                     \varepsilon_{\mathrm{den}}\right)},\\
+  \mathcal C_i
+  &:=\left\{m:
+  |S_{im}|\ge m_{\min},\;
+  |S_{im}|^{-1}\!\sum_{k\in S_{im}}\ell_{ik}^{-}\ge\tau
+  \right\}.
+\end{aligned}
+  \label{eq:app-gate-local-gain}
+\end{equation}
+The conservative evidence is
+\begin{equation}
+  \Delta_i^{\min}
+  :=
+  \begin{cases}
+    \min_{m\in\mathcal C_i}\Delta_{im}, & \mathcal C_i\ne\varnothing,\\
+    \overline{\Delta}_i, & \mathcal C_i=\varnothing,
+  \end{cases}
+  \qquad
+  q_i:=\min\!\left(\overline{\Delta}_i,\Delta_i^{\min}\right).
+  \label{eq:app-gate-span-gain}
+\end{equation}
+The admissibility rule prevents a short or nearly deterministic
+boilerplate span from controlling the minimum; if no local span is
+admissible, \(q_i\) reduces to the global contrast.
+
+\paragraph{Length-conditioned calibration.}
+Let \(M_i:=\lceil K_i/W\rceil\). On the clean reference pool
+\(\mathcal D_{\mathrm{ref}}\), \(\mu(M)\) is the lower
+\(\alpha\)-quantile of \(q\) among responses in a comparable span-count
+bin. We estimate this curve over adaptive pooled bins and apply
+non-increasing isotonic smoothing. The centered evidence is
+\begin{equation}
+  \widehat{\Delta}_i:=q_i-\mu(M_i).
+  \label{eq:app-gate-null-correction}
+\end{equation}
+The transition scale in Eq.~\eqref{eq:reliability-gate} is fixed by
+\begin{equation}
+  s_G
+  :=
+  \frac{Q_{\beta}\!\left(
+  \{\widehat{\Delta}_j:j\in\mathcal D_{\mathrm{ref}}\}\right)}
+       {\operatorname{logit}(\rho_0)},
+  \qquad 0<\alpha<\beta<1,\quad \rho_0>\tfrac12,
+  \label{eq:app-gate-scale}
+\end{equation}
+when the numerator is positive. Thus the reference quantile
+\(Q_{\beta}\) maps to sigmoid value \(\rho_0\).
+
+\paragraph{Completeness, abstention, and caching.}
+The completeness factor is \(c_i=1\) only when both a text-level
+completion heuristic and the terminal-EOS check pass; otherwise
+\(c_i=c_{\mathrm{trunc}}<1\). When \(K_i<K_{\min}\), the likelihood
+contrast abstains and assigns \(G_i=c_i g_{\mathrm{neutral}}\). For an
+evaluable pair with finite \(\widehat{\Delta}_i\), the gate is continuous,
+is exactly zero for \(\widehat{\Delta}_i\le0\), and increases smoothly
+above that threshold. All gate values are computed under \(\theta_0\) and
+cached before the first dynamic-selection refresh.
+
+\paragraph{Default configuration.}
+We use one counterfactual per pair, \(K_{\min}=8\), \(W=16\),
+\(m_{\min}=4\), \(\tau=0.5\),
+\(\varepsilon_{\mathrm{den}}=10^{-3}\), \(\alpha=0.05\),
+\(\beta=0.10\), \(\rho_0=0.8\),
+\(g_{\mathrm{neutral}}=0.6\), and \(c_{\mathrm{trunc}}=0.2\).
+
+\vspace{-0.8em}
+\section{Proof of Theorem~\ref{thm:anchor-stability} and Empirical Envelope}
+\label{app:anchor-stability-diagnostics}
+This appendix proves Theorem~\ref{thm:anchor-stability}, clarifies the
+cross-time eigengap convention, and reports the empirical Davis--Kahan
+envelope used in Fig.~\ref{fig:anchor-drift}.
+
+\vspace{-0.6em}
+\subsection{Proof of Theorem~\ref{thm:anchor-stability}}
+\label{app:proof-stability}
+\begin{proof}
+Fix layer $l$ and transition $t-1\to t$, and write
+$A=\Sigma_l^{(t-1)}$, $B=\Sigma_l^{(t)}$, $E=B-A$.
+Let $u=v_l^{(t-1)}$ be the top eigenvector of $A$, and let $\tilde u$
+be the uncalibrated top eigenvector of $B$. Since
+$B\tilde u=\lambda_1(B)\tilde u$, the residual of $\tilde u$ w.r.t.\ $A$
+satisfies $\|A\tilde u-\lambda_1(B)\tilde u\|_2=\|E\tilde u\|_2\le\|E\|_F$.
+By the residual form of Davis--Kahan
+\cite{davis1970rotation,stewart1990matrix},
+$\sin\Theta(u,\tilde u)\le\|E\|_F/(\lambda_1(B)-\lambda_2(A))$,
+which under the assumptions of Theorem~\ref{thm:anchor-stability} gives
+$\sin\Theta\le(C_{\Sigma,l}/\gamma_l)\,\eta_{t-1}$.
+After temporal sign calibration,
+$\langle v_l^{(t)},v_l^{(t-1)}\rangle\ge 0$, so $\Theta\in[0,\pi/2]$
+and $\|v_l^{(t)}-v_l^{(t-1)}\|_2=2\sin(\Theta/2)\le 2\sin\Theta$.
+Therefore
+$\|v_l^{(t)}-v_l^{(t-1)}\|_2\le (2C_{\Sigma,l}/\gamma_l)\,\eta_{t-1}$.
+\end{proof}
+
+\paragraph{Eigengap convention.}
+The theorem uses the cross-time gap
+$\lambda_1(\Sigma_l^{(t)})-\lambda_2(\Sigma_l^{(t-1)})$
+because the proof treats the new top eigenvector as an approximate
+eigenvector of the previous covariance. By Weyl's inequality,
+$|\lambda_1(\Sigma_l^{(t)})-\lambda_1(\Sigma_l^{(t-1)})|
+\le\|\Sigma_l^{(t)}-\Sigma_l^{(t-1)}\|_F$,
+so this cross-time gap differs from the usual same-time gap only by
+$O(\eta_{t-1})$ under the covariance-drift assumption.
+The bound controls only the recomputed anchor direction, not the full
+ranking or optimization trajectory; it motivates the diagnostic in
+Section~\ref{sec:empirical-anchor-stability}.
+
+\vspace{-0.6em}
+\subsection{Empirical Davis--Kahan tail}
+\label{app:proof-envelope}
+For Fig.~\ref{fig:anchor-drift}, we replace worst-case constants with
+realised per-transition quantities. Define
+$\gamma_l^{(s)}:=\lambda_1(\Sigma_l^{(s+1)})-\lambda_2(\Sigma_l^{(s)})$.
+For $\gamma_l^{(s)}>0$, the cumulative envelope is
+\begin{equation}
+\|v_l^{(t)}-v_l^{(T)}\|_2
+\le \sum_{s=t}^{T-1}
+   \frac{2\,\|\Sigma_l^{(s+1)}-\Sigma_l^{(s)}\|_F}{\gamma_l^{(s)}}.
+\label{eq:tail-envelope}
+\end{equation}
+This is the blue dashed curve in Fig.~\ref{fig:anchor-drift}; it is an
+upper envelope, not a tight predictor of measured anchor drift.
+
+\vspace{-0.6em}
+\subsection{Realised stability constants}
+\label{app:stability-assumptions}
+On the Qwen2.5-0.5B + LoRA run, computed over the $1{,}496$ valid
+post-warmup layer--refresh pairs, the realised covariance drift is
+bounded by
+$\sup_{l,t}\|\Sigma_l^{(t)}-\Sigma_l^{(t-1)}\|_F/\eta_{t-1}
+\le C_\Sigma=5.78\times10^{3}$,
+and the retained pairs satisfy
+$\inf_{l,t}\bigl(\lambda_1(\Sigma_l^{(t)})-\lambda_2(\Sigma_l^{(t-1)})\bigr)
+\ge\gamma_{\min}=0.05$.
+The raw verifier eigenvectors required negative orientation correction
+in $1.7\%$ of retained \textsc{TAG} pairs; after sign calibration, all
+reported displacements use $\langle v_l^{(t)},v_l^{(t-1)}\rangle\ge 0$.
+With $\eta=2\times10^{-4}$, the global plug-in envelope is
+$(2C_\Sigma/\gamma_{\min})\,\eta=46.24$, which exceeds the maximum
+possible sign-calibrated step displacement $\sqrt{2}$; the informative
+comparison is therefore the realised envelope in
+Eq.~\eqref{eq:tail-envelope}.% ---------------------------------------------------------
+
+\vspace{-0.4em}
+\begin{table}[h]
+\centering
+\caption{Hyperparameter settings used in our experiments.
+Footnotes cover model-specific deviations.}
+\label{tab:hyperparams}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{ll@{\hspace{1em}}ll}
+\toprule
+\multicolumn{2}{l}{\emph{Supervised fine-tuning}} &
+\multicolumn{2}{l}{\emph{Dynamic Selection \& TAG}} \\
+Parameter & Value & Parameter & Value \\
+\midrule
+Optimiser            & AdamW (8-bit)$^{a}$        & Selection ratio $\rho$  & 0.10 \\
+Precision            & bf16                       & Anchor weight $\lambda$ & 1.0  \\
+Learning rate        & $2\times10^{-5}$ $^{b}$    & Probe size $n_p$        & 1024 \\
+LR scheduler         & cosine                     & Anchor layers           & all  \\
+Warmup ratio         & 0.03 $^{c}$                & PCA batch size          & 4    \\
+Weight decay         & 0.1                        & Episode batch size      & 16   \\
+Gradient clip        & 1.0 $^{c}$                 &                         &      \\
+Gradient chkpoint  & enabled                    &                         &      \\
+Cutoff length        & 1024                       &                         &      \\
+Epochs               & 3                          &                         &      \\
+Effective batch size & 128 $^{d}$                 &                         &      \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\begin{flushleft}
+\tiny
+$^{a}$ Bitsandbytes 8-bit AdamW; auto-falls back to fp32 if the library is unavailable.\\
+$^{b}$ Qwen2.5-7B uses $1\times10^{-5}$ per its official SFT recipe.\\
+$^{c}$ LLaMA-2-7B + TAG uses warmup $0.06$ and gradient clip $0.5$ as a small SFT-side stability lever; all other (model, method) cells use the values shown.\\
+$^{d}$ Per-GPU batch $8\times$ grad-accum $4\times$ DDP world-size $4$.
+\end{flushleft}
+\end{table}
+
+\vspace{-0.8em}
+\section{Hyperparameter Configuration}
+\label{app:hyperparams}
+Table~\ref{tab:hyperparams} summarises the per-backbone configuration
+referenced from \S\ref{sec:experiments}. Within each backbone, all
+selectors share these settings, so the selected subset is the only
+varying factor across the methods we compare.
+\vspace{-0.4em}
+
+\vspace{-0.4em}
+\paragraph{Implementation note.}
+The codebase contains optional actor--critic components retained for
+future verifiable-reward extensions; they are not used in the ranking
+rule reported in this paper. All TAG numbers use the deterministic
+composite-reward carrier multiplied by the representation-anchor
+factor.
+
+
+\vspace{-0.6em}
+\section{Random Selection-Ratio Sweep}
+\label{app:ratio-sweep}
+\vspace{-0.4em}
+\begin{table}[t]
+\centering
+\caption{\textbf{Random selection-ratio sweep on LLaMA-2-7B +
+Alpaca-GPT4.} Budget-only controls with all other hyperparameters
+held fixed; W-AVG plateaus within $\pm 2\%$ across
+$\rho\in\{10,20,30,40,50\}\%$.}
+\label{tab:ratio-sweep}
+{\fontsize{7.5pt}{9pt}\selectfont
+\setlength{\tabcolsep}{1.8pt}
+\renewcommand{\arraystretch}{1.05}
+\begin{tabular}{@{}lcccccccc c@{}}
+\toprule
+& \multicolumn{2}{c}{Know.} & \multicolumn{2}{c}{Math}
+& \multicolumn{2}{c}{Code} & \multicolumn{2}{c}{MLing.} & \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}
+$\rho$ & MMLU & BBH & SVAMP & GSM8K & MBPP & H-Eval & TydiQA & XQuAD & W-AVG \\
+\midrule
+10\% & 45.04 & 35.54 & 36.80 & 13.57 & 35.41 & 24.51 & 60.83 & 52.28 & 38.00 \\
+20\% & 45.53 & 35.72 & 38.33 & 15.92 & 34.24 & 24.13 & 61.31 & 53.31 & 38.56 \\
+30\% & 45.91 & 36.23 & 37.33 & 14.10 & 36.96 & 25.31 & 61.32 & 53.73 & 38.86 \\
+40\% & 46.21 & 36.37 & 40.00 & 14.33 & 35.02 & 24.02 & 61.29 & 53.37 & 38.83 \\
+50\% & 46.31 & 36.42 & 38.00 & 13.95 & 33.85 & 25.64 & 60.98 & 53.67 & 38.60 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+
+The random rows in Table~\ref{tab:ratio-sweep} are \emph{budget-only controls}: all hyperparameters except \(\rho\) are fixed, isolating budget from selection quality. AVG varies only within a \(0.79\)-pp band from \(\rho=10\%\) to \(\rho=50\%\), peaking at \(\rho=30\%\) before saturating; increasing the budget \(5\times\) provides little additional headroom. We therefore use \(\rho=10\%\) throughout to test whether selection can improve efficiency under a constrained budget: if \textsc{TAG} at \(\rho=10\%\) exceeds random up to \(\rho=50\%\), the gain reflects selection rather than budget size. Each ratio uses one fixed-seed draw, so across-seed variance is not estimated, but the observed saturation matches prior IT-data findings that data quality can matter more than scale once a modest subset is used~\cite{zhou2023lima}.
+
+\section{Datasets and Benchmark Scoring}
+\label{app:benchmarks}
+
+This appendix describes the instruction-tuning data and benchmark
+scoring protocols. All benchmarks are evaluated with
+\texttt{lm\allowbreak-evaluation\allowbreak-harness}. Unless otherwise
+stated, AVG denotes the unweighted mean over the evaluated tasks.
+
+\vspace{-0.8em}
+\paragraph{Instruction-tuning pools.}
+Alpaca-GPT4 contains 52K Stanford-Alpaca-style instructions paired with
+GPT-4 responses, covering broad open-domain instruction following
+\cite{wang2023selfinstruct}. WizardLM Evol-Instruct contains
+evolution-generated instructions designed to be harder, more diverse,
+and more reasoning-heavy \cite{xu2024wizardlm}.
+\vspace{-0.8em}
+\paragraph{Benchmark scoring.}
+MMLU is a multiple-choice benchmark covering academic and professional
+subjects; its score is answer-choice accuracy
+\cite{hendrycks2021mmlu}. BBH is a suite of difficult symbolic, logical,
+and commonsense reasoning tasks; its score is exact-match accuracy
+\cite{suzgun2022bbh}. GSM8K and SVAMP are arithmetic word-problem benchmarks. GSM8K focuses on
+grade-school math reasoning, while SVAMP tests robustness to adversarial
+rephrasings \cite{cobbe2021gsm8k,patel2021svamp}. Both are scored by
+final-number exact match after normalization. HumanEval and MBPP are Python code-generation benchmarks where the model
+must generate executable code from a natural-language task, function
+signature, or examples \cite{chen2021humaneval,austin2021mbpp}. Both are
+scored by pass@1 under execution-based evaluation. TyDiQA and XQuAD are multilingual question-answering benchmarks grounded
+in context passages. TyDiQA covers typologically diverse languages, while XQuAD provides parallel SQuAD-style examples across languages
+\cite{clark2020tydiqa,artetxe2020xquad}. Both are scored by normalized
+token-overlap F1 averaged over languages.
+
+% ---------------------------------------------------------
+
+

@@ -1,0 +1,21 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+\textsc{TAG} first attenuates unreliable instruction--response
+supervision and then ranks candidates using a training-adaptive
+difficulty--uncertainty carrier with bounded representation-anchor
+modulation. Under covariance-drift and eigengap conditions, a local
+Davis--Kahan analysis bounds one-refresh change of the recomputed
+principal direction at the optimiser scale. This result concerns the
+anchor direction only, while the factor
+\(1+\lambda\widetilde a_i^{(t)}\in[1,1{+}\lambda]\) separately
+limits its direct effect on the carrier; neither statement guarantees
+stability of the full ranking. Empirically, the resulting selector improves the
+main-setting average over static and policy-based dynamic baselines,
+shows robust average performance in additional backbone and
+dataset-transfer checks, and reduces end-to-end dynamic-selection cost
+by about a third. These results suggest that representation geometry
+recomputed from the current model state can provide an interpretable,
+low-cost auxiliary signal for adaptive post-training data selection,
+without requiring a learned selection policy.
+

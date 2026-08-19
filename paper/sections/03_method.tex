@@ -1,0 +1,767 @@
+\section{Method: Training-Adaptive Data Selection with a Reliability Gate (\textsc{TAG})}
+\label{sec:method}
+\textsc{TAG} separates two questions that are otherwise conflated by
+dynamic selection: whether an instruction--response pair provides
+credible supervision, and how useful that pair is to the model at its
+current training state. A static reliability gate answers the first;
+a dynamically refreshed reward and a state-conditioned
+representation-anchor term answer the second.
+Section~\ref{sec:problem-setup} fixes notation and the selection
+rule; Section~\ref{sec:reliability-gate} constructs the gate;
+Sections~\ref{sec:method-motivation}--\ref{sec:local-anchor-stability}
+develop the two dynamic views and analyze the stability of the
+recomputed anchor; Section~\ref{sec:tag-score} interprets the fused
+score; Section~\ref{sec:algorithm-implementation} summarizes the
+complete algorithm.
+
+\subsection{Problem setup and notation}
+\label{sec:problem-setup}
+
+Let \(\mathcal D=\{x_i\}_{i=1}^N\) be a pool, where
+\(x_i=(u_i,y_i)\) contains instruction \(u_i\) and response \(y_i\). Let
+\(p_{\theta}\) denote the base language model. At refresh step \(t\),
+\textsc{TAG} assigns candidate \(x_i\) the score
+\begin{equation}
+  s_i^{(t)}
+  =
+  \underbrace{G_i}_{\text{reliability gate}}
+  \;\mathcal R_i^{(t)}
+  \left(1+\lambda\,
+  \widetilde a_i^{(t)}\right),
+  \qquad G_i\in[0,1],
+  \label{eq:tag-score-method}
+\end{equation}
+where \(G_i\) is computed once with the base checkpoint \(\theta_0\),
+\(\mathcal R_i^{(t)}\) is a dynamically refreshed
+difficulty--uncertainty reward, and
+\(\widetilde a_i^{(t)}\in[0,1]\) is the candidate's normalized
+projection onto the current representation anchor. Given budget \(B\le N\),
+the implementation uses the lexicographic key
+\begin{equation}
+  \kappa_i^{(t)}
+  :=
+  \begin{cases}
+    2+\operatorname{rank}_{01}\!\left(s_i^{(t)}\right), & G_i>0,\\
+    \operatorname{rank}_{01}\!\left(\widehat{\Delta}_i\right), & G_i=0,
+  \end{cases}
+  \qquad
+  \mathcal S_t
+  :=\operatorname{TopB}_{x_i\in\mathcal D}\kappa_i^{(t)},
+  \label{eq:tag-selection-key}
+\end{equation}
+where \(\operatorname{rank}_{01}\) is the pool-wise midrank normalized
+to \([0,1]\), and \(\widehat{\Delta}_i\) is the gate evidence defined
+in Section~\ref{sec:reliability-gate}. Thus every candidate with a
+positive gate precedes the exact-zero block. If that admissible set
+fills the budget, Eq.~\eqref{eq:tag-selection-key} reduces to top-\(B\)
+selection by \(s_i^{(t)}\); otherwise, it backfills the remaining slots
+with the least unreliable zero-gate candidates. The gate is fixed
+across refreshes, whereas usefulness is re-evaluated as
+\(\theta_{t-1}\) evolves.
+\paragraph{Notation.}
+We write \(\mathcal L_i^{(t)}\) for response-token cross-entropy,
+\(\mathcal H_i^{(t)}\) for mean predictive entropy, and
+\(w^{(t)}\) for their variance-ratio coefficient. Superscript \(0\)
+denotes a quantity evaluated once at \(\theta_0\); superscript \(t\)
+denotes a quantity refreshed under \(\theta_{t-1}\).
+
+\subsection{Reliability gate}
+\label{sec:reliability-gate}
+
+\paragraph{Design requirements.}
+The gate must resolve the ambiguity that defeats dynamic utility
+signals in low-quality pools: loss and entropy rise both for
+genuinely hard clean pairs and for corrupted ones, so a
+difficulty-driven selector cannot separate ``hard because
+informative'' from ``hard because broken''
+(Section~\ref{sec:intro}). Fluency is no remedy---a mismatched or
+subtly wrong response is often perfectly fluent, which is precisely
+why perplexity-style filters pass it. We therefore require a signal
+that (i) measures pair-level credibility on an axis orthogonal to
+model-state utility, (ii) uses no external judge, reward model, or
+trusted reference response, and (iii) is cheap enough to run once
+over the full pool and cache. The construction below meets these
+requirements with two forward passes per pair at the base
+checkpoint.
+
+\paragraph{Instruction-side counterfactual contrast.}
+What corruption destroys is the predictive dependence
+\(u_i\!\to\!y_i\). Intervening on the response side cannot isolate
+this dependence: a mismatched \(y_i\) remains a fluent, valid answer
+to \emph{some} instruction, and the trusted replacement for a
+suspect \(y_i\) is exactly the supervision that is unknown. The
+instruction side, by contrast, offers a valid negative control for
+free. We hold \(y_i\) fixed and replace \(u_i\): for each
+\(x_i=(u_i,y_i)\), a derangement within the same response-length
+stratum assigns a counterfactual instruction \(u_i^-\), so that no
+original pairing is retained and the negative condition is a
+\emph{real} instruction of comparable scale. The counterfactual is
+used only for scoring and never enters training. With
+\(u_i^+=u_i\) and \(K_i\) the response-token support shared by the
+two prompts, define at the frozen base checkpoint
+\begin{equation}
+\begin{aligned}
+  L_i^{\pm}
+  &:=-\sum_{k=1}^{K_i}
+  \log p_{\theta_0}(y_{ik}\mid u_i^{\pm},y_{i,<k}),
+  \\
+  \overline{\Delta}_i
+  &:=1-\frac{L_i^+}{L_i^-}.
+\end{aligned}
+  \label{eq:gate-counterfactual-support}
+\end{equation}
+A positive \(\overline{\Delta}_i\) says that the paired instruction
+predicts the fixed response better than a matched in-pool
+alternative. Because the reference condition is a real instruction
+rather than an empty or generic one, effects common to any
+condition---response fluency, length, boilerplate---cancel in the
+ratio. This matched negative control distinguishes the contrast
+from conditional-versus-unconditional difficulty scores such as
+IFD~\cite{q2q}, while following the broader principle of measuring
+model-relative input contribution through changes in conditional
+likelihood~\cite{ethayarajh2022usable}. This is an
+intervention-style diagnostic of conditional support, not a claim
+of causal identification, and it measures
+instruction--response dependence rather than certifying factual
+correctness.
+
+\paragraph{From evidence to a calibrated, zero-anchored gate.}
+Two refinements turn the raw contrast into a reusable weight; each
+targets a specific failure mode of the plain sequence average.
+\emph{(a)~Conservative span evidence.} A sequence-level mean can
+hide a locally unsupported segment---a wrong final answer or a
+truncated tail in an otherwise supported response. We therefore
+repeat the contrast in Eq.~\eqref{eq:gate-counterfactual-support}
+over short contiguous response spans and let \(q_i\) be the minimum
+of the sequence-level and admissible span-level contrasts, asking
+whether the instruction supports the response \emph{throughout}
+while excluding short or uninformative spans.
+\emph{(b)~Length-conditioned calibration.} A minimum over more
+spans has a lower null value even for clean responses, so an
+uncalibrated threshold would systematically penalize long
+responses. We calibrate \(q_i\) against clean responses with a
+comparable span count \(M_i\), whose lower envelope we denote
+\(\mu(M_i)\), center the evidence, and map it to the gate:
+\begin{equation}
+\begin{aligned}
+  \widehat{\Delta}_i&:=q_i-\mu(M_i),\\
+  G_i
+  &:=c_i\left[2\sigma\!\left(\widehat{\Delta}_i/s_G\right)-1\right]_+
+  \in[0,1].
+\end{aligned}
+  \label{eq:reliability-gate}
+\end{equation}
+Here \(s_G\) is fixed from the same reference distribution and
+\(c_i\in[0,1]\) attenuates visibly incomplete responses. Exact span
+construction, calibration, completeness checks, and edge-case
+handling are given in Appendix~\ref{app:gate-implementation}.
+
+\paragraph{Properties and role.}
+The mapping itself is deliberately simple; its value lies in three
+properties that the fused rule in Eq.~\eqref{eq:tag-score-method}
+exploits. First, the gate is \emph{zero-anchored}: evidence at or
+below the clean envelope maps to exactly \(G_i=0\), so an
+unsupported pair is vetoed multiplicatively rather than merely
+down-weighted, and no amount of dynamic utility can compensate
+(Section~\ref{sec:tag-score}). Second, it is \emph{calibrated}:
+centering against the length-conditioned clean envelope makes
+\(G_i\) comparable across response lengths, which is what allows
+one continuous weight to gate a heterogeneous pool. Third, it is
+\emph{static and cached}: computed once under \(\theta_0\), it adds
+no per-refresh cost, so reliability screening scales independently
+of how often the dynamic views are refreshed. In combination, the
+matched in-pool counterfactual, the conservative span minimum, and
+the zero-anchored length-conditioned calibration form a
+pre-selection reliability stage that existing dynamic selectors
+lack (Section~\ref{sec:related}); none of the three components
+requires labels, judges, or selector training. The gate decides
+admissibility only; the next two views measure usefulness under the
+current checkpoint.
+
+\subsection{Difficulty--uncertainty carrier and its structural
+limitation}
+\label{sec:method-motivation}
+
+\paragraph{Difficulty--uncertainty carrier.}
+At refresh step \(t\), \(\mathcal{L}_i^{(t)}\) and
+\(\mathcal{H}_i^{(t)}\) are computed under the current checkpoint
+\(\theta_{t-1}\). Following dynamic difficulty--uncertainty selection,
+we define the carrier reward
+\begin{equation}
+  \mathcal{R}_i^{(t)}
+  =
+  w^{(t)}\mathcal{L}_i^{(t)}
+  +
+  \bigl(1-w^{(t)}\bigr)\mathcal{H}_i^{(t)},
+  \label{eq:composite}
+\end{equation}
+where the variance-ratio weight is
+\begin{equation}
+  w^{(t)}
+  =
+  \frac{\operatorname{Var}_{\mathcal D}(\mathcal L^{(t)})}
+       {\operatorname{Var}_{\mathcal D}(\mathcal L^{(t)})
+       +
+        \operatorname{Var}_{\mathcal D}(\mathcal H^{(t)})
+       +
+        \varepsilon}.
+  \label{eq:w}
+\end{equation}
+In \textsc{TAG}, this loss--entropy reward is kept as a deterministic
+carrier modulated by the representation anchor~\cite{kung2023activeit,dataagent}.
+
+\paragraph{Structural limitation.}
+The variance-ratio carrier can mix within-family informativeness with
+between-family scale effects in heterogeneous pools. To see this,
+suppose for analysis only that \(\mathcal D\) is partitioned into
+task-family groups \(\{\mathcal D_g\}_{g=1}^G\), and let
+\(\mu_g^{(t)}=\mathbb E_{x\in\mathcal D_g}[\mathcal L^{(t)}(x)]\).
+By the law of total variance,
+\begin{equation}
+  \operatorname{Var}_{\mathcal D}(\mathcal L^{(t)})
+  =
+  \underbrace{
+  \mathbb E_g
+  \!\left[
+  \operatorname{Var}_{\mathcal D_g}(\mathcal L^{(t)})
+  \right]
+  }_{\text{\scriptsize within-family}}
+  +
+  \underbrace{
+  \operatorname{Var}_g(\mu_g^{(t)})
+  }_{\text{\scriptsize between-family}} .
+  \label{eq:total-variance}
+\end{equation}
+The same decomposition holds for \(\mathcal H^{(t)}\). Thus, in
+multi-task pools, \(w^{(t)}\) may reflect task-family scale differences
+in addition to per-sample difficulty and uncertainty. \textsc{TAG}
+therefore keeps \(\mathcal R_i^{(t)}\) as the carrier but modulates
+it with candidate projections onto a representation anchor recomputed
+from the current model state.
+
+
+\subsection{State-conditioned representation anchor and candidate
+projection}
+\label{sec:representation-anchor}
+
+\paragraph{Principal-direction construction.}
+Let \(h_l^{(k)}(x;\theta)\in\mathbb R^d\) denote the hidden state of
+sequence \(x\) at layer \(l\) and token position \(k\). We define the
+within-sequence representation displacement and sequence-mean
+activation as
+\begin{equation}
+  \Delta h_l(x;\theta)
+  :=
+  h_l^{(K_x)}(x;\theta)-h_l^{(1)}(x;\theta),
+  \label{eq:delta}
+\end{equation}
+and
+\begin{equation}
+  \bar h_l(x;\theta)
+  :=
+  \frac{1}{K_x}\sum_{k=1}^{K_x} h_l^{(k)}(x;\theta).
+  \label{eq:meanact}
+\end{equation}
+
+At refresh step \(t\), we sample a probe subset
+\(\widetilde{\mathcal D}_t\subset\mathcal D\). For each retained layer
+\(l\), we compute the mean probe delta
+\begin{equation}
+  \overline{\Delta h}_l^{(t)}
+  :=
+  \frac{1}{|\widetilde{\mathcal D}_t|}
+  \sum_{x\in\widetilde{\mathcal D}_t}
+  \Delta h_l(x;\theta_{t-1}),
+  \label{eq:anchor-delta-mean}
+\end{equation}
+and the centred empirical covariance
+\begin{equation}
+\begin{aligned}
+  \widehat{\Sigma}^{(t)}_l
+  :=
+  \frac{1}{|\widetilde{\mathcal D}_t|}
+  \sum_{x\in\widetilde{\mathcal D}_t}
+  &\bigl(\Delta h_l(x;\theta_{t-1})
+  -\overline{\Delta h}_l^{(t)}\bigr) \\
+  &\bigl(\Delta h_l(x;\theta_{t-1})
+  -\overline{\Delta h}_l^{(t)}\bigr)^\top .
+\end{aligned}
+\label{eq:anchor-covariance}
+\end{equation}
+The top unit PCA direction is
+\begin{equation}
+  \tilde v_l^{(t)}
+  \in
+  \arg\max_{\|v\|=1}
+  v^\top \widehat{\Sigma}^{(t)}_l v .
+  \label{eq:anchor-eigenvector}
+\end{equation}
+By the Rayleigh--Ritz characterization,
+\(\tilde v_l^{(t)}\) is the axis that maximizes empirical variance
+among the centered probe displacements. It is not assumed to be a
+semantic capability direction. Because PCA directions are
+sign-indeterminate, we orient \(\tilde v_l^{(1)}\) toward
+\(\overline{\Delta h}_l^{(1)}\) at the first refresh and, for
+\(t>1\), toward \(v_l^{(t-1)}\). We use the resulting oriented
+principal representation-displacement direction \(v_l^{(t)}\) as a
+state-conditioned representation anchor.
+
+\paragraph{Candidate anchor projection.}
+For candidate \(x_i\), the raw anchor-projection score aggregates
+layer-wise signed projections of the candidate's sequence-mean
+activation onto the current anchor:
+\begin{equation}
+  a_i^{(t)}
+  =
+  \sum_{l=1}^{L}
+  \left\langle
+  \bar h_l(x_i;\theta_{t-1}),
+  v_l^{(t)}
+  \right\rangle .
+  \label{eq:raw-anchor-projection}
+\end{equation}
+Although \(v_l^{(t)}\) has unit norm, \(\bar h_l\) is not
+normalized. Thus \(a_i^{(t)}\) is a signed projection, not a cosine
+similarity; it retains both directional and activation-magnitude
+information. The raw scores are min--max normalized over the candidate
+pool. Let
+\(m_t=\min_{j\in\mathcal D}a_j^{(t)}\) and
+\(M_t=\max_{j\in\mathcal D}a_j^{(t)}\). We set
+\begin{equation}
+  \widetilde a_i^{(t)}
+  =
+  \begin{cases}
+  \dfrac{a_i^{(t)}-m_t}{M_t-m_t},
+  & M_t-m_t\ge 10^{-8},\\[4pt]
+  1/2, & \text{otherwise}.
+  \end{cases}
+  \label{eq:anchor-projection-norm}
+\end{equation}
+The second case makes the representation-anchor modulation uniform,
+preserving the carrier-only ranking. Because both the anchor and the
+candidate activations are recomputed under \(\theta_{t-1}\), the
+modulation tracks the current model state; its usefulness therefore
+hinges on whether the recomputed direction is stable between
+consecutive refreshes, which we analyze and verify next.
+
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[scale=0.95, every node/.style={font=\small}]
+  \draw[gray!30, very thin, -{Latex[length=2mm]}] (-0.1,0) -- (6.4,0);
+  \draw[gray!30, very thin, -{Latex[length=2mm]}] (0,-0.1) -- (0,3.8);
+  \node[gray!50, font=\scriptsize] at (6.5,-0.18) {$\mathbb{R}^d$};
+
+  \filldraw[black] (0,0) circle (1.2pt);
+
+  \foreach \x/\y in
+    {3.8/1.2, 4.2/1.6, 3.5/1.8, 4.5/2.0, 3.0/1.3, 4.0/2.3, 3.7/1.5, 4.6/1.4, 3.3/1.6}
+  {
+    \draw[-{Latex[length=1.6mm]}, orange!60, thin, opacity=0.75]
+      (0,0) -- (\x,\y);
+  }
+
+  \node[orange!80!black, font=\footnotesize, align=left, anchor=north west] at (3.5,0.85)
+    {Probe deltas\\
+     $\{\Delta h_l(x;\theta_{t-1})\}_{x\in\widetilde{\mathcal{D}}_t}$};
+
+  \draw[-{Latex[length=2.6mm]}, blue!75!black, ultra thick]
+    (0,0) -- (5.0,2.0);
+  \node[blue!75!black, font=\bfseries] at (5.35,2.25) {$v_l^{(t)}$};
+
+  \draw[-{Latex[length=2.2mm]}, blue!35, dashed, semithick]
+    (0,0) -- (5.0,1.65);
+  \node[blue!50, font=\scriptsize] at (5.40,1.45) {$v_l^{(t-1)}$};
+
+  \node[gray!60!black, font=\scriptsize, align=left] at (6.5,1.5)
+    {previous\\
+     sign-calibrated\\
+     anchor};
+
+  \filldraw[red!75!black] (2.2,2.85) circle (2pt);
+  \node[red!75!black, font=\footnotesize] at (1.45,3.05)
+    {$\bar h_l(x_i;\theta_{t-1})$};
+
+  \draw[red!75!black, dotted, thick] (2.2,2.85) -- (2.88,1.15);
+  \filldraw[red!75!black] (2.88,1.15) circle (1.5pt);
+
+  \node[red!75!black, font=\scriptsize, align=left, anchor=west]
+    at (0.70,1.45)
+    {projection score\\[-1pt]
+     $\langle \bar h_l(x_i;\theta_{t-1}), v_l^{(t)}\rangle$};
+\end{tikzpicture}
+
+\caption{\textbf{State-conditioned representation anchor at refresh
+step~\(t\).}
+\textnormal{One-layer schematic. \(\Delta h_l\): probe
+representation displacements;
+\(v_l^{(t)}\): current anchor; \(v_l^{(t-1)}\): previous anchor;
+\(\bar h_l(x_i;\theta_{t-1})\): candidate mean activation. Dotted
+line: the layer-wise projection contribution
+\(\langle \bar h_l(x_i;\theta_{t-1}), v_l^{(t)}\rangle\), which is
+summed in Eq.~\eqref{eq:raw-anchor-projection} to form the raw
+anchor-projection score \(a_i^{(t)}\).}}
+\label{fig:anchor}
+\end{figure}
+
+
+\subsection{Anchor stability: local analysis and empirical
+verification}
+\label{sec:local-anchor-stability}
+
+\paragraph{Local stability bound.}
+The following Davis--Kahan-style bound records the local sensitivity
+of the recomputed PCA anchor. It is used only to motivate the
+diagnostic evaluated below; the algorithm itself does not use this
+bound.
+
+\begin{theorem}[State-conditioned anchor stability]
+\label{thm:anchor-stability}
+For notational simplicity, write
+\(\Sigma_l^{(t)}=\widehat{\Sigma}_l^{(t)}\), and let \(\eta_{t-1}\)
+denote the optimizer learning rate in effect at refresh step \(t\).
+Suppose that, for layer \(l\) at refresh step \(t\),
+\begin{equation}
+  \left\|
+  \Sigma_l^{(t)}-\Sigma_l^{(t-1)}
+  \right\|_F
+  \le
+  C_{\Sigma,l}\eta_{t-1},
+  \label{eq:cov-drift-assumption}
+\end{equation}
+and
+\begin{equation}
+  \lambda_1(\Sigma_l^{(t)})
+  -
+  \lambda_2(\Sigma_l^{(t-1)})
+  \ge
+  \gamma_l>0 .
+  \label{eq:gap-assumption}
+\end{equation}
+Under the temporal sign-calibration convention
+\(\langle v_l^{(t)},v_l^{(t-1)}\rangle\ge 0\), the anchor displacement
+satisfies
+\begin{equation}
+  \left\|
+  v_l^{(t)}-v_l^{(t-1)}
+  \right\|_2
+  \le
+  \frac{2C_{\Sigma,l}}{\gamma_l}\eta_{t-1}.
+  \label{eq:anchor-stability-bound}
+\end{equation}
+\end{theorem}
+
+The proof and the cross-time eigengap convention are deferred to
+Appendix~\ref{app:proof-stability}. The bound is conditional: its
+constants depend on the realized covariance trajectory, so it is not
+a training-time certificate, and it says nothing about candidate
+projections or the full ranking. What it does supply is an
+observable prediction---anchor displacement at the optimizer
+scale---which we now check on a realized trajectory.
+
+\paragraph{Step-to-step anchor displacement.}
+\label{sec:empirical-anchor-stability}
+For each retained layer \(l\) and consecutive refreshes
+\(t-1\!\to\!t\), we measure the step-to-step anchor displacement
+\begin{equation}
+  d_l^{(t)}
+  :=
+  \left\|
+  v_l^{(t)}-v_l^{(t-1)}
+  \right\|_2 ,
+  \label{eq:dstep}
+\end{equation}
+where \(v_l^{(t)}\) denotes the verifier-extracted anchor after
+adjacent-refresh sign calibration. Equivalently, if
+\(\tilde v_l^{(t)}\) denotes the raw uncalibrated top eigenvector, then
+\begin{equation}
+  d_l^{(t)}
+  =
+  \min_{\sigma\in\{\pm1\}}
+  \left\|
+  \tilde v_l^{(t)}
+  -
+  \sigma \tilde v_l^{(t-1)}
+  \right\|_2
+  =
+  \sqrt{
+  2
+  -
+  2
+  \left|
+  \left\langle
+  \tilde v_l^{(t)},\tilde v_l^{(t-1)}
+  \right\rangle
+  \right|
+  } .
+  \label{eq:dstep-sign-invariant}
+\end{equation}
+Thus \(d_l^{(t)}\in[0,\sqrt{2}]\). Small values indicate that the
+anchor direction is stable across refreshes, while values near
+\(\sqrt{2}\) indicate nearly orthogonal consecutive anchors even
+after sign calibration. Under the assumptions of
+Theorem~\ref{thm:anchor-stability}, the same transition obeys the
+bound in Eq.~\eqref{eq:anchor-stability-bound}. We use
+\(d_l^{(t)}\) only as a post-hoc diagnostic; it is not used by
+Algorithm~\ref{alg:tag} to rank candidates or select data.
+
+\paragraph{Diagnostic protocol.}
+We apply a post-hoc verifier to Qwen2.5-0.5B + LoRA training on
+Alpaca-GPT4, a small instrumented setting chosen so that per-refresh
+anchor extraction over all layers is affordable. Every 25 optimizer
+steps, the verifier re-extracts each layer's anchor from a fixed
+2,000-sample diagnostic probe and records \(d_l^{(t)}\). This probe
+is fixed across refreshes and separate from the resampled
+training-time probe \((n_p=1024)\), so \(d_l^{(t)}\)
+removes cross-refresh probe-sampling variance and reduces finite-sample
+eigenvector noise.
+
+We discard the first 9 refreshes as warm-up and exclude boundary
+layers 1 and 24, whose representation displacements are dominated by
+embedding-adjacent and output-projection effects. Empirically, these
+effects produce near-degenerate local covariance spectra, weakening the
+spectral-separation premise of Theorem~\ref{thm:anchor-stability}. The
+diagnostic is therefore evaluated on 22 inner decoder layers over 68
+post-warmup transitions, giving \(22\times68=1{,}496\) valid
+layer--refresh pairs. The global plug-in envelope
+\((2\widehat C_{\Sigma}/\gamma_{\min})\eta=46.24\) is too conservative
+to be informative at the scale of \(d_l^{(t)}\), as it exceeds the
+maximum sign-calibrated displacement \(\sqrt{2}\). The meaningful
+comparison is the trajectory-aware Davis--Kahan envelope reported in
+Appendix~\ref{app:anchor-stability-diagnostics}.
+
+\begin{table}[t]
+\centering
+\caption{Anchor-displacement diagnostic for \textsc{TAG} and matched
+CO~\((\lambda{=}0)\). The invariant statistic is
+\(d_l^{(t)}\in[0,\sqrt{2}]\). Med. and peak are transition-level layer
+summaries aggregated over post-warmup refreshes; worst step is the
+maximum retained layer--refresh pair.}
+\label{tab:dstep-spread}
+
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+ & \multicolumn{2}{c}{\(d^{(t)}\) over layers}
+ & worst & sign-flip & \\
+\cmidrule(lr){2-3}
+Method & med. & peak & step & rate & Status \\
+\midrule
+\textsc{TAG} \((\lambda=1)\)
+ & \(0.034\) & \(0.166\) & \(0.623\) & \(1.7\%\) & \textbf{PASS} \\
+CO \((\lambda=0)\)
+ & \(0.215\) & \(0.527\) & \(1.405\) & \(\mathbf{11.8\%}\) & \textbf{FAIL} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\resizebox{0.97\columnwidth}{!}{%
+\begin{tikzpicture}[
+  every node/.style={font=\scriptsize},
+  >=Latex
+]
+
+
+\path[use as bounding box] (-0.55,-0.95) rectangle (9.55,6.90);
+
+% Y-axis grid lines.
+\foreach \logv/\ylab in {-3/$10^{-3}$, -2/$10^{-2}$, -1/$10^{-1}$,
+                          0/$10^{0}$,  1/$10^{1}$,   2/$10^{2}$, 3/$10^{3}$} {
+  \pgfmathsetmacro{\ycoord}{\logv + 3}
+  \draw[gray!30, very thin] (0, \ycoord) -- (9, \ycoord);
+  \node[anchor=east, font=\tiny] at (-0.05, \ycoord) {\ylab};
+}
+
+% X-axis tick labels.
+\foreach \step/\xc in {25/0.00, 500/2.34, 1000/4.68, 1500/6.95, 1950/9.00} {
+  \draw[gray!50, very thin] (\xc, 0) -- (\xc, -0.08);
+  \node[anchor=north, font=\tiny] at (\xc, -0.10) {\step};
+}
+
+% Measured Davis--Kahan cumulative tail bound for TAG.
+\draw[blue!70!black, very thick, dashed]
+  plot[smooth] coordinates {
+    (0.000,5.11) (0.467,5.05) (0.935,4.98) (1.403,4.92) (1.870,4.86)
+    (2.338,4.78) (2.805,4.70) (3.273,4.61) (3.740,4.52) (4.208,4.45)
+    (4.675,4.37) (5.143,4.28) (5.610,4.20) (6.078,3.97) (6.545,3.81)
+    (7.013,3.63) (7.481,3.46) (7.948,3.31) (8.416,3.05) (9.000,2.71)
+  };
+
+% Matched CO (TAG, lambda=0) control: same post-hoc diagnostic,
+% anchor multiplier disabled during selection.
+\draw[gray!55!black, thick, densely dotted]
+  plot[smooth] coordinates {
+    (0.000,3.146) (0.467,3.114) (0.935,3.097) (1.403,3.079) (1.870,3.130)
+    (2.338,3.041) (2.805,3.079) (3.273,3.061) (3.740,3.146) (4.208,3.041)
+    (4.675,3.097) (5.143,3.079) (5.610,3.114) (6.078,3.041) (6.545,3.130)
+    (7.013,3.114) (7.481,3.146) (7.948,3.130) (8.416,3.161) (9.000,3.146)
+  };
+\foreach \p in {
+  (0.000,3.146), (0.467,3.114), (0.935,3.097), (1.403,3.079), (1.870,3.130),
+  (2.338,3.041), (2.805,3.079), (3.273,3.061), (3.740,3.146), (4.208,3.041),
+  (4.675,3.097), (5.143,3.079), (5.610,3.114), (6.078,3.041), (6.545,3.130),
+  (7.013,3.114), (7.481,3.146), (7.948,3.130), (8.416,3.161), (9.000,3.146)
+} {
+  \fill[gray!55!black] \p circle (1.3pt);
+}
+
+% Circle end-of-schedule CO points for diagnostic contrast.
+\foreach \p in {(8.416,3.161), (9.000,3.146)} {
+  \draw[gray!55!black, thick] \p circle (4.0pt);
+}
+
+% TAG measured cumulative drift to final anchor.
+\draw[red!75!black, thick]
+  plot[smooth] coordinates {
+    (0.000,2.79) (0.467,2.33) (0.935,2.31) (1.403,2.27) (1.870,2.24)
+    (2.338,2.14) (2.805,2.12) (3.273,1.98) (3.740,1.88) (4.208,1.95)
+    (4.675,1.81) (5.143,1.80) (5.610,1.77) (6.078,1.62) (6.545,1.42)
+    (7.013,1.33) (7.481,1.03) (7.948,0.97) (8.416,0.85) (9.000,0.77)
+  };
+\foreach \p in {
+  (0.000,2.79), (0.467,2.33), (0.935,2.31), (1.403,2.27), (1.870,2.24),
+  (2.338,2.14), (2.805,2.12), (3.273,1.98), (3.740,1.88), (4.208,1.95),
+  (4.675,1.81), (5.143,1.80), (5.610,1.77), (6.078,1.62), (6.545,1.42),
+  (7.013,1.33), (7.481,1.03), (7.948,0.97), (8.416,0.85), (9.000,0.77)
+} {
+  \fill[red!75!black] \p circle (1.5pt);
+}
+
+% Axes.
+\draw[->, thick] (0,0) -- (9.25,0);
+\draw[->, thick] (0,0) -- (0,6.40);
+
+\node at (4.50,-0.55)
+  {refresh step $t$ (cosine schedule, 78 points)};
+
+\node[anchor=west, align=left, font=\scriptsize] at (-0.50,6.65)
+  {\(\|v_l^{(t)} - v_l^{(T)}\|\) (median over 24 layers, log scale)};
+
+% Legend.
+\draw[blue!70!black, very thick, dashed] (4.55,6.30) -- (5.20,6.30);
+\node[anchor=west, font=\tiny] at (5.30,6.30)
+  {Measured Davis--Kahan tail:
+  $\sum_{s \ge t} 2\|\Sigma^{(s+1)}{-}\Sigma^{(s)}\|_F/\gamma^{(s)}$};
+
+\draw[red!75!black, thick] (4.55,5.85) -- (5.20,5.85);
+\node[anchor=west, font=\tiny] at (5.30,5.85)
+  {\textsc{TAG} measured $\|v^{(t)}{-}v^{(T)}\|$};
+
+\draw[gray!55!black, thick, densely dotted] (4.55,5.40) -- (5.20,5.40);
+\node[anchor=west, font=\tiny] at (5.30,5.40)
+  {CO ($\lambda{=}0$): same post-hoc diagnostic};
+
+\end{tikzpicture}%
+}
+
+
+\caption{\textbf{Representation-anchor stability diagnostic.}
+\textnormal{Median layerwise drift to the final anchor,
+$\|v_l^{(t)} - v_l^{(T)}\|$ (log scale; $24$ decoder layers,
+$78$ cosine-scheduled refresh points; Qwen2.5-0.5B + LoRA).
+\emph{Red}: \textsc{TAG} measured drift.
+\emph{Blue dashed}: empirical Davis--Kahan tail
+$\sum_{s\ge t} 2\|\Sigma^{(s+1)}-\Sigma^{(s)}\|_F/\gamma^{(s)}$.
+\emph{Grey dotted}: matched
+CO~($\lambda{=}0$) control;
+circled markers denote the final two refreshes.}}
+\label{fig:anchor-drift}
+\end{figure}
+
+\paragraph{Matched Carrier-Only diagnostic.}
+We repeat the verifier on a matched Carrier-Only control,
+CO~\((\lambda{=}0)\), which removes the anchor factor from the
+selection score. CO and \textsc{TAG} share the same cached gate,
+optimizer schedule, fixed diagnostic probe, refresh interval, and verifier
+protocol; they differ only in the selection score. This matched design separates
+representation-anchor modulation from the optimizer schedule and
+diagnostic procedure.
+
+For each refresh transition, we summarize \(d_l^{(t)}\) over the
+22 retained layers by the layer-wise median and maximum.
+Table~\ref{tab:dstep-spread} reports the median over transitions of
+these summaries, denoted ``med.'' and ``peak,'' respectively, together
+with the worst step \(\max_{l,t}d_l^{(t)}\) over all 1,496 retained
+pairs. The sign-flip rate is the fraction of retained pairs satisfying
+\(\langle \tilde v_l^{(t)}, v_l^{(t-1)} \rangle < 0\). This rate is
+only an orientation diagnostic; the sign-invariant stability statistic
+is \(d_l^{(t)}\). For table status, a run passes if no retained pair
+exceeds \(d_l^{(t)}=1\), corresponding to a sign-calibrated angle below
+\(60^\circ\). This descriptive criterion is not a theorem-level
+guarantee; it flags transitions approaching the near-orthogonal regime.
+The contrast in Table~\ref{tab:dstep-spread} is descriptive but
+informative: the \textsc{TAG} trajectory stays well inside the stable
+regime, while the carrier-only trajectory repeatedly approaches
+near-orthogonal anchor transitions. The stability that the bounded
+modulation relies on is thus a property the anchored run empirically
+maintains, not merely an assumption.
+
+
+\subsection{Fused score: a zero-anchored product rule}
+\label{sec:tag-score}
+
+Equation~\eqref{eq:tag-score-method} fuses the three views
+multiplicatively. The product form itself is classical---product-rule
+and log-opinion-pool combination of evidence goes back at least to
+combining-classifier and expert-aggregation
+theory~\cite{kittler1998combining,genest1986combining}---and in log
+space the score is simply the additive pool
+\(\log s_i^{(t)}=\log G_i+\log\mathcal R_i^{(t)}
++\log\bigl(1+\lambda\,\widetilde a_i^{(t)}\bigr)\).
+What the design contributes is the deliberate \emph{asymmetry of the
+three roles} within that pool. The gate is absolute and
+zero-anchored: \(G_i=0\) annihilates the score, and the selection
+key in Eq.~\eqref{eq:tag-selection-key} orders every positive-gate
+candidate ahead of the zero block, so the veto is exact and
+non-compensatory---no value of the dynamic terms can re-admit a
+vetoed pair while admissible candidates remain. Additive or
+averaging fusion cannot provide this behavior: a sufficiently large
+utility term always outweighs a zero reliability score,
+re-admitting exactly the corrupted-but-difficult candidates the
+gate exists to remove. The same point separates the design from
+trusted multi-view classification, which re-weights or averages
+conflicting views~\cite{tmc2021,rcml2024}: in data selection,
+unreliability must be able to reach the floor, not merely lose
+weight. The two dynamic factors are, by design, weaker: the carrier
+\(\mathcal R_i^{(t)}\) is pool-relative and carries the dynamic
+ranking, while the anchor factor is confined to
+\([1,1+\lambda]\), so it modulates the carrier by at most a factor
+of \(1{+}\lambda\) and can neither veto nor dominate. The views
+also differ in acquisition schedule---\(G_i\) once at \(\theta_0\),
+carrier and anchor at every refresh---so reliability screening adds
+no recurring cost. Finally, each view is independently ablatable:
+setting \(G_i\equiv 1\) removes the gate without changing the
+underlying selector, and setting \(\lambda=0\) removes
+representation-anchor modulation and yields the gated carrier
+\(G_i\mathcal R_i^{(t)}\), the CO baseline of
+Section~\ref{sec:experiments}.
+
+\subsection{Algorithm and implementation}
+\label{sec:algorithm-implementation}
+
+Algorithm~\ref{alg:tag} summarizes the complete procedure. The gate
+requires two base-checkpoint forward passes---one under the observed
+instruction and one under its counterfactual---and is then cached. Each
+refresh uses the current checkpoint only for the reward and anchor.
+
+\begin{algorithm}[t]
+  \caption{\textsc{TAG}: reliability-gated training-adaptive selection}
+  \label{alg:tag}
+  \begin{algorithmic}[1]
+  \STATE \textbf{Input:} Pool $\mathcal D$; clean gate reference $\mathcal D_{\mathrm{ref}}$; model $p_{\theta_0}$; budget $B$; anchor strength $\lambda$; refreshes $T$
+  \STATE Construct condition-side counterfactuals and compute and cache $G_i$ by Section~\ref{sec:reliability-gate}; see Appendix~\ref{app:gate-implementation}.
+  \FOR{$t = 1, \dots, T$}
+    \STATE Sample probe $\widetilde{\mathcal D}_t\subset\mathcal D$ uniformly.
+    \STATE Under $\theta_{t-1}$, compute $\mathcal L_i^{(t)}$, $\mathcal H_i^{(t)}$, and the hidden states required by the anchor.
+    \STATE Compute $\mathcal R_i^{(t)}$ by Eqs.~\eqref{eq:composite}--\eqref{eq:w}.
+    \STATE Update $v_l^{(t)}$ and $\widetilde a_i^{(t)}$ by Eqs.~\eqref{eq:anchor-delta-mean}--\eqref{eq:anchor-projection-norm}.
+    \STATE $s_i^{(t)}\gets G_i\mathcal R_i^{(t)}\bigl(1+\lambda\widetilde a_i^{(t)}\bigr)$.
+    \STATE $\mathcal S_t\gets$ top-$B$ candidates by the key $\kappa_i^{(t)}$ of Eq.~\eqref{eq:tag-selection-key}.
+    \STATE Fine-tune $\theta_{t-1}\to\theta_t$ on $\mathcal S_t$.
+  \ENDFOR
+  \STATE \textbf{return} $\theta_T$
+  \end{algorithmic}
+\end{algorithm}

@@ -1,0 +1,954 @@
+% =========================================================
+% tag_appendix.tex
+% Training-Adaptive Data Selection with a Reliability Gate (TAG)
+% Appendices --- CIKM 2026 submission
+%
+% This appendix restores the full explanatory version of the
+% trajectory-anchor appendix and retains the Reliability-Gate
+% implementation used in the current TAG manuscript.
+%
+% Cross-references assumed to exist in the main paper:
+%   \label{thm:anchor-stability}
+%   \label{fig:anchor-drift}
+%   \label{sec:anchor-stability}
+%   \label{sec:experiments}
+%
+% Citation keys assumed (please verify against your .bib):
+%   davis1970rotation, stewart1990matrix,
+%   wang2023selfinstruct, xu2024wizardlm,
+%   zhou2023lima, hendrycks2021mmlu, suzgun2022bbh,
+%   cobbe2021gsm8k, patel2021svamp,
+%   chen2021humaneval, austin2021mbpp,
+%   clark2020tydiqa, artetxe2020xquad
+% =========================================================
+
+
+% ---------------------------------------------------------
+\appendix
+
+
+% =========================================================
+% A. ANCHOR STABILITY
+% =========================================================
+
+\section{Proof of Theorem~\ref{thm:anchor-stability} and Empirical Envelope}
+\label{app:anchor-stability-diagnostics}
+
+This appendix proves Theorem~\ref{thm:anchor-stability}, clarifies the
+cross-time eigengap convention, and reports the empirical
+Davis--Kahan envelope used in Fig.~\ref{fig:anchor-drift}.
+
+The result is deliberately local. It does not claim that the complete
+data-selection ranking remains fixed over training. Instead, it shows
+that when the representation covariance evolves smoothly and retains
+a positive leading eigengap, the recomputed trajectory-anchor
+direction changes at the optimizer scale. This is the stability
+property needed for the anchor to act as a controlled modulation of
+the dynamic carrier rather than as an unrelated source of variation.
+
+
+\subsection{Proof of Theorem~\ref{thm:anchor-stability}}
+\label{app:proof-stability}
+
+\begin{proof}
+Fix layer \(l\) and transition \(t-1\to t\). Write
+\[
+A=\Sigma_l^{(t-1)},\qquad
+B=\Sigma_l^{(t)},\qquad
+E=B-A .
+\]
+Let \(u=v_l^{(t-1)}\) be the top eigenvector of \(A\), and let
+\(\tilde u\) be the uncalibrated top eigenvector of \(B\). Since
+\[
+B\tilde u=\lambda_1(B)\tilde u,
+\]
+the residual of \(\tilde u\) with respect to \(A\) is
+\[
+A\tilde u-\lambda_1(B)\tilde u
+=
+(A-B)\tilde u
+=
+-E\tilde u.
+\]
+Therefore,
+\[
+\|A\tilde u-\lambda_1(B)\tilde u\|_2
+=
+\|E\tilde u\|_2
+\le
+\|E\|_2
+\le
+\|E\|_F .
+\]
+
+By the residual form of the Davis--Kahan theorem
+\cite{davis1970rotation,stewart1990matrix},
+\[
+\sin\Theta(u,\tilde u)
+\le
+\frac{\|E\|_F}
+{\lambda_1(B)-\lambda_2(A)} .
+\]
+Using the assumptions of Theorem~\ref{thm:anchor-stability},
+\[
+\|\Sigma_l^{(t)}-\Sigma_l^{(t-1)}\|_F
+\le
+C_{\Sigma,l}\eta_{t-1}
+\]
+and
+\[
+\lambda_1(\Sigma_l^{(t)})
+-
+\lambda_2(\Sigma_l^{(t-1)})
+\ge
+\gamma_l,
+\]
+we obtain
+\[
+\sin\Theta
+\le
+\frac{C_{\Sigma,l}}{\gamma_l}\eta_{t-1}.
+\]
+
+After temporal sign calibration,
+\[
+\langle v_l^{(t)},v_l^{(t-1)}\rangle\ge0,
+\]
+so the corresponding principal angle satisfies
+\[
+\Theta\in[0,\pi/2].
+\]
+For unit vectors,
+\[
+\|v_l^{(t)}-v_l^{(t-1)}\|_2
+=
+2\sin(\Theta/2)
+\le
+2\sin\Theta .
+\]
+Therefore,
+\[
+\boxed{
+\|v_l^{(t)}-v_l^{(t-1)}\|_2
+\le
+\frac{2C_{\Sigma,l}}{\gamma_l}\eta_{t-1}
+}.
+\]
+\end{proof}
+
+
+\paragraph{Eigengap convention.}
+The theorem uses the cross-time gap
+\[
+\lambda_1(\Sigma_l^{(t)})
+-
+\lambda_2(\Sigma_l^{(t-1)})
+\]
+because the proof treats the new top eigenvector as an approximate
+eigenvector of the previous covariance. By Weyl's inequality,
+\[
+\left|
+\lambda_1(\Sigma_l^{(t)})
+-
+\lambda_1(\Sigma_l^{(t-1)})
+\right|
+\le
+\|\Sigma_l^{(t)}-\Sigma_l^{(t-1)}\|_F .
+\]
+Under the covariance-drift assumption, the difference between the
+cross-time gap and the usual same-time eigengap is therefore
+\(O(\eta_{t-1})\).
+
+The bound controls only the recomputed anchor direction, not the full
+ranking or optimization trajectory. In TAG, this distinction is
+especially useful because the reliability gate is static across
+refreshes. The gate therefore introduces no additional temporal
+variation into the anchor-stability argument.
+
+
+\subsection{Empirical Davis--Kahan Tail}
+\label{app:proof-envelope}
+
+For Fig.~\ref{fig:anchor-drift}, we replace the worst-case constants
+with realized per-transition quantities. Define
+\[
+\gamma_l^{(s)}
+:=
+\lambda_1(\Sigma_l^{(s+1)})
+-
+\lambda_2(\Sigma_l^{(s)}).
+\]
+For every transition satisfying
+\[
+\gamma_l^{(s)}>0,
+\]
+the one-step perturbation argument gives
+\[
+\|v_l^{(s+1)}-v_l^{(s)}\|_2
+\le
+\frac{
+2\|\Sigma_l^{(s+1)}-\Sigma_l^{(s)}\|_F
+}{
+\gamma_l^{(s)}
+}.
+\]
+
+Applying the triangle inequality from refresh \(t\) through a later
+refresh \(T\) yields the cumulative envelope
+\begin{equation}
+\|v_l^{(t)}-v_l^{(T)}\|_2
+\le
+\sum_{s=t}^{T-1}
+\frac{
+2\|\Sigma_l^{(s+1)}-\Sigma_l^{(s)}\|_F
+}{
+\gamma_l^{(s)}
+}.
+\label{eq:tail-envelope}
+\end{equation}
+
+This is the blue dashed curve in Fig.~\ref{fig:anchor-drift}. It is an
+upper envelope, not a fitted or tight predictor of measured anchor
+drift. Its role is to compare the realized anchor movement with the
+local perturbation scale implied by the covariance dynamics.
+
+
+\subsection{Realized Stability Constants}
+\label{app:stability-assumptions}
+
+On the Qwen2.5-0.5B + LoRA run, computed over the \(1{,}496\) valid
+post-warmup layer--refresh pairs, the realized covariance drift is
+bounded by
+\[
+\sup_{l,t}
+\frac{
+\|\Sigma_l^{(t)}-\Sigma_l^{(t-1)}\|_F
+}{
+\eta_{t-1}
+}
+\le
+C_\Sigma
+=
+5.78\times10^{3},
+\]
+and the retained pairs satisfy
+\[
+\inf_{l,t}
+\left(
+\lambda_1(\Sigma_l^{(t)})
+-
+\lambda_2(\Sigma_l^{(t-1)})
+\right)
+\ge
+\gamma_{\min}
+=
+0.05 .
+\]
+
+The raw verifier eigenvectors required negative orientation correction
+in \(1.7\%\) of the retained trajectory-anchor pairs. After sign
+calibration, all reported displacements satisfy
+\[
+\langle v_l^{(t)},v_l^{(t-1)}\rangle\ge0 .
+\]
+
+With
+\[
+\eta=2\times10^{-4},
+\]
+the global plug-in envelope is
+\[
+(2C_\Sigma/\gamma_{\min})\eta
+=
+46.24 .
+\]
+This exceeds the maximum possible sign-calibrated step displacement
+\[
+\sqrt{2},
+\]
+so the global worst-case constant is numerically conservative for this
+run. The informative comparison is therefore the realized envelope in
+Eq.~\eqref{eq:tail-envelope}, which uses the observed covariance drift
+and eigengap at each refresh.
+
+
+% =========================================================
+% B. HYPERPARAMETERS
+% =========================================================
+
+\section{Hyperparameter Configuration}
+\label{app:hyperparams}
+
+Table~\ref{tab:hyperparams} summarizes the per-backbone configuration
+referenced from \S\ref{sec:experiments}. Within each backbone, all
+selectors share these settings, so the selected subset is the only
+varying factor across the methods we compare.
+
+The reliability gate is computed before fine-tuning at the frozen base
+checkpoint and cached for subsequent refreshes. Its implementation is
+described separately in Appendix~\ref{app:reliability-gate}.
+
+\begin{table}[h]
+\centering
+\caption{Hyperparameter settings used in our experiments.
+Footnotes cover model-specific deviations.}
+\label{tab:hyperparams}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{ll@{\hspace{1em}}ll}
+\toprule
+\multicolumn{2}{l}{\emph{Supervised fine-tuning}} &
+\multicolumn{2}{l}{\emph{Dynamic Selection \& TAG}} \\
+Parameter & Value & Parameter & Value \\
+\midrule
+Optimiser            & AdamW (8-bit)$^{a}$        & Selection ratio $\rho$  & 0.10 \\
+Precision            & bf16                       & Anchor weight $\lambda$ & 1.0  \\
+Learning rate        & $2\times10^{-5}$ $^{b}$   & Probe size $n_p$        & 1024 \\
+LR scheduler         & cosine                     & Anchor layers           & all  \\
+Warmup ratio         & 0.03 $^{c}$                & PCA batch size          & 4    \\
+Weight decay         & 0.1                        & Episode batch size      & 16   \\
+Gradient clip        & 1.0 $^{c}$                 & Gate checkpoint         & base \\
+Gradient checkpoint  & enabled                    & Gate refresh            & none \\
+Cutoff length        & 1024                       & Gate caching            & enabled \\
+Epochs               & 3                          &                         &      \\
+Effective batch size & 128 $^{d}$                 &                         &      \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\begin{flushleft}
+\tiny
+$^{a}$ Bitsandbytes 8-bit AdamW; auto-falls back to fp32 if the library is unavailable.\\
+$^{b}$ Qwen2.5-7B uses $1\times10^{-5}$ per its official SFT recipe.\\
+$^{c}$ LLaMA-2-7B + TAG uses warmup $0.06$ and gradient clip $0.5$ as a small SFT-side stability lever; all other (model, method) cells use the values shown.\\
+$^{d}$ Per-GPU batch $8\times$ grad-accum $4\times$ DDP world-size $4$.
+\end{flushleft}
+\end{table}
+
+
+\paragraph{Implementation note.}
+The codebase contains optional actor--critic components retained for
+future verifiable-reward extensions; they are not used in the ranking
+rule reported in this paper. The dynamic component uses the
+deterministic composite-reward carrier multiplied by the
+trajectory-anchor factor. TAG prepends the static reliability gate,
+giving the complete score
+\[
+s_i^{(t)}
+=
+G_i
+\cdot
+R_i^{(t)}
+\left(
+1+\lambda\,\mathrm{align}_i^{(t)}
+\right).
+\]
+The gate \(G_i\) is computed once before fine-tuning, whereas
+\(R_i^{(t)}\) and \(\mathrm{align}_i^{(t)}\) are refreshed as the
+model moves through training.
+
+
+% =========================================================
+% C. RELIABILITY GATE
+% =========================================================
+
+\section{Reliability-Gate Implementation}
+\label{app:reliability-gate}
+
+The reliability gate addresses a different question from the two
+training-adaptive utility views. Difficulty, uncertainty, and
+trajectory alignment measure how useful a candidate appears at the
+current model state. The gate instead asks whether the
+instruction--response pair provides credible supervision in the first
+place.
+
+This distinction matters under low-quality instruction data. A
+mismatched pair, a subtly wrong answer, or another corrupted example
+may have high loss or uncertainty precisely because it is broken.
+Without a separate reliability view, such examples can therefore be
+preferred by a selector that interprets hardness only as
+informativeness.
+
+TAG separates the two decisions. Reliability is estimated once from
+the frozen base model, and dynamic utility is subsequently evaluated
+only through the training-adaptive carrier and trajectory anchor. The
+complete fusion rule is
+\begin{equation}
+s_i^{(t)}
+=
+G_i
+\cdot
+R_i^{(t)}
+\left(
+1+\lambda\,\mathrm{align}_i^{(t)}
+\right),
+\label{eq:tag-score-app}
+\end{equation}
+where
+\[
+G_i\in[0,1]
+\]
+is static, while
+\[
+R_i^{(t)}
+\quad\text{and}\quad
+\mathrm{align}_i^{(t)}
+\]
+vary with the fine-tuning trajectory.
+
+
+\subsection{Counterfactual Instruction Contrast}
+\label{app:gate-counterfactual}
+
+Consider instruction--response pair
+\[
+(x_i,y_i).
+\]
+Let
+\[
+\ell_k(y_i\mid x)
+\]
+denote the negative log-likelihood of the \(k\)-th response token
+under the frozen base model when conditioned on instruction \(x\).
+
+For every candidate \(i\), we construct a length-matched unrelated
+instruction
+\[
+x_i^{-}
+\]
+sampled from the candidate pool. The response \(y_i\) is kept fixed.
+The per-token counterfactual gain is
+\begin{equation}
+\delta_{i,k}
+=
+\ell_k(y_i\mid x_i^{-})
+-
+\ell_k(y_i\mid x_i).
+\label{eq:gate-token-contrast}
+\end{equation}
+
+A positive value means that the observed instruction makes the
+response easier to predict than the unrelated counterfactual
+instruction. A value near zero means that replacing the instruction
+has little effect on the response likelihood, providing little
+evidence that the response is specifically supported by its observed
+instruction.
+
+The counterfactual is placed on the instruction side deliberately.
+The objective is not to ask whether the response is fluent in
+isolation. Instead, it asks whether the relationship between the
+instruction and response is meaningful. This distinction is important
+for mismatched pairs: a response can be perfectly fluent and
+well-formed while answering a different instruction.
+
+
+\subsection{Overall Relative Gain}
+\label{app:gate-global-gain}
+
+Summing the raw token contrasts alone would make the scale depend on
+the intrinsic difficulty and length of the response. We therefore
+normalize by the counterfactual loss.
+
+Let
+\[
+L(y_i\mid x)
+=
+\sum_k \ell_k(y_i\mid x).
+\]
+The overall relative gain is
+\begin{equation}
+\bar{\Delta}_i
+=
+\frac{
+\sum_k \delta_{i,k}
+}{
+\sum_k \ell_k(y_i\mid x_i^{-})
+}
+=
+1-
+\frac{
+L(y_i\mid x_i)
+}{
+L(y_i\mid x_i^{-})
+}.
+\label{eq:gate-global-gain}
+\end{equation}
+
+This normalization makes the statistic scale-free. In particular, an
+intrinsically difficult response that receives large loss under both
+the true and counterfactual instructions is not automatically assigned
+a large reliability gain.
+
+
+\subsection{Span-Level Tail Gain}
+\label{app:gate-span-gain}
+
+An average response-level statistic can hide localized corruption.
+For example, a response may be largely correct but contain an
+incorrect final answer or a locally spliced segment. Most tokens can
+still benefit from the true instruction, causing the response-level
+mean to remain positive even though a critical region is unreliable.
+
+To expose such localized failures, the response is partitioned into
+contiguous spans
+\[
+\mathcal S_1,\ldots,\mathcal S_{M_i},
+\]
+implemented as sentences or fixed windows of \(W\) tokens. For span
+\(\mathcal S_m\), define
+\begin{equation}
+\Delta_{i,m}
+=
+1-
+\frac{
+\sum_{k\in\mathcal S_m}
+\ell_k(y_i\mid x_i)
+}{
+\sum_{k\in\mathcal S_m}
+\ell_k(y_i\mid x_i^{-})
+}.
+\label{eq:gate-span-gain}
+\end{equation}
+
+Not every span contains enough instruction-dependent content to be
+meaningful. Let
+\[
+\mathcal C_i
+\]
+denote the set of eligible spans. A span is excluded when its
+counterfactual loss
+\[
+\sum_{k\in\mathcal S_m}
+\ell_k(y_i\mid x_i^{-})
+\]
+falls below the frozen low-information threshold. This prevents
+boilerplate such as short acknowledgements or closing pleasantries
+from controlling the reliability decision merely because such text
+is naturally weakly dependent on the instruction.
+
+The tail statistic is the least-supported eligible span:
+\begin{equation}
+\Delta_i^{\min}
+=
+\min_{m:\mathcal S_m\in\mathcal C_i}
+\Delta_{i,m}.
+\label{eq:gate-tail-gain}
+\end{equation}
+
+The gate therefore requires evidence at two resolutions: the
+instruction should help the response overall, and it should also help
+the least-supported meaningful span.
+
+
+\subsection{Completeness Check and Zero-Anchored Gate}
+\label{app:gate-final}
+
+The likelihood contrast does not fully capture truncation. If a
+response is cut off prematurely, every token that remains may still
+be well supported by the true instruction. TAG therefore includes a
+raw-text completeness term
+\[
+c_i\in\{1,c_{\mathrm{trunc}}\},
+\]
+where
+\[
+c_i=1
+\]
+for a response that terminates properly and
+\[
+c_i=c_{\mathrm{trunc}}
+\]
+otherwise.
+
+The two likelihood views are combined conservatively:
+\begin{equation}
+\widehat{\Delta}_i
+=
+\min
+\left(
+\bar{\Delta}_i,
+\Delta_i^{\min}
+\right).
+\label{eq:gate-combined-gain}
+\end{equation}
+
+Let \(\sigma(\cdot)\) denote the logistic function and let \(s>0\)
+denote the gate scale calibrated once per backbone on the clean
+reference pool. The final reliability gate is
+\begin{equation}
+G_i
+=
+c_i
+\left(
+2\sigma
+\left(
+\frac{\widehat{\Delta}_i}{s}
+\right)
+-1
+\right)_{+},
+\label{eq:reliability-gate}
+\end{equation}
+where
+\[
+(a)_{+}:=\max(a,0).
+\]
+
+Equation~\eqref{eq:reliability-gate} is zero-anchored. Since
+\[
+\sigma(0)=\frac{1}{2},
+\]
+we have
+\[
+\widehat{\Delta}_i\le0
+\quad\Longrightarrow\quad
+G_i=0.
+\]
+
+Thus, ``no gain'' is an absolute boundary rather than an arbitrary
+pool-relative rank. An example whose observed instruction provides
+no positive evidence over its unrelated counterfactual receives an
+exactly zero reliability value.
+
+
+\subsection{Why Reliability Is a Veto Rather Than a Vote}
+\label{app:gate-veto}
+
+The multiplicative fusion in Eq.~\eqref{eq:tag-score-app} is
+non-compensatory. If
+\[
+G_i=0,
+\]
+then
+\[
+s_i^{(t)}=0
+\qquad
+\text{for every refresh }t.
+\]
+
+Consequently, high difficulty, uncertainty, or trajectory alignment
+cannot rescue a candidate that fails the reliability gate. This is
+intentional. Dynamic utility can decide which reliable examples are
+most useful at the current training state, but it cannot manufacture
+credible supervision from an unreliable instruction--response pair.
+
+For candidates satisfying
+\[
+G_i>0,
+\]
+selection remains fully training-adaptive through
+\[
+R_i^{(t)}
+\left(
+1+\lambda\,\mathrm{align}_i^{(t)}
+\right).
+\]
+The gate therefore does not replace the dynamic selector. It defines
+how strongly each candidate is allowed to participate in that
+selector.
+
+
+\subsection{Why the Counterfactual Changes the Instruction}
+\label{app:gate-why-instruction}
+
+At first sight, perturbing the instruction may appear indirect because
+many forms of corruption are introduced on the response side. The
+choice is deliberate.
+
+First, mismatched supervision breaks the dependency between the
+instruction and the response rather than necessarily damaging the
+surface form of the response. A mismatched response can remain fluent,
+grammatical, and semantically coherent. A response-only fluency or
+perplexity criterion can therefore treat it as clean.
+
+By holding \(y_i\) fixed and replacing \(x_i\) with \(x_i^{-}\), the
+gate directly asks whether the model's probability of that response
+depends on the observed instruction. If the likelihood remains almost
+unchanged after replacing the instruction, the pair contains little
+instruction-specific dependency worth training on.
+
+Second, a response-side contrast tends to collapse back into a
+fluency criterion. Comparing a response with a damaged version of
+itself primarily tests whether the original response is more typical
+or predictable than the perturbation. That information substantially
+overlaps with loss and perplexity, while remaining weak against fluent
+mismatches and fluent but incorrect answers.
+
+Third, the instruction side supplies a counterfactual without an
+external oracle. Constructing a ``correct'' alternative response would
+require knowing or generating the correct answer, introducing an
+external judge, stronger model, or other supervision. In contrast,
+\(x_i^{-}\) can be sampled directly from the existing pool.
+
+The injected corruption used for evaluation should not be confused
+with the detection mechanism. The experimenter may know how an
+example was corrupted in order to measure detection accuracy, but the
+gate itself operates without access to that corruption label or
+mechanism.
+
+
+\subsection{Base-Checkpoint Computation and Caching}
+\label{app:gate-cache}
+
+The reliability gate is a property of the data pair rather than of
+the evolving training trajectory. It is therefore evaluated at the
+frozen base checkpoint before fine-tuning begins.
+
+For each example, the implementation performs the following steps:
+\begin{enumerate}
+    \item obtain the observed instruction \(x_i\) and response \(y_i\);
+    \item sample a length-matched unrelated instruction \(x_i^{-}\);
+    \item evaluate token losses under \(x_i\) and \(x_i^{-}\);
+    \item compute the token contrasts in
+          Eq.~\eqref{eq:gate-token-contrast};
+    \item compute the overall relative gain in
+          Eq.~\eqref{eq:gate-global-gain};
+    \item construct eligible response spans and compute
+          Eq.~\eqref{eq:gate-tail-gain};
+    \item apply the raw-text completeness check \(c_i\);
+    \item compute the zero-anchored gate in
+          Eq.~\eqref{eq:reliability-gate}; and
+    \item cache \(G_i\) with candidate \(i\).
+\end{enumerate}
+
+After this initial profiling pass, \(G_i\) is not recomputed during
+fine-tuning. Each dynamic refresh retrieves the cached gate and
+recomputes only the training-state-dependent carrier and
+trajectory-anchor terms.
+
+Hence, the reliability view adds an initialization-time screening
+operation but no per-refresh model evaluation. It also adds no new
+temporal instability to the trajectory-anchor analysis because
+\(G_i\) remains constant over \(t\).
+
+
+% =========================================================
+% D. RANDOM SELECTION-RATIO SWEEP
+% =========================================================
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Random selection-ratio sweep on LLaMA-2-7B +
+Alpaca-GPT4.} Budget-only controls with all other hyperparameters
+held fixed; W-AVG plateaus within a narrow range across
+\(\rho\in\{10,20,30,40,50\}\%\).}
+\label{tab:ratio-sweep}
+{\fontsize{7.5pt}{9pt}\selectfont
+\setlength{\tabcolsep}{1.8pt}
+\renewcommand{\arraystretch}{1.05}
+\begin{tabular}{@{}lcccccccc c@{}}
+\toprule
+& \multicolumn{2}{c}{Know.} & \multicolumn{2}{c}{Math}
+& \multicolumn{2}{c}{Code} & \multicolumn{2}{c}{MLing.} & \\
+\cmidrule(lr){2-3}
+\cmidrule(lr){4-5}
+\cmidrule(lr){6-7}
+\cmidrule(lr){8-9}
+$\rho$ & MMLU & BBH & SVAMP & GSM8K & MBPP & H-Eval & TydiQA & XQuAD & W-AVG \\
+\midrule
+10\% & 45.04 & 35.54 & 36.80 & 13.57 & 35.41 & 24.51 & 60.83 & 52.28 & 38.00 \\
+20\% & 45.53 & 35.72 & 38.33 & 15.92 & 34.24 & 24.13 & 61.31 & 53.31 & 38.56 \\
+30\% & 45.91 & 36.23 & 37.33 & 14.10 & 36.96 & 25.31 & 61.32 & 53.73 & 38.86 \\
+40\% & 46.21 & 36.37 & 40.00 & 14.33 & 35.02 & 24.02 & 61.29 & 53.37 & 38.83 \\
+50\% & 46.31 & 36.42 & 38.00 & 13.95 & 33.85 & 25.64 & 60.98 & 53.67 & 38.60 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+
+\section{Random Selection-Ratio Sweep}
+\label{app:ratio-sweep}
+
+The random rows in Table~\ref{tab:ratio-sweep} are
+\emph{budget-only controls}: all hyperparameters except \(\rho\) are
+fixed, so differences across rows reflect data budget rather than
+selection quality.
+
+W-AVG changes only within a \(0.86\)-pp band from \(\rho=10\%\) to
+\(\rho=50\%\), peaking at \(\rho=30\%\) before saturating. Thus,
+increasing the random budget up to \(5\times\) provides little
+additional headroom.
+
+The task-level behavior supports the same interpretation. Performance
+does not increase monotonically with the number of randomly selected
+examples. Some mathematical tasks improve at intermediate ratios,
+whereas several code and multilingual scores fluctuate around a
+similar range. The principal effect is therefore saturation rather
+than a consistent benefit from additional random data.
+
+We use \(\rho=10\%\) throughout the main comparison to test whether a
+selection signal can improve training efficiency under a constrained
+budget. If TAG at \(\rho=10\%\) exceeds random selection even when the
+random baseline uses substantially more data, the difference cannot be
+explained simply by the number of selected examples.
+
+Each ratio uses one fixed-seed random draw, so across-seed variance is
+not estimated by this diagnostic. The purpose of the sweep is narrower:
+to test whether the operating budget lies in a regime where simply
+increasing random data provides substantial additional headroom. The
+observed saturation is consistent with prior instruction-tuning
+findings that data quality can matter more than raw scale once a modest
+subset is used~\cite{zhou2023lima}.
+
+
+% =========================================================
+% E. DATASETS AND BENCHMARK SCORING
+% =========================================================
+
+\section{Datasets and Benchmark Scoring}
+\label{app:benchmarks}
+
+This appendix describes the instruction-tuning data and benchmark
+scoring protocols. All benchmarks are evaluated with
+\texttt{lm\allowbreak-evaluation\allowbreak-harness}. Unless otherwise
+stated, AVG denotes the unweighted mean over the evaluated tasks.
+
+The downstream suite covers knowledge and general reasoning,
+mathematical reasoning, code generation, and multilingual question
+answering. The same evaluation configuration is used for every
+selection method within a backbone.
+
+
+\subsection{Instruction-Tuning Pools}
+\label{app:instruction-pools}
+
+\paragraph{Alpaca-GPT4.}
+Alpaca-GPT4 contains approximately 52K Stanford-Alpaca-style
+instructions paired with GPT-4 responses, covering broad open-domain
+instruction following~\cite{wang2023selfinstruct}. The pool includes
+factual questions, explanation, rewriting, reasoning, and lightweight
+programming tasks.
+
+Its breadth makes it useful for evaluating a selector whose goal is
+not to optimize one downstream benchmark but to identify broadly
+useful supervision from a heterogeneous instruction pool.
+
+
+\paragraph{WizardLM Evol-Instruct.}
+WizardLM Evol-Instruct contains evolution-generated instructions
+designed to be harder, more diverse, and more reasoning-heavy
+\cite{xu2024wizardlm}. Its construction progressively modifies
+instructions to increase complexity, reasoning depth, specificity, or
+constraint structure.
+
+We use this pool as a complementary instruction distribution rather
+than as a source of method-specific tuning. The conceptual roles of
+the reliability gate, dynamic carrier, and trajectory anchor remain
+unchanged.
+
+
+\subsection{Knowledge and General Reasoning}
+\label{app:benchmark-knowledge}
+
+\paragraph{MMLU.}
+MMLU is a multiple-choice benchmark spanning academic and professional
+subjects, including science, mathematics, humanities, social science,
+law, medicine, and other domains~\cite{hendrycks2021mmlu}. Its score
+is answer-choice accuracy.
+
+MMLU provides a broad test of whether instruction tuning preserves or
+improves general-purpose knowledge use rather than specializing only
+to the selected training examples.
+
+
+\paragraph{BBH.}
+BIG-Bench Hard (BBH) is a suite of challenging symbolic, logical,
+algorithmic, and commonsense reasoning tasks
+\cite{suzgun2022bbh}. Its score is exact-match accuracy under the
+common evaluation harness.
+
+BBH complements MMLU by placing greater emphasis on explicit
+multi-step reasoning rather than broad disciplinary knowledge.
+
+
+\subsection{Mathematical Reasoning}
+\label{app:benchmark-math}
+
+\paragraph{GSM8K.}
+GSM8K contains grade-school mathematical word problems requiring
+multi-step arithmetic reasoning~\cite{cobbe2021gsm8k}. The model
+generates a solution and final numeric answer. We normalize the final
+answer and report exact-match accuracy.
+
+
+\paragraph{SVAMP.}
+SVAMP evaluates arithmetic word-problem reasoning under variations in
+surface form and problem structure~\cite{patel2021svamp}. It is
+designed to test whether models capture the underlying quantitative
+relation rather than relying on shallow templates.
+
+As with GSM8K, the final normalized numeric answer is scored by exact
+match.
+
+
+\subsection{Code Generation}
+\label{app:benchmark-code}
+
+\paragraph{HumanEval.}
+HumanEval contains Python programming problems specified by a natural
+language description, function signature, and hidden unit tests
+\cite{chen2021humaneval}. The model must generate executable code that
+satisfies the tests.
+
+We report pass@1 under the fixed execution-based evaluation protocol.
+
+
+\paragraph{MBPP.}
+Mostly Basic Python Problems (MBPP) evaluates short Python programs
+from natural-language task descriptions and examples
+\cite{austin2021mbpp}. Evaluation is execution-based rather than
+based on lexical similarity to a reference program.
+
+We report pass@1. Using both MBPP and HumanEval reduces dependence on
+the characteristics of a single code-generation benchmark.
+
+
+\subsection{Multilingual Question Answering}
+\label{app:benchmark-multilingual}
+
+\paragraph{TyDiQA.}
+TyDiQA evaluates question answering across typologically diverse
+languages and was constructed to reduce the English-centric bias of
+many multilingual QA resources~\cite{clark2020tydiqa}. Each example
+contains a question and a supporting context passage.
+
+We report normalized token-overlap F1 averaged over the evaluated
+languages.
+
+
+\paragraph{XQuAD.}
+XQuAD provides parallel SQuAD-style question-answering examples across
+multiple languages~\cite{artetxe2020xquad}. It complements TyDiQA with
+a controlled cross-lingual benchmark based on aligned question and
+context examples.
+
+We again report normalized token-overlap F1 averaged over languages.
+
+
+\subsection{Aggregate Reporting}
+\label{app:benchmark-aggregation}
+
+For descriptive reporting, the eight benchmarks form four capability
+groups:
+\[
+\begin{aligned}
+\text{Knowledge} &: \{\text{MMLU},\text{BBH}\},\\
+\text{Math} &: \{\text{SVAMP},\text{GSM8K}\},\\
+\text{Code} &: \{\text{MBPP},\text{HumanEval}\},\\
+\text{Multilingual} &: \{\text{TyDiQA},\text{XQuAD}\}.
+\end{aligned}
+\]
+
+The task roster and scoring rules are fixed across selectors. No
+benchmark is added, removed, or reweighted based on the performance of
+a particular selection method.
+
+The reliability gate and dynamic selection score are computed entirely
+from the instruction-tuning pool and the model state. Downstream
+benchmark labels and outcomes are never used to construct the
+selection ranking.
+
+
+% =========================================================
+% END APPENDIX
+% =========================================================

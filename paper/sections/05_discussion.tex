@@ -1,0 +1,58 @@
+\section{Discussion}
+\label{sec:discussion}
+
+The central message of \textsc{TAG} is that the utility of a reliable
+instruction--response pair depends on the current model state and need
+not be captured by a scalar reward alone. We augment the
+difficulty--uncertainty carrier with a state-conditioned representation
+anchor: principal directions are extracted from the current probe's
+within-sequence representation displacements, and normalized candidate
+projections provide a bounded multiplicative modulation. This connects
+static representation-geometric selection and dynamic scalar-reward
+selection under a single ranking rule with one exposed knob,
+\(\lambda\).
+
+The theoretical claim is deliberately local. Under covariance-drift
+and eigengap conditions, the Davis--Kahan analysis bounds the
+one-refresh change of the sign-oriented principal direction at the
+optimiser scale. It does not by itself establish stability of candidate
+projections or of the full ranking: candidate activations also change,
+and pool-wise normalization can alter relative margins. Separately,
+the factor
+\(1+\lambda\,\widetilde a_i^{(t)}\in[1,1{+}\lambda]\) limits the
+anchor projection's direct modulation of the carrier and makes that
+role independently ablatable.
+The \(\lambda\)-ablation in Fig.~\ref{fig:lambda-ablation} traces out
+this structure empirically: performance peaks at the empirical default
+\(\lambda{=}1.0\) and declines under stronger modulation, consistent
+with using the anchor projection as an auxiliary signal.
+
+\paragraph{Practical implications.}
+The scoring pass computing the difficulty--uncertainty carrier also
+produces the hidden states needed for the anchor, leaving only
+per-layer probe PCA and candidate--anchor projections as additional
+work. This yields the empirical profile of Table~\ref{tab:efficiency}
+on the main setting: a $-33\%$ reduction in end-to-end wall-clock cost
+relative to Data Agent at a higher average score, without an external
+LLM judge, curated seed set, or separate policy-learning loop. For
+repeatedly refreshed SFT pipelines that must
+remain adaptive but cannot budget API calls or human curation, this is
+the practical lever.
+
+\paragraph{Scope and future directions.}
+We target a conservative setting---text-only SFT, single-sequence
+instruction--response examples, rank-one anchor per layer---that keeps
+the anchor interpretable and the stability analysis clean. The
+robustness regimes in Tables~\ref{tab:backbone-robustness}--%
+\ref{tab:dataset-transfer} show that gains from anchor modulation
+narrow when the source pool is already strong, as in Evol-Instruct on
+larger backbones; we read this as a natural headroom effect of
+high-quality pools rather than an anchor failure, and as a useful
+boundary case for future analysis. The broader principle generalises:
+multi-turn dialogue suggests turn-aware anchors, multimodal tuning
+suggests modality-specific anchors, and multi-skill samples suggest
+rank-\(r\) representation subspaces. Extending the construction to
+reinforcement fine-tuning is also natural but non-trivial: prompts,
+rollouts, and reward-conditioned states define a different anchor space,
+and the stability analysis would have to be redone for that setting.
+

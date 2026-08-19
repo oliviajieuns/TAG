@@ -1,0 +1,608 @@
+% =====================================================================
+%  Section 4: Experiments
+%  Main setting: LLaMA-2-7B full fine-tuning, Alpaca-GPT4,
+%  10% selection, nine evaluation tasks across five capability groups.
+% =====================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\begin{table*}[t]
+\centering
+\begin{threeparttable}
+\caption{\textbf{Performance comparison of baselines using 10\% of
+the IT data.} This table shows the results of various tasks across
+multiple baselines. \textbf{Bold} and \underline{underline} represent the best and 
+second-best performance respectively in each column 
+\emph{among 10\% selection methods (R10, ID~02--09);} ID~00 and 
+ID~01 are shown as lower/upper-bound references and excluded 
+from the ranking. $\Delta\,(\uparrow)$ indicates the performance improvement
+relative to ID~01.}
+\label{tab:main-results}
+\small
+\setlength{\tabcolsep}{2.9pt}
+\renewcommand{\arraystretch}{1.01}
+
+\begin{tabular}{@{}llcccccccccc@{}}
+\toprule
+ & &
+ \multicolumn{2}{c}{Knowledge \& reasoning} &
+ \multicolumn{2}{c}{Math} &
+ \multicolumn{2}{c}{Code} &
+ \multicolumn{2}{c}{Multilingual QA} &
+ \multicolumn{2}{c}{Overall} \\
+\cmidrule(lr){3-4}
+\cmidrule(lr){5-6}
+\cmidrule(lr){7-8}
+\cmidrule(lr){9-10}
+\cmidrule(lr){11-12}
+ID & Method
+& \shortstack[c]{MMLU\\[-1pt]{\scriptsize exam}}
+& \shortstack[c]{BBH\\[-1pt]{\scriptsize hard tasks}}
+& \shortstack[c]{SVAMP\\[-1pt]{\scriptsize robust math}}
+& \shortstack[c]{GSM8K\\[-1pt]{\scriptsize grade math}}
+& \shortstack[c]{MBPP\\[-1pt]{\scriptsize program}}
+& \shortstack[c]{H-Eval\\[-1pt]{\scriptsize function}}
+& \shortstack[c]{TydiQA\\[-1pt]{\scriptsize 9-lang F1}}
+& \shortstack[c]{XQuAD\\[-1pt]{\scriptsize 12-lang F1}}
+& \shortstack[c]{AVG\\[-1pt]{\scriptsize 8-task mean}}
+& \shortstack[c]{$\Delta$\\[-1pt]{\scriptsize vs Full FT}} \\
+\midrule
+
+\rowcolor{gray!15}
+\multicolumn{12}{@{}l}{\textbf{Data-side references}}\\
+00 & Pure LLaMA-2-7B (No FT)
+    & 45.82 & 36.35
+    & 36.67 & 13.87
+    & 0.00$^\dagger$ & 2.38$^\dagger$
+    & 61.70 & 55.08
+    & 31.48 & $-20.96\%$ \\
+01 & Alpaca-GPT4 (Full FT)
+    & 47.86 & 37.19
+    & 40.33 & 16.60
+    & 37.35 & 25.60
+    & 60.74 & 52.99
+    & 39.83 & --- \\
+R10 & Random ($10\%$)
+    & 45.04 & 35.54
+    & 36.80 & 13.57
+    & 35.41 & 24.51
+    & \underline{60.83} & 52.28
+    & 38.00 & $-4.61\%$ \\
+\midrule
+\rowcolor{gray!15}
+\multicolumn{12}{@{}l}{\textbf{Static 10\% IT-data selection}}\\
+02 & LIMA
+    & 46.44 & 36.68
+    & 36.20 & 16.38
+    & 33.07 & 22.09
+    & 59.28 & 51.14
+    & 37.66 & $-5.45\%$ \\
+03 & AlpaGasus
+    & 46.17 & 36.36
+    & 38.33 & 16.22
+    & 37.50 & 23.94
+    & 60.81 & \underline{53.87}
+    & 39.15 & $-1.71\%$ \\
+04 & Q2Q
+    & 46.18 & 36.84
+    & 34.33 & \underline{17.82}
+    & 36.19 & 25.19
+    & 60.42 & 52.34
+    & 38.66 & $-2.93\%$ \\
+05 & SelectIT
+    & 46.02 & 38.37
+    & 36.33 & 16.98
+    & 36.58 & \underline{28.17}
+    & 60.44 & \textbf{54.12}
+    & 39.63 & $-0.52\%$ \\
+06 & NAIT (All)
+    & 46.08 & 40.02
+    & \underline{39.67} & 17.06
+    & 35.41 & 26.44
+    & 60.03 & 52.87
+    & 39.70 & $-0.34\%$ \\
+\midrule
+\rowcolor{gray!15}
+\multicolumn{12}{@{}l}{\textbf{Dynamic 10\% selection}}\\
+07 & \textsc{Data Agent (PPO)}
+    & \underline{46.49} & 38.37
+    & 37.67 & 16.48
+    & \textbf{39.69} & \textbf{28.61}
+    & 60.44 & 50.85
+    & \underline{39.83} & \underline{$-0.02\%$} \\
+08 & CO ($\lambda=0$)
+    & 45.90 & \underline{40.21}
+    & 36.67 & 16.53
+    & 34.63 & 24.38
+    & 60.12 & 50.70
+    & 38.64 & $-2.99\%$ \\
+\rowcolor{red!8}
+09 & \textbf{\textsc{TAG}} ($\lambda=1$)
+    & \textbf{47.71} & \textbf{40.36}
+    & \textbf{40.33} & \textbf{18.27}
+    & \underline{38.52} & 25.87
+    & \textbf{61.13} & 53.43
+    & \textbf{40.70} & \textbf{$+2.18\%$} \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}[flushleft]
+\footnotesize
+\item[$\dagger$] MBPP grades pass@1 by executing the generated
+function; the non-instruction-tuned base model emits free-form
+text instead of parseable code, yielding $0$. HumanEval is a
+signature+docstring completion task closer to pretraining, hence
+the near-zero $2.38$.
+\end{tablenotes}
+\end{threeparttable}
+\end{table*}
+
+We evaluate \textsc{TAG} as a dynamic re-ranking method for
+instruction-tuning data selection. Our primary setting is
+full-parameter fine-tuning of LLaMA-2-7B~\cite{touvron2023llama2} on
+Alpaca-GPT4~\cite{wang2023selfinstruct} with a fixed selection budget
+of \(\rho{=}10\%\). Robustness experiments additionally vary the
+backbone, using Qwen2.5-0.5B, Qwen2.5-7B~\cite{qwen2025technical},
+and Mistral-7B~\cite{jiang2023mistral}, and the source dataset, using
+WizardLM Evol-Instruct~\cite{xu2024wizardlm}. Within each
+(backbone, dataset) setting, all selectors share the same training
+hyperparameters and evaluation protocol; only the selected subset
+differs. Full FT uses the full pool, while all selection methods use
+\(10\%\), a budget chosen because random ratio sweeps show that
+increasing random subsets up to \(50\%\) provides little additional
+headroom.
+
+We evaluate eight benchmarks spanning four capability families:
+knowledge and hard reasoning (MMLU, BBH), mathematical reasoning
+(SVAMP, GSM8K), code generation (MBPP, HumanEval), and multilingual QA
+(TyDiQA, XQuAD). We report per-task scores, AVG, and \(\Delta\) over
+Full FT; benchmark scoring conventions are summarized in the appendix.
+
+\paragraph{Baselines.}
+We compare against Full FT, random subsets, static instruction-data
+selectors (LIMA, AlpaGasus, Q2Q, SelectIT, NAIT), the PPO-based Data
+Agent, and CO, the Carrier-Only variant obtained by setting
+\(\lambda{=}0\). CO is the direct baseline for isolating the
+contribution of representation-anchor modulation.
+
+\paragraph{Research questions.}
+The experiments ask whether \textsc{TAG} (i) outperforms static and
+dynamic selectors at the same \(10\%\) budget, (ii) remains robust
+across backbones and source datasets, (iii) has a stable
+anchor-strength choice, and (iv) adds only modest re-ranking overhead.
+
+
+% \subsection{Main result}
+% \label{sec:main-result}
+
+% Table~\ref{tab:main-results} reports the main comparison under the same
+% selection budget and evaluation protocol. The controlled comparison
+% between the carrier-only baseline (CO) and \textsc{TAG} isolates the
+% effect of representation-anchor modulation: both use the same dynamic re-ranking
+% pipeline and carrier reward, while \textsc{TAG} additionally enables
+% the anchor term. The key quantitative result is that \textsc{TAG}
+% reaches an 8-task AVG of 40.70, the highest overall score among all
+% 10\% selection methods.
+
+% \paragraph{Effect of representation-anchor modulation.}
+% \textsc{TAG} consistently improves over the CO baseline across the
+% benchmark suite. Quantitatively, the anchor raises AVG from 38.64 to
+% 40.70 (+2.06 pp), with especially clear gains on MBPP (+3.89 pp),
+% SVAMP (+3.66 pp), and XQuAD (+2.73 pp). The gains span reasoning,
+% math, code, and multilingual QA, suggesting that the anchor does not
+% merely specialize selection to one capability family. This supports
+% the central claim that a state-conditioned structural signal can
+% improve dynamic data selection without seed examples, validation
+% labels, or auxiliary scorers.
+
+% \paragraph{Comparison to baselines.}
+% Among methods using the same selection budget, \textsc{TAG} achieves
+% the strongest overall performance, outperforming static selectors and
+% the PPO-based Data Agent. On the same 10\% budget, this corresponds
+% to a +0.87 pp gain over the PPO-based Data Agent and a +1.00 pp gain
+% over the strongest static selector, NAIT. Static selectors rely on fixed
+% or precomputed signals, whereas \textsc{TAG} refreshes a
+% model-intrinsic representation signal during training. The random subset
+% results serve only as budget controls, separating selection quality
+% from the effect of using more data.
+
+% \paragraph{Selection can beat scale.}
+% The results show that a carefully selected subset can outperform full
+% fine-tuning. In particular, \textsc{TAG} reaches 40.70 with only 10\%
+% of the instruction-tuning data, compared with 39.83 for full
+% fine-tuning, yielding a +0.87 pp absolute gain and a +2.18\% relative
+% improvement. This highlights the value of adaptive selection criteria
+% that are not only accurate, but also stable, reference-free, and
+% computationally practical.
+
+
+\subsection{Main result}
+\label{sec:main-result}
+
+Table~\ref{tab:main-results} reports the main comparison under the same
+selection budget and evaluation protocol. The controlled comparison
+between the carrier-only baseline (CO) and \textsc{TAG} isolates
+representation-anchor modulation: both use the same dynamic re-ranking
+pipeline and carrier reward, while \textsc{TAG} additionally enables
+the anchor-projection factor. \textsc{TAG} reaches \textbf{40.70 AVG}, the highest
+score among 10\% selection methods.
+
+\paragraph{Effect of representation-anchor modulation.}
+\textsc{TAG} consistently improves over the CO baseline across
+benchmarks. The anchor raises AVG from 38.64 to 40.70
+(+2.06 pp), with clear gains on MBPP (+3.89 pp), SVAMP (+3.66 pp),
+and XQuAD (+2.73 pp). The gains span reasoning, math, code, and
+multilingual QA, suggesting that the anchor does not merely
+specialize to one capability family. This supports our claim that a
+state-conditioned representation signal can improve dynamic data
+selection without seed examples or auxiliary scorers. Among methods
+using the same budget, \textsc{TAG}
+achieves the strongest overall performance, outperforming static
+selectors and the PPO-based Data Agent. At the same 10\% budget,
+\textsc{TAG} gains +0.87 pp over Data Agent and +1.00 pp over
+NAIT. Static selectors rely on fixed or precomputed signals, whereas
+\textsc{TAG} recomputes its representation anchor from the current
+model state at each refresh. The random subset results serve only as
+budget controls,
+separating selection quality from data scale.
+
+\paragraph{Selection can beat scale.}
+The results show that a carefully selected subset can outperform full
+fine-tuning. With only 10\% data, \textsc{TAG} scores 40.70 versus
+39.83 for Full FT, yielding +0.87 pp absolute and +2.18\% relative
+gains. This highlights the value of adaptive selection criteria that
+are not only accurate, but also stable, reference-free, and
+computationally practical.
+
+
+\begin{figure}[!ht]
+\centering
+
+% ============ TOP: compact Delta plot ============
+\resizebox{0.97\columnwidth}{!}{%
+\begin{tikzpicture}[every node/.style={font=\scriptsize}, >=Latex]
+
+\path[use as bounding box] (-0.55,-0.95) rectangle (8.80,5.40);
+
+% Y-axis grid  (왼쪽 숫자 0~4)
+\foreach \y in {0,1,2,3,4} {
+  \draw[gray!25, very thin] (0,\y) -- (7.2,\y);
+  \node[anchor=east, font=\scriptsize] at (-0.05,\y) {\y};
+}
+
+% X-axis ticks (0, 0.1, 0.5, 1.0, 5.0)
+\foreach \xpos/\lab in
+  {0/0, 1.8/0.1, 3.6/0.5, 5.4/1.0, 7.2/5.0} {
+  \draw[gray!50, very thin] (\xpos,0) -- (\xpos,-0.10);
+  \node[anchor=north, font=\scriptsize] at (\xpos,-0.12) {$\lab$};
+}
+
+% Default lambda = 1.0 guideline
+\draw[gray!60, dashed, thin] (5.4,0) -- (5.4,4.30);
+\node[red!85!black, font=\small, anchor=south, align=center]
+  at (5.4,4.35) {\textbf{default}\\[-1pt]$\lambda{=}1.0$};
+
+% Per-task lines
+\draw[blue!55, very thin] plot coordinates
+  {(0,0) (1.8,0.26) (3.6,0.91) (5.4,1.81) (7.2,0.58)};
+\draw[green!45!black!60, very thin] plot coordinates
+  {(0,0) (1.8,0.66) (3.6,3.33) (5.4,3.66) (7.2,1.00)};
+\draw[orange!75, very thin] plot coordinates
+  {(0,0) (1.8,0.39) (3.6,2.72) (5.4,3.89) (7.2,1.56)};
+\draw[violet!65, very thin] plot coordinates
+  {(0,0) (1.8,0.44) (3.6,0.73) (5.4,1.01) (7.2,0.50)};
+
+% Endpoint labels (좁은 구간에 모여있어 강제 분산)
+\node[orange!85!black,font=\small, anchor=west] at (7.23,1.56) {MBPP};
+\node[green!45!black, font=\small, anchor=west] at (7.23,1.05) {SVAMP};
+\node[blue!55!black,  font=\small, anchor=west] at (7.23,0.55) {MMLU};
+\node[violet,         font=\small, anchor=west] at (7.23,0.15) {TydiQA};
+
+% Average line (굵게)
+\draw[red!75!black, ultra thick] plot coordinates
+  {(0,0) (1.8,0.44) (3.6,1.92) (5.4,2.59) (7.2,0.91)};
+\foreach \p in {(0,0), (1.8,0.44), (3.6,1.92),
+                (5.4,2.59), (7.2,0.91)} {
+  \fill[red!75!black] \p circle (2.2pt);
+}
+
+% Best average callout (Avg. 라벨을 callout에 통합)
+\node[red!85!black, font=\small, anchor=south,
+      fill=white, draw=red!50, line width=0.3pt,
+      rounded corners=1pt, inner sep=1.8pt]
+  at (5.4,2.78) {\textbf{AVG}\ $+2.59$ pp};
+% Baseline note
+\node[gray!70!black, font=\small, anchor=south west]
+  at (0.1,0.3) {$\lambda{=}0$ baseline};
+
+% Axes
+\draw[->, thick] (0,0) -- (7.50,0);
+\draw[->, thick] (0,0) -- (0,4.60);
+
+% X-axis title
+\node[font=\small] at (3.60,-0.55)
+  {anchor strength $\lambda$};
+% Y-axis title
+\node[font=\small, rotate=90, anchor=south] at (-0.55,2.30)
+  {$\Delta$ Acc.\ vs.\ CO (pp)};
+\end{tikzpicture}%
+}
+
+\vspace{0.45em}
+
+% ============ BOTTOM: compact table ============
+{\fontsize{8pt}{12pt}\selectfont
+\setlength{\tabcolsep}{3pt}
+
+\begin{tabularx}{0.97\columnwidth}{@{}l*{5}{>{\centering\arraybackslash}X}@{}}
+\toprule
+$\lambda$ & MMLU & SVAMP & MBPP & TydiQA & AVG \\
+\midrule
+$0$ (CO)
+ & $45.90$
+ & $36.67$
+ & $34.63$
+ & $60.12$
+ & $44.33$ \\
+
+$0.1$
+ & \shortstack[c]{$46.16$\\[-1pt]{\scriptsize$(+0.26)$}}
+ & \shortstack[c]{$37.33$\\[-1pt]{\scriptsize$(+0.66)$}}
+ & \shortstack[c]{$35.02$\\[-1pt]{\scriptsize$(+0.39)$}}
+ & \shortstack[c]{$60.56$\\[-1pt]{\scriptsize$(+0.44)$}}
+ & \shortstack[c]{$44.77$\\[-1pt]{\scriptsize$(+0.44)$}} \\
+
+$0.5$
+ & \shortstack[c]{$46.81$\\[-1pt]{\scriptsize$(+0.91)$}}
+ & \shortstack[c]{$40.00$\\[-1pt]{\scriptsize$(+3.33)$}}
+ & \shortstack[c]{$37.35$\\[-1pt]{\scriptsize$(+2.72)$}}
+ & \shortstack[c]{$60.85$\\[-1pt]{\scriptsize$(+0.73)$}}
+ & \shortstack[c]{$46.25$\\[-1pt]{\scriptsize$(+1.92)$}} \\
+
+\rowcolor{red!8}
+$\mathbf{1.0}$
+ & \shortstack[c]{$\mathbf{47.71}$\\[-1pt]{\scriptsize$(+1.81)$}}
+ & \shortstack[c]{$\mathbf{40.33}$\\[-1pt]{\scriptsize$(+3.66)$}}
+ & \shortstack[c]{$\mathbf{38.52}$\\[-1pt]{\scriptsize$\mathbf{(+3.89)}$}}
+ & \shortstack[c]{$\mathbf{61.13}$\\[-1pt]{\scriptsize$(+1.01)$}}
+ & \shortstack[c]{$\mathbf{46.92}$\\[-1pt]{\scriptsize$\mathbf{(+2.59)}$}} \\
+
+$5.0$
+ & \shortstack[c]{$46.48$\\[-1pt]{\scriptsize$(+0.58)$}}
+ & \shortstack[c]{$37.67$\\[-1pt]{\scriptsize$(+1.00)$}}
+ & \shortstack[c]{$36.19$\\[-1pt]{\scriptsize$(+1.56)$}}
+ & \shortstack[c]{$60.62$\\[-1pt]{\scriptsize$(+0.50)$}}
+ & \shortstack[c]{$45.24$\\[-1pt]{\scriptsize$(+0.91)$}} \\
+\bottomrule
+\end{tabularx}
+}
+
+\caption{\textbf{$\lambda$-ablation of the anchor-modulation
+strength.}
+LLaMA-2-7B + Alpaca-GPT4 at $\rho{=}10\%$. Gains are reported over the
+CO baseline, obtained by disabling representation-anchor modulation
+($\lambda{=}0$). The sweep shows an inverted-U trend, with
+$\lambda{=}1.0$ serving as our empirical default.}
+\label{fig:lambda-ablation}
+\end{figure}
+
+\subsection{$\lambda$-ablation of the anchor-modulation strength}
+\label{sec:lambda-ablation}
+\paragraph{Inverted-U effect of anchor modulation.}
+Figure~\ref{fig:lambda-ablation} shows an inverted-U effect. When
+\(\lambda{=}0\), the method removes representation-anchor modulation
+and recovers the CO baseline to within noise. As \(\lambda\) grows,
+high-projection candidates exert increasing influence on the carrier
+ranking; beyond \(\lambda{=}1\), the gains decline. This pattern
+supports using the projection as a bounded auxiliary signal rather
+than allowing it to dominate the carrier.
+
+\paragraph{Default choice of \(\lambda{=}1.0\).}
+The sweep peaks at \(\lambda{=}1.0\), and this optimum is stable across
+tasks and backbones. We therefore use \(\lambda{=}1.0\) as the
+empirical default and expose only \(\rho\) in the remaining
+experiments.
+
+
+
+% ============== Table 4: Efficiency and dependency comparison ==============
+% No package required for the symbols below.
+\providecommand{\nodep}{--}
+\providecommand{\paiddep}{\textbf{\$}}
+\providecommand{\seeddep}{\textsc{Seed}}
+\providecommand{\humandep}{\textsc{Human}}
+\providecommand{\notmeasured}{\textsc{N/M}$^{\dagger}$}
+\providecommand{\costlb}[1]{$>#1^{\dagger}$}
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Cost and dependency comparison} at
+$\rho{=}10\%$ on LLaMA-2-7B + Alpaca-GPT4.}
+\label{tab:efficiency}
+
+{\fontsize{8pt}{11pt}\selectfont
+\setlength{\tabcolsep}{3pt}
+
+\begin{tabularx}{\columnwidth}{@{}Yccrrr@{}}
+\toprule
+Method
+& \shortstack[c]{Ext.\\[-1pt]Scorer}
+& \shortstack[c]{Cap.\\[-1pt]Ref.}
+& \shortstack[c]{Sel.\\[-1pt]h}
+& \shortstack[c]{SFT\\[-1pt]h}
+& \shortstack[c]{Cost\\[-1pt]\$} \\
+\midrule
+
+\rowcolor{gray!15}
+\multicolumn{6}{@{}l@{}}{\textbf{Static / precomputed selectors}}\\
+LIMA       & \humandep & \nodep & \notmeasured & 0.28 & \costlb{0.33} \\
+AlpaGasus  & \paiddep  & \nodep & \notmeasured & 0.63 & \costlb{0.73} \\
+Q2Q        & \paiddep  & \nodep & \notmeasured & 0.62 & \costlb{0.71} \\
+SelectIT   & \nodep    & \nodep & \notmeasured & 0.64 & \costlb{0.74} \\
+
+\midrule
+
+\rowcolor{gray!15}
+\multicolumn{6}{@{}l@{}}{\textbf{Static / model-internal selector}}\\
+NAIT       & \nodep & \seeddep & 1.18 & 0.66 & 2.11 \\
+
+\midrule
+
+\rowcolor{gray!15}
+\multicolumn{6}{@{}l@{}}{\textbf{Dynamic / model-internal selectors}}\\
+Data Agent (PPO) & \nodep & \nodep & 3.77 & 0.68 & 5.11 \\
+
+\rowcolor{red!8}
+\textbf{\textsc{TAG} (ours)}
+& \nodep & \nodep
+& \textbf{2.34}
+& \textbf{0.64}
+& \textbf{3.43} \\
+
+\bottomrule
+\end{tabularx}
+}
+
+\vspace{2pt}
+\begin{minipage}{\columnwidth}
+\footnotesize
+\textit{Notes.} ``--'' denotes no dependency;
+\humandep/\paiddep: human/paid-API scoring;
+\seeddep: human-chosen in-domain seed.
+GPU cost measured on A100 80GB at effective batch $128$,
+normalized at \$$1.15$/A100-hr. $^{\dagger}$~SFT cost only;
+selection stage not measured in our local setup. For API-based
+selectors (AlpaGasus, Q2Q), API cost depends on scorer model,
+candidate count, and prompt/output length (GPT-4.1 rates:
+\$$2.00$/M input, \$$8.00$/M output tokens).
+\end{minipage}
+\end{table}
+
+% ============== Table 5: Backbone robustness ==============
+
+\begin{table}[t]
+\centering
+\caption{\textbf{Multi-backbone robustness on Alpaca-GPT4 (0.5B--7B).}}
+\label{tab:backbone-robustness}
+{\fontsize{8pt}{11pt}\selectfont
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}Yrrrrr@{}}
+\toprule
+Method & MMLU & SVAMP & MBPP & TydiQA & AVG \\
+\midrule
+\rowcolor{gray!15}
+\multicolumn{6}{@{}l@{}}{\textbf{Mistral-7B}} \\
+Full FT (100\%)        & 53.13              & \underline{58.24} & \textbf{51.22}     & 50.16              & 53.19 \\
+Random (10\%)          & 56.80              & 57.00              & 48.64              & \underline{53.29}  & 53.93 \\
+Data Agent (PPO, 10\%) & \underline{57.38}  & 56.67              & 50.28              & \textbf{54.36}     & \underline{54.67} \\
+\rowcolor{red!8}
+\textbf{\textsc{TAG} ($\lambda{=}1$, 10\%)} & \textbf{57.93} & \textbf{61.33} & \underline{50.97} & 53.09 & \textbf{55.83} \\
+\addlinespace[3pt]
+
+\rowcolor{gray!15}
+\multicolumn{6}{@{}l@{}}{\textbf{Qwen2.5-7B}} \\
+Full FT (100\%)        & \textbf{73.93}     & \underline{83.33} & 74.31              & \underline{55.78}  & \underline{71.84} \\
+Random (10\%)          & 71.92              & 83.00              & \textbf{75.48}     & 54.10              & 71.13 \\
+Data Agent (PPO, 10\%) & 73.59              & 83.01              & \textbf{75.48}     & 53.66              & 71.43 \\
+\rowcolor{red!8}
+\textbf{\textsc{TAG} ($\lambda{=}1$, 10\%)} & \underline{73.68} & \textbf{83.66} & \underline{75.10} & \textbf{56.83} & \textbf{72.32} \\
+\addlinespace[3pt]
+
+\rowcolor{gray!15}
+\multicolumn{6}{@{}l@{}}{\textbf{Qwen2.5-0.5B}} \\
+Full FT (100\%)        & \textbf{47.85}     & 41.33              & 41.63              & 40.27              & 42.77 \\
+Random (10\%)          & 47.71              & 40.68              & 43.19              & 39.88              & 42.87 \\
+Data Agent (PPO, 10\%) & 47.46              & \underline{44.00} & \underline{46.30} & \underline{41.04} & \underline{44.70} \\
+\rowcolor{red!8}
+\textbf{\textsc{TAG} ($\lambda{=}1$, 10\%)} & \underline{47.77} & \textbf{45.33} & \textbf{47.08} & \textbf{42.73} & \textbf{45.73} \\
+\bottomrule
+\end{tabularx}
+}
+\end{table}
+
+% ============== Table 6: Instruction-dataset transfer (Evol-Instruct) ==============
+\begin{table}[t]
+\centering
+\caption{\textbf{Instruction-dataset transfer on Evol-Instruct} at $\rho{=}10\%$.  Setup mirrors Table~\ref{tab:backbone-robustness}}
+\label{tab:dataset-transfer}
+{\fontsize{8pt}{12pt}\selectfont
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\columnwidth}{@{}Yrrrrr@{}}
+\toprule
+Method & MMLU & SVAMP & MBPP & TydiQA & AVG \\
+\midrule
+\rowcolor{gray!15}
+\multicolumn{6}{@{}l@{}}{\textbf{LLaMA-2-7B}} \\
+Full FT (100\%)        & \underline{45.63} & 37.67 & 35.41 & \underline{64.10} & 45.70 \\
+Random (10\%)          & 45.50 & \textbf{38.67} & \textbf{38.52} & 64.00 & \underline{46.67} \\
+Data Agent (PPO, 10\%) & 44.89 & 38.27 & \underline{38.44} & 63.65 & 46.31 \\
+\rowcolor{red!8}
+\textbf{\textsc{TAG} ($\lambda{=}1$, 10\%)} & \textbf{46.25} & \underline{38.45} & 37.69 & \textbf{64.96} & \textbf{46.84} \\
+\addlinespace[3pt]
+\rowcolor{gray!15}
+\multicolumn{6}{@{}l@{}}{\textbf{Qwen2.5-7B}} \\
+Full FT (100\%)        & \textbf{71.79} & 81.00 & 75.88 & 57.80 & 71.62 \\
+Random (10\%)          & \underline{71.71} & \underline{83.33} & 75.88 & \textbf{59.10} & \textbf{72.51} \\
+Data Agent (PPO, 10\%) & 71.02 & 82.74 & \textbf{76.45} & \underline{58.79} & 72.25 \\
+\rowcolor{red!8}
+\textbf{\textsc{TAG} ($\lambda{=}1$, 10\%)} & 71.68 & \textbf{84.16} & \underline{76.02} & 58.04 & \underline{72.48} \\
+    \bottomrule
+\end{tabularx}
+}
+\end{table}
+
+\subsection{Cost of reference-free dynamic selection}
+\label{sec:cost}
+Table~\ref{tab:efficiency} reports measured local costs and required
+dependencies under the same selection budget. ``Cap. ref.'' denotes
+a capability reference used to guide selection, such as an in-domain
+seed set manually chosen to represent the target capability space.
+Static/precomputed selectors are included only as lower-bound
+references, since their reported costs do not fully capture offline
+dependencies such as external scoring, subset construction, or
+curated references.
+
+Among measured model-internal selectors, NAIT is cheaper than
+\textsc{TAG}, but it relies on a human-chosen in-domain seed as a
+capability reference. This is a strong manual prior: it requires
+target-domain knowledge before selection and can bias the selected
+subset toward the seed distribution. NAIT's low computational cost
+is thus partly obtained by shifting difficulty to manual reference
+construction, which is hard to scale, audit, and reproduce.
+
+\textsc{TAG} removes this seed-reference dependency. It is moderately
+more expensive than NAIT because state-conditioned dynamic selection
+requires additional scoring, but remains cheaper than Data Agent (PPO).
+The reason is structural: the carrier and anchor projections reuse
+the same scoring pass, so \textsc{TAG} adds lightweight geometric
+post-processing rather than a separate policy-optimization loop. Thus,
+\textsc{TAG} trades moderate overhead for reference-free dynamic
+selection with lower measured cost than the PPO-based selector in our
+local setup.
+
+
+\subsection{Backbone robustness check}
+\label{sec:qwen-scale}
+
+Table~\ref{tab:backbone-robustness} evaluates the same \textsc{TAG}
+configuration (\(\lambda{=}1,\rho{=}10\%\)) on Alpaca-GPT4 across
+Mistral and Qwen backbones spanning 0.5B--7B parameters; AVG averages
+MMLU, SVAMP, MBPP, and TyDiQA. \textsc{TAG} achieves the best AVG in
+all three backbone groups, suggesting that representation-anchor
+modulation is not specific to the LLaMA-2-7B setting.
+
+
+\subsection{Instruction-dataset transfer}
+\label{sec:dataset-transfer}
+
+Table~\ref{tab:dataset-transfer} replaces Alpaca-GPT4 with
+WizardLM Evol-Instruct to test transfer across instruction-data
+distributions. Evol-Instruct contains harder and more structured
+instructions, making random \(10\%\) subsets strong and leaving
+less headroom for selection gains.
+
+\textsc{TAG} achieves the best AVG on LLaMA-2-7B. On Qwen2.5-7B,
+it nearly ties the best Random baseline while still outperforming
+Full FT and Data Agent. Thus, even under a stronger source-data
+regime, the same representation-anchor rule remains competitive
+without retuning.
+

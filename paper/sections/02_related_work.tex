@@ -1,0 +1,95 @@
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Multi-view quality for instruction data.}
+Instruction-data quality is inherently multi-faceted. Huang
+et al.~\cite{huang2024ivm} formalize instruction mining through three
+views---diversity, complexity, and accuracy---and fuse LoRA-space
+coverage, uncertainty-based complexity, and reward-model accuracy to
+select a compact tuning subset. Closely related instruction-selection
+methods likewise combine several notions of quality: DEITA
+integrates complexity, quality, and diversity~\cite{deita}; MoDS
+balances quality, coverage, and necessity~\cite{mods}; SelectIT uses
+uncertainty-aware self-reflection~\cite{selectit}; and IFD/Q2Q ranks
+examples by model-derived instruction-following
+difficulty~\cite{q2q}. These works establish that no single scalar
+fully describes useful instruction data. Their views, however, are
+typically evaluated and fused before fine-tuning. Our setting adds a
+temporal distinction: pair reliability is assessed once, whereas the
+usefulness of a reliable pair is refreshed as the model learns.
+
+\paragraph{Quality filtering under unreliable supervision.}
+Real instruction pools contain noisy, mismatched, incomplete, or
+otherwise unreliable supervision. Quality-filtering methods address
+this problem using learned estimators or stronger LLM
+judges~\cite{alpagasus,cpqs2026}, while reward-model accuracy in
+multi-view instruction mining provides an explicit correctness
+signal~\cite{huang2024ivm}. More broadly, trusted multi-view learning
+studies how evidence sources with unequal or conflicting reliability
+should influence fusion~\cite{tmc2021,rcml2024}. TAG brings this
+reliability-aware perspective to instruction-data selection. Its
+static view is an instruction--response dependency detector whose
+continuous gate attenuates questionable supervision before two
+model-dependent utility signals are combined. This role differs from
+both a global quality ranking and a corruption-type classifier: the
+gate estimates the credibility of the pair, while dynamic selection
+decides how useful that pair is at the current training stage.
+
+\paragraph{Static target-conditioned and representation-based
+selection.}
+Other selectors define usefulness relative to a target distribution
+or internal model geometry. DSIR uses importance resampling for
+language-model data selection~\cite{dsir}; LESS scores candidates by
+gradient similarity to a validation or few-shot target
+set~\cite{less}; and Approx-LESS improves the scalability of this
+influence calculation~\cite{approxless}. At the representation level,
+NAIT extracts target-derived directions from in-domain seed examples
+and ranks candidates by projecting their activations onto those
+directions~\cite{nait2026}. This idea is related to evidence that
+linear activation directions encode meaningful concepts or
+capabilities, including TCAV~\cite{tcav}, representation
+engineering~\cite{repe}, and contrastive activation
+addition~\cite{caa}. These methods expose useful target or geometric
+structure, but the target examples and representation directions are
+generally fixed before fine-tuning. They therefore do not adapt their
+geometric readout to later model states.
+
+\paragraph{Training-adaptive data selection.}
+Dynamic selectors address the complementary fact that example utility
+changes during training. Active instruction tuning uses model
+feedback to prioritize prompt-sensitive tasks~\cite{kung2023activeit},
+and difficulty--uncertainty selectors refresh scalar rewards under
+the current checkpoint. Data Agent formulates the process as a
+sequential decision problem and learns a PPO-based selection
+policy~\cite{dataagent}. In reinforcement fine-tuning, DOTS performs
+online question selection using rollout-dependent reward
+statistics~\cite{sun2025dots}; its verifier rewards and rollout groups
+differ from the supervised instruction--response setting considered
+here. These approaches make selection responsive to the evolving
+model, but their explicit selection signal remains a scalar reward or
+a learned policy output rather than an interpretable online
+representation direction.
+
+\paragraph{Positioning of TAG.}
+TAG combines the two distinctions emphasized above: multiple quality
+views play different roles, and only model-dependent usefulness needs
+to be refreshed throughout training. A static counterfactual view
+assigns a continuous reliability gate to each
+instruction--response pair. Among candidates admitted by that gate, a
+difficulty--uncertainty reward measures current informativeness, and
+a state-conditioned representation-anchor view assigns a normalized
+projection onto principal directions extracted from the current
+model's probe displacements. The resulting anchor modulation is
+bounded and independently ablatable rather than a separate policy.
+This organization connects multi-view instruction
+mining~\cite{huang2024ivm} with training-adaptive selection while
+explicitly addressing low-quality supervision. The accompanying
+analysis is correspondingly role-specific: total-variance
+decomposition motivates separating scalar reward from anchor
+projection, and standard spectral perturbation tools characterize the
+local stability of the recomputed principal direction without claiming
+stability of candidate projections or of the full
+ranking~\cite{davis1970rotation,stewart1990matrix}.
+
+
+

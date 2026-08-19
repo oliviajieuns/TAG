@@ -1,0 +1,174 @@
+%==================================================================
+%  Section 1: Introduction.
+%=====================================================================
+\section{Introduction}
+\label{sec:intro}
+Supervised fine-tuning (SFT) is a central stage in modern open-weight
+LLM post-training recipes such as Llama, Qwen, and
+Mistral~\cite{dubey2024llama3,qwen2025technical,jiang2023mistral}.
+Although these recipes differ in scale, supervision, and alignment
+objectives, they share a common dependency: the SFT data determines
+the first task-facing adaptation of the base model and shapes the
+model state on which later preference optimization or reinforcement
+learning operates. High-quality instruction data is therefore a
+primary determinant of effective adaptation, making its selection a
+practical bottleneck for efficient and reliable post-training. Yet
+quality is not a single scalar: a candidate must both provide
+credible supervision and offer learning value to the model at its
+current training state.
+
+\paragraph{Two axes of instruction-data quality.}
+These requirements define two related but non-substitutable axes.
+\emph{Reliability} asks whether a response provides credible
+supervision for its instruction, whereas \emph{usefulness} asks
+whether learning from that credible pair benefits the current model.
+A reliable example may already be mastered or redundant, and its
+learning value may change as other capabilities are acquired.
+Reliability is therefore a pair-level admissibility question that can
+be assessed once before fine-tuning; usefulness is model-dependent
+and must be re-evaluated as training progresses. This distinction
+implies an ordered selection process: first screen or suppress
+unreliable supervision, then dynamically rank the remaining
+candidates by their current learning value.
+
+\paragraph{From static scoring to dynamic usefulness.}
+A one-time assessment is appropriate for reliability but insufficient
+for model-dependent usefulness. Most instruction-data selection
+methods score and rank candidates once before fine-tuning.
+Quality-based methods use external judges or learned quality
+estimators; target-conditioned methods estimate influence relative
+to a validation or few-shot target set; and representation-based
+methods project candidate activations onto target-derived hidden-state
+directions. A more recent line of dynamic data selection instead
+re-estimates candidate utility as the model state changes during
+training~\cite{kung2023activeit, sun2025dots}. This line highlights a
+key fact: an example's usefulness is not a static property of the
+data alone, but depends on the current model, training stage, and
+optimisation regime. Once unreliable supervision has been screened,
+dynamic selection is therefore the critical mechanism for identifying
+which remaining examples offer the greatest learning value at the
+current stage. We focus on supervised instruction tuning, where
+candidates are instruction--response pairs and no rollout group,
+verifier reward, or target validation set is assumed.
+
+\paragraph{Three gaps in reliable training-adaptive selection.}
+Despite this progress, three gaps remain. First, existing dynamic
+pipelines generally rank the full candidate pool without first
+establishing whether its supervision is trustworthy. A static
+reliability gate serves an orthogonal role: it asks whether a pair is
+admissible before the dynamic selector asks how useful that pair is
+to the current model. It is not another model-dependent difficulty or
+uncertainty metric, but a new pre-selection stage that establishes a
+credible candidate pool for dynamic ranking.
+
+Second, within that credible pool, structural hidden-state
+selection~\cite{nait2026} and dynamic
+selection~\cite{kung2023activeit, sun2025dots, dataagent}
+have largely evolved separately. Hidden-state directions are
+typically fixed before training~\cite{nait2026}, while dynamic
+rankings rely on scalar utilities such as difficulty or uncertainty.
+Consequently, a selector can track scalar utility without also using
+a representation-geometric signal recomputed from the current model
+state.
+
+Third, scalar utilities can be sensitive in heterogeneous multi-task
+instruction pools. In composite-reward selectors, the variance-ratio
+weight that mixes difficulty and uncertainty can reflect between-task
+scale differences as well as within-task informativeness. This
+confounding calls for a role-separated fusion in which the
+representation signal enters as an explicitly bounded, interpretable,
+and independently ablatable modulation.
+
+The absence of the first stage is especially consequential in
+low-quality instruction pools, where mismatched pairs, truncated
+responses, and subtly wrong answers are
+common~\cite{honovich2023unnatural,alpagasus}. The dynamic
+utility signals above presuppose that the pair itself can be trusted,
+yet difficulty- or uncertainty-driven selection can actively
+\emph{prefer} corruption because it can raise loss and entropy in the
+same direction as a genuinely hard clean pair. This is the
+instruction-tuning analogue of the hard-versus-mislabeled ambiguity
+long documented for
+classification~\cite{pleiss2020aum,swayamdipta2020cartography,rholoss2022}:
+hardness scores conflate ``hard because informative'' with ``hard
+because broken.'' A reliability gate addresses this prior question
+on an orthogonal axis; it does not replace dynamic selection, but
+makes dynamic selection meaningful by restricting utility
+comparisons to examples with credible supervision.
+
+\paragraph{Our approach: reliability-gated, state-conditioned
+selection.}
+We propose \textsc{TAG} (\textbf{T}raining-\textbf{A}daptive data
+selection with a reliability \textbf{G}ate). \textsc{TAG} brings the
+two quality axes together in a three-view selector: a static
+reliability estimate and two training-adaptive utility signals. The
+gate assigns each instruction--response pair a continuous reliability
+weight \(G_i\in[0,1]\) at the base checkpoint and caches it. At each
+refresh step~\(t\), the current model supplies a
+difficulty--uncertainty reward \(\mathcal R_i^{(t)}\) and a
+state-conditioned representation-anchor signal, giving the score
+\begin{equation}
+s_i^{(t)}
+=
+\underbrace{G_i}_{\substack{\text{reliability gate}\\ \text{(static, once)}}}
+\;\cdot\;
+\underbrace{\mathcal{R}_i^{(t)}}_{\text{dynamic reward}}
+\;\cdot\;
+\underbrace{\bigl(1+\lambda\,\widetilde a_i^{(t)}\bigr)}_{\text{bounded anchor modulation}}.
+\label{eq:tag-score}
+\end{equation}
+At each refresh, \(\widetilde a_i^{(t)}\in[0,1]\) is the
+candidate's normalized projection onto per-layer principal
+representation-displacement directions extracted from a current
+probe subset. We use these sign-oriented directions as a
+state-conditioned representation anchor. The parameter
+\(\lambda\ge0\) controls the modulation strength, so the anchor
+factor is confined to \([1,1+\lambda]\) and can be ablated by
+setting \(\lambda=0\). The multiplicative gate is not a binary
+accept--reject rule: it continuously attenuates each candidate
+according to its estimated reliability, while the two dynamic terms
+determine its usefulness to the evolving model.
+
+\paragraph{Design rationale.}
+Three choices support this construction. First, the reliability gate
+acts as a detector of instruction--response dependency rather than a
+classifier of corruption types: an instruction-side counterfactual
+asks how strongly the response depends on its paired instruction and
+maps that evidence to a continuous reliability gate. Second,
+because the representation anchor is recomputed during training, its
+local directional stability matters. Under optimiser-scale covariance
+drift and positive cross-time spectral separation, a Davis--Kahan
+analysis gives a conditional \(O(\eta_t)\) one-step bound on the
+sign-oriented principal direction. This does not guarantee stability
+of candidate projections or of the full ranking; the bounded factor
+instead limits the anchor's direct modulation of the reward. Third,
+the dynamic score is
+analytically motivated: a total-variance decomposition shows that a
+difficulty--uncertainty mixture can entangle within-task
+informativeness with between-task scale differences, motivating the
+addition of a distinct and explicitly bounded representation signal.
+
+\paragraph{Contributions.}
+We make four contributions:
+\begin{itemize}
+  \item We introduce \textsc{TAG}, a training-adaptive selection
+  framework that combines a continuous, static reliability gate
+  with dynamic estimates of model-dependent usefulness.
+  \item We develop an instruction-side counterfactual detector that
+  aggregates response-level, span-level, and completeness evidence
+  into a reliability gate \(G_i\in[0,1]\), computed once and cached.
+  \item We provide analytical support for the dynamic selector: a
+  total-variance decomposition motivates the role-separated reward
+  design, and a conditional local stability result characterizes the
+  recomputed principal direction, whose normalized candidate projection
+  provides a bounded modulation of that reward.
+  \item We evaluate \textsc{TAG} on instruction pools with typed,
+  manifest-verified corruptions (mismatched, noisy, truncated,
+  wrong-answer, and duplicated), measuring both corruption detection
+  (Dirty@\(K\)/AUPRC) and end-to-end SFT quality against static and
+  dynamic selection baselines; \STATUS{results pending}.
+\end{itemize}
+
+
+
+

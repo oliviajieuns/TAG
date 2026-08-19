@@ -1,0 +1,161 @@
+% Training-Adaptive Data Selection with a Reliability Gate (TAG).
+% Draft root file for Information Fusion review.
+\documentclass[sigconf,anonymous,review]{acmart}
+
+% ---- ACM boilerplate (vestigial, see MIGRATION NOTE) ----------------
+\settopmatter{printacmref=false}
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{plain}
+\acmConference[CIKM '26]{The 35th ACM International Conference on
+  Information and Knowledge Management}{November 7--11, 2026}{Rome, Italy}
+
+% Allow large two-column floats to occupy the top of a page.
+\setcounter{topnumber}{3}
+\setcounter{dbltopnumber}{2}
+\renewcommand{\topfraction}{0.90}
+\renewcommand{\dbltopfraction}{0.95}
+\renewcommand{\textfraction}{0.05}
+\renewcommand{\floatpagefraction}{0.80}
+\renewcommand{\dblfloatpagefraction}{0.80}
+
+% ---- Packages -------------------------------------------------------
+% De-duplicated (2026-08-13): xcolor was loaded three times with
+% inconsistent options (plain, then twice with [table]) — an option
+% clash on a clean compile; now loaded once as [table]{xcolor}, which
+% also covers colortbl. Duplicate amsmath/amsthm/booktabs/array/
+% tabularx and a duplicate \usetikzlibrary call dropped.
+\usepackage{amsthm}
+\makeatletter
+\def\@@proof[#1]{\par\pushQED{\qed}%
+  \normalfont \topsep0pt \partopsep0pt
+  \trivlist\item[\hskip\labelsep\itshape#1\@addpunct{.}]\ignorespaces}
+\makeatother
+\usepackage{amsmath,amssymb}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage[normalem]{ulem}
+\usepackage[table]{xcolor}
+\usepackage{threeparttable}
+\usepackage{kotex}
+\usepackage{multirow}
+\usepackage{pifont}
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+\usepackage{graphicx}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{capt-of} % for \captionof{table}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+% ---- Theorem environments -------------------------------------------
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}{Corollary}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\usepackage{float}
+\usepackage{placeins}
+
+
+% ---- Project macros -------------------------------------------------
+% \STATUS{...} marks a value to be filled from final experiments.
+\newcommand{\STATUS}[1]{\textcolor{red}{[#1]}}
+% \TODO{...} marks an in-progress item.
+\newcommand{\TODO}[1]{\textcolor{red}{[TODO: #1]}}
+
+% =====================================================================
+\begin{document}
+
+\title{Training-Adaptive Data Selection with a Reliability Gate:
+       Multi-View Fusion for Low-Quality Instruction Data}
+
+\author{Anonymous Author(s)}
+
+\begin{abstract}
+High-quality instruction data is essential for effective instruction
+tuning, but quality is inherently multi-dimensional: a useful
+training set must contain not only reliable instruction--response
+pairs, but also examples that directly benefit the model at its
+current stage of learning. The latter cannot be determined once and
+for all before training, because an example's usefulness changes as
+the model is updated. Dynamic selection---re-evaluating candidates
+against the evolving model---is therefore critical to constructing
+an effective instruction-tuning set. This requirement becomes more
+challenging in real, low-quality instruction pools, where mismatched
+pairs, truncated responses, and subtly wrong answers are common:
+difficulty--uncertainty signals can actively \emph{prefer} such
+corruption because broken samples appear hard. From this perspective,
+we propose \textsc{TAG} (\textbf{T}raining-\textbf{A}daptive data
+selection with a reliability \textbf{G}ate), a three-view selection
+architecture that combines a static reliability gate with two
+dynamic utility signals. A static \emph{Reliability} view assigns
+each sample a continuous weight \(G_i\in[0,1]\) before training,
+using a counterfactual likelihood contrast --- how much the true
+instruction improves the response's likelihood over an unrelated one.
+The weight is zero-anchored, calibrated on a clean reference pool,
+and cached at no per-refresh cost. Two
+dynamic views guide training-adaptive selection: a
+difficulty--uncertainty carrier \(\mathcal{R}_i^{(t)}\), and a
+state-conditioned representation anchor. At each refresh, the anchor
+is the principal direction of within-sequence representation
+displacements on a probe subset at the current checkpoint; each
+candidate's normalized projection onto this anchor provides a bounded
+modulation of the carrier. A local analysis characterizes the
+stability of the recomputed principal direction. The fused
+score is simply \(s_i^{(t)} = G_i \cdot \mathcal{R}_i^{(t)}
+\bigl(1+\lambda\,\widetilde a_i^{(t)}\bigr)\). This
+multiplicative form continuously attenuates candidates according to
+estimated reliability, while the dynamic terms keep selection
+adaptive to the evolving model state. On
+instruction pools with typed, manifest-verified corruptions
+(mismatched, noisy, truncated, wrong-answer, duplicated),
+\STATUS{detection and end-to-end SFT results pending: Dirty@\(K\)/AUPRC
+and seed-paired benchmark comparisons vs.\ entropy-, perplexity-,
+and IFD-based selection}; in prior same-protocol comparisons the
+underlying training-adaptive selector already outperformed strong
+static and dynamic baselines while reducing
+selection-and-tuning cost by 33\% relative to a Reward+PPO selector.
+\textsc{TAG} requires no external judges, reward models, or
+PPO-style selector training.
+\end{abstract}
+
+
+\keywords{Multi-view fusion, Low-quality data, Instruction tuning,
+Training-adaptive data selection, Reliability, Representation anchors,
+Hidden-state geometry, Foundation models}
+
+\maketitle
+
+% ---- Body -----------------------------------------------------------
+\input{sections/01_introduction}
+\input{sections/02_related_work}
+\input{sections/03_method}
+\input{sections/04_experiments}
+\input{sections/05_discussion}
+\input{sections/06_conclusion}
+
+% ---- GenAI disclosure (Elsevier wording) ----------------------------
+\section*{Declaration of generative AI and AI-assisted technologies in
+the manuscript preparation process}
+During the preparation of this work the authors used AI-assisted
+tools for language editing and code tooling. After using these tools,
+the authors reviewed and edited the content as needed and take full
+responsibility for the content of the published article.
+
+% ---- References -----------------------------------------------------
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+% ---- Appendix -------------------------------------------------------
+\input{sections/07_appendix}
+
+\end{document}
+
