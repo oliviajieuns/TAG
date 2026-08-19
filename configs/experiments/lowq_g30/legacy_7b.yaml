@@ -1,0 +1,15 @@
+# Grounded-pool robustness arm: legacy trajectory-anchored score at 7B,
+# no gate (paper Eq. 10) — TAG's direct ablation on the two-operator pool.
+#
+# Same arm as lowq/legacy_7b in every training respect; the ONLY difference
+# is the candidate pool: grounded30 (mismatch 15% + EDA-noisy 15%, both
+# literature-grounded; see GROUNDED_CITATIONS in make_corrupted_pool.py)
+# instead of composite20 (five mixed types, 30.4%). The pool is pinned to
+# its own env var so a composite20 shell cannot leak in — the same failure
+# scripts/check_row_pair.py exists for on the Table 2 pair.
+defaults:
+  - configs/methods/legacy.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq_g30/legacy_7b
+data_files: ${oc.env:TAG_G30_POOL,}

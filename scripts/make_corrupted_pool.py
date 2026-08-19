@@ -196,7 +196,38 @@ def _dump(obj: Any, path: Path) -> None:
     print(f"wrote {path}")
 
 
+# The two-operator, literature-grounded recipe. Everything in it traces to a
+# published corruption/augmentation class, and the two types are structurally
+# disjoint (one rewires the pairing, the other degrades the text), so the
+# per-type detection table is unambiguous:
+#   mismatch  response derangement within response-length buckets
+#             (Honovich et al., ACL 2023 — observed mismatch class)
+#   noisy     EDA random_deletion + random_swap applied to the RESPONSE as
+#             corruption (Wei & Zou, EMNLP-IJCNLP 2019, adapted from
+#             augmentation) — NO foreign-sentence injection, which the
+#             composite noisy operator mixes in and which has no literature
+#             anchor and blurs the boundary with mismatch.
+GROUNDED_CITATIONS = {
+    "mismatch": {
+        "impl": "response derangement within response-length buckets",
+        "reference": "Honovich et al. (ACL 2023), mismatch/incorrect-output classes",
+        "relation": "adapted",
+    },
+    "noisy": {
+        "impl": "EDA random_deletion + random_swap on the response (mode=eda)",
+        "reference": "Wei & Zou (EMNLP-IJCNLP 2019), EDA",
+        "relation": "adapted_from_augmentation",
+    },
+}
+
+
 def _preset_fracs(preset: str) -> Dict[str, float]:
+    if preset.startswith("grounded"):
+        total = float(preset.replace("grounded", "")) / 100.0
+        fr = {t: 0.0 for t in IN_PLACE}
+        fr["mismatch"] = total / 2.0
+        fr["noisy"] = total / 2.0
+        return fr
     if preset.startswith("composite"):
         total = float(preset.replace("composite", "")) / 100.0
         each = total / len(IN_PLACE)
@@ -224,6 +255,11 @@ def main() -> None:
                        help=f"fraction of records to corrupt with {t}")
     p.add_argument("--duplicate-frac", type=float, default=0.0)
     p.add_argument("--n-buckets", type=int, default=10)
+    p.add_argument("--noisy-alpha", type=float, default=0.1,
+                   help="grounded presets only: EDA alpha for the noisy "
+                        "operator (deletion prob per token; swap count "
+                        "fraction). Ignored by composite/pertype presets, "
+                        "whose noisy operator is frozen for reproducibility.")
     p.add_argument("--source-scale", action="append", default=[],
                    metavar="NAME=FACTOR",
                    help="per-source multiplier on the in-place fractions (T6)")
@@ -312,6 +348,7 @@ def main() -> None:
                 if offset <= g < offset + len(records)
             }
         try:
+            _grounded = bool(args.preset and args.preset.startswith("grounded"))
             corrupted, manifest = corrupt_pool(
                 records,
                 seed=args.seed + 1000 * si,
@@ -321,6 +358,8 @@ def main() -> None:
                 donor_records=donor_records,
                 fluent_wrong_frac=args.fluent_wrong_frac,
                 fluent_wrong_replacements=local_repl,
+                noisy_mode="eda" if _grounded else "legacy",
+                noisy_alpha=args.noisy_alpha,
                 **src_fracs,
             )
         except KeyError as e:
@@ -421,6 +460,15 @@ def main() -> None:
         "pool_PENDING_fluent_wrong.json" if args.emit_fluent_wrong_targets
         else "pool.json"
     )
+    if args.preset and args.preset.startswith("grounded"):
+        # A reviewer asking "why this corruption mix" gets the answer from
+        # the manifest itself, next to the fractions and seeds.
+        manifest_out["operators"] = {
+            t: {**GROUNDED_CITATIONS[t],
+                "params": ({"n_buckets": args.n_buckets} if t == "mismatch"
+                           else {"alpha": args.noisy_alpha})}
+            for t in ("mismatch", "noisy")
+        }
     _dump(all_records, out_dir / pool_name)
     _dump(manifest_out, out_dir / "corruption_manifest.json")
 

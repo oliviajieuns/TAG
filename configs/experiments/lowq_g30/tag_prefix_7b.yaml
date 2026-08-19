@@ -1,0 +1,29 @@
+# Grounded-pool robustness arm: TAG gated on the prefix contrast.
+#
+# Identical to lowq/tag_prefix_7b (see that file for the measured rationale
+# behind prefix_tokens=32 / tail_mode=none) except for what it reads:
+#
+#   * pool + counterfactual: the grounded30 two-operator pool (mismatch 15%
+#     + EDA-noisy 15%), pinned to its own env vars.
+#   * gate_cache_file: G is a property of (pool, base checkpoint, gate
+#     config) — a cache computed on composite20 is meaningless here, so this
+#     arm names its own cache file. Build it once:
+#       bash scripts/precompute_gate.sh \
+#           configs/experiments/lowq_g30/tag_prefix_7b.yaml $TAG_GATE_CACHE_G30
+#   * gate_ref_file: UNCHANGED. The Eq. 5' reference is fit on the clean
+#     reference pool under the backbone's likelihoods; it does not depend on
+#     which corruption was injected into the candidate pool.
+defaults:
+  - configs/methods/tag.yaml
+  - configs/experiments/lowq/_shared_7b.yaml
+
+output_subdir: lowq_g30/tag_prefix_7b
+data_files: ${oc.env:TAG_G30_POOL,}
+selection:
+  tag:
+    counterfactual_data_files: ${oc.env:TAG_G30_CF,}
+    prefix_tokens: 32
+    tail_mode: none
+    gate_ref_file: ${oc.env:TAG_GATE_REF_7B_PREFIX,}
+    gate_cache_file: ${oc.env:TAG_GATE_CACHE_G30,}
+    store_token_losses: true

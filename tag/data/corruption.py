@@ -254,12 +254,70 @@ def noisy_text(
     return out
 
 
+def eda_noisy_text(text: str, rng: random.Random, *, alpha: float = 0.1) -> str:
+    """EDA random_deletion + random_swap, per Wei & Zou (EMNLP-IJCNLP 2019).
+
+    This exists next to :func:`noisy_text` rather than replacing it because
+    the two answer different critiques. ``noisy_text`` is the composite20
+    operator and must stay byte-reproducible; it also splices in a sentence
+    from ANOTHER response 30% of the time, which has no literature anchor
+    and — worse — blurs the type boundary with ``mismatch``, so a per-type
+    detection table cannot say which class the gate actually caught. This
+    function is the literature-faithful replacement used by the
+    ``grounded*`` presets: two published augmentation operators, applied as
+    corruption, nothing spliced in from anywhere.
+
+    Semantics follow the NoiseBench operator spec exactly:
+      * deletion: each whitespace token dropped independently w.p. ``alpha``,
+        always keeping at least one token; if the draw deletes nothing, one
+        token is deleted so every selected record changes;
+      * swap: ``max(1, round(alpha * n_tokens))`` random PAIR swaps (any two
+        positions, not adjacent-only).
+
+    Texts with fewer than two tokens are returned unchanged — the caller
+    should treat them as ineligible.
+    """
+    words = _words(text)
+    if len(words) < 2:
+        return text
+    kept = [w for w in words if rng.random() >= alpha]
+    if len(kept) == len(words):
+        drop = rng.randrange(len(words))
+        kept = [w for k, w in enumerate(words) if k != drop]
+    if not kept:
+        kept = [rng.choice(words)]
+    words = kept
+    if len(words) >= 2:
+        for _ in range(max(1, round(alpha * len(words)))):
+            a, b = rng.sample(range(len(words)), 2)
+            words[a], words[b] = words[b], words[a]
+    return " ".join(words)
+
+
 def corrupt_noisy(
     records: List[Record],
     target_idxs: List[int],
     rng: random.Random,
     **noise_kwargs: Any,
 ) -> Dict[int, Dict[str, Any]]:
+    mode = noise_kwargs.pop("mode", "legacy")
+    if mode == "eda":
+        alpha = float(noise_kwargs.pop("alpha", 0.1))
+        if noise_kwargs:
+            raise ValueError(
+                f"corrupt_noisy(mode='eda') takes only alpha; got "
+                f"{sorted(noise_kwargs)}"
+            )
+        entries_eda: Dict[int, Dict[str, Any]] = {}
+        for i in target_idxs:
+            records[i]["output"] = eda_noisy_text(
+                str(records[i].get("output", "")), rng, alpha=alpha,
+            )
+            entries_eda[i] = {"type": "noisy", "mode": "eda"}
+        return entries_eda
+    if mode != "legacy":
+        raise ValueError(f"corrupt_noisy: unknown mode {mode!r}")
+
     inject_pool = noise_kwargs.pop("inject_pool", None)
     if inject_pool is None:
         # Sample foreign sentences from non-target responses.
@@ -505,6 +563,8 @@ def corrupt_pool(
     donor_records: Optional[Sequence[Record]] = None,
     fluent_wrong_frac: float = 0.0,
     fluent_wrong_replacements: Optional[Dict[Any, str]] = None,
+    noisy_mode: str = "legacy",
+    noisy_alpha: float = 0.1,
 ) -> Tuple[List[Record], Dict[str, Any]]:
     """Apply the requested corruption mix and return (new_records, manifest).
 
@@ -592,7 +652,13 @@ def corrupt_pool(
         entries.update(corrupt_mismatch(records, t1, rng, n_buckets))
     t2 = _draw(fracs["noisy"])
     if t2:
-        entries.update(corrupt_noisy(records, t2, rng))
+        if noisy_mode == "legacy":
+            # No kwargs: the composite20 rng stream and output stay
+            # byte-identical to every pool already built with it.
+            entries.update(corrupt_noisy(records, t2, rng))
+        else:
+            entries.update(corrupt_noisy(records, t2, rng,
+                                         mode=noisy_mode, alpha=noisy_alpha))
     t3 = _draw(fracs["truncated"])
     if t3:
         entries.update(corrupt_truncated(records, t3, rng))
@@ -631,6 +697,9 @@ def corrupt_pool(
         "n_buckets": n_buckets,
     }
     # Only emitted when used, so pre-T1b/T7 manifests stay byte-identical.
+    if noisy_mode != "legacy":
+        spec["noisy_mode"] = noisy_mode
+        spec["noisy_alpha"] = noisy_alpha
     if xsource_frac > 0:
         spec["xsource_frac"] = xsource_frac
     if fluent_wrong_frac > 0:

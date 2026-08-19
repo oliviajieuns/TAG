@@ -433,3 +433,92 @@ def test_sources_tracked_through_duplicates():
         src_tag = man["sources"][cluster[0]]
         for dup in cluster[1:]:
             assert man["sources"][dup] == src_tag
+
+
+# ---------------------------------------------------------------------------
+# grounded preset: two literature-grounded operators, injection-free noisy
+# ---------------------------------------------------------------------------
+
+def _tiny_pool(n=40, seed=0):
+    rng = random.Random(seed)
+    return [
+        {
+            "instruction": f"instruction {i} " + " ".join(
+                rng.choice("alpha beta gamma delta".split()) for _ in range(4)),
+            "input": "",
+            "output": " ".join(
+                rng.choice("red green blue yellow purple".split())
+                for _ in range(rng.randint(6, 20))),
+        }
+        for i in range(n)
+    ]
+
+
+def test_eda_noisy_text_always_changes_and_keeps_a_token():
+    from tag.data.corruption import eda_noisy_text
+    rng = random.Random(7)
+    for _ in range(50):
+        text = " ".join(str(i) for i in range(rng.randint(2, 30)))
+        out = eda_noisy_text(text, rng, alpha=0.1)
+        assert out.split(), "must keep at least one token"
+        assert out != text, "every selected record must actually change"
+
+
+def test_eda_noisy_text_short_text_unchanged():
+    from tag.data.corruption import eda_noisy_text
+    assert eda_noisy_text("single", random.Random(0)) == "single"
+    assert eda_noisy_text("", random.Random(0)) == ""
+
+
+def test_eda_mode_never_splices_foreign_text():
+    """The whole point of the grounded preset: noisy degrades the record's
+    OWN response. Every output token must come from the original response,
+    or the type boundary with mismatch is blurred again."""
+    from tag.data.corruption import corrupt_pool
+    records = _tiny_pool()
+    corrupted, man = corrupt_pool(
+        records, seed=42, noisy=0.5, noisy_mode="eda", noisy_alpha=0.2,
+    )
+    for k, e in man["entries"].items():
+        assert e["type"] == "noisy" and e.get("mode") == "eda"
+        orig_words = set(records[int(k)]["output"].split())
+        new_words = set(corrupted[int(k)]["output"].split())
+        assert new_words <= orig_words, (
+            f"record {k} gained words from outside its own response"
+        )
+    assert man["spec"]["noisy_mode"] == "eda"
+    assert man["spec"]["noisy_alpha"] == 0.2
+
+
+def test_legacy_noisy_stream_is_byte_identical():
+    """noisy_mode='legacy' (the default) must reproduce composite20 pools
+    exactly — records AND manifest. This is the reproducibility contract for
+    every pool already built."""
+    from tag.data.corruption import corrupt_pool
+    a = corrupt_pool(_tiny_pool(), seed=42, mismatch=0.2, noisy=0.2)
+    b = corrupt_pool(_tiny_pool(), seed=42, mismatch=0.2, noisy=0.2,
+                     noisy_mode="legacy", noisy_alpha=0.99)  # alpha unused
+    assert a[0] == b[0]
+    assert a[1] == b[1]
+    assert "noisy_mode" not in a[1]["spec"], (
+        "default mode must not add spec keys — old manifests stay identical"
+    )
+
+
+def test_grounded_preset_fracs_and_disjointness():
+    import importlib.util as _u
+    spec = _u.spec_from_file_location("mkpool", "scripts/make_corrupted_pool.py")
+    mk = _u.module_from_spec(spec); spec.loader.exec_module(mk)
+    fr = mk._preset_fracs("grounded30")
+    assert fr == {"mismatch": 0.15, "noisy": 0.15,
+                  "truncated": 0.0, "wrong_answer": 0.0}
+    fr20 = mk._preset_fracs("grounded20")
+    assert fr20["mismatch"] == fr20["noisy"] == 0.10
+
+    from tag.data.corruption import corrupt_pool
+    _, man = corrupt_pool(_tiny_pool(200), seed=42, noisy_mode="eda", **fr)
+    types = [e["type"] for e in man["entries"].values()]
+    assert set(types) == {"mismatch", "noisy"}
+    # disjoint sets and the requested mass
+    assert len(man["entries"]) == len(set(man["entries"]))
+    assert abs(len(types) / man["n_original"] - 0.30) < 0.02

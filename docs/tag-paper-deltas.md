@@ -1003,6 +1003,42 @@ Run provenance: lowq pair `runs/20260818_071841`, main pair
 the eval-side cfg.json provenance stamp; every later eval run records seed
 and git sha itself).
 
+### D6. The corrupted pool is redesigned: two operators, both with citations
+
+Collaborator critique of composite20 (accepted): five corruption types with
+mixed provenance invites the reviewer question "why this mix", and the
+`noisy` operator's foreign-sentence injection (30% of noisy records get a
+sentence spliced in from ANOTHER response) has no literature anchor and
+blurs the type boundary with `mismatch` — a record that is half-mismatch
+cannot be attributed in the per-type detection table.
+
+The replacement is the `grounded<NN>` preset (`make_corrupted_pool.py`),
+NN% total corruption split evenly over exactly two operators:
+
+| type | operator | grounding |
+|---|---|---|
+| mismatch | response derangement within response-length buckets | Honovich et al. (ACL 2023), observed mismatch class |
+| noisy | EDA `random_deletion` + `random_swap` on the response, `alpha=0.1`; **no injection** | Wei & Zou (EMNLP-IJCNLP 2019), adapted from augmentation |
+
+The two are structurally disjoint — one rewires the instruction↔response
+pairing, the other degrades the response's own text — so per-type
+attribution is unambiguous by construction, and the manifest now carries an
+`operators` block with the citation and parameters next to the seeds.
+
+Reproducibility: `noisy_mode="legacy"` (the default) is byte-identical to
+every composite20 pool already built — records, rng stream, and manifest —
+pinned by `test_legacy_noisy_stream_is_byte_identical`. The grounded pool
+is a new artifact, not a mutation of the old one.
+
+Status of the old results: the sealed composite20 numbers (D3, D5) remain
+valid for what they measured and keep the per-type table — including the
+`wrong_answer` negative result, which the two-operator pool cannot measure.
+Proposed paper structure: **grounded30 as the main robustness experiment**
+(defensible composition), composite20 as the stress-test appendix (breadth,
+per-type limits). The lowq_g30/ experiment set implements the rerun; the
+gate reference is backbone-bound and carries over, the gate cache is
+pool-bound and does not.
+
 ## Checklist before submission
 
 - [ ] A1-A4 folded into the equations (these are correctness fixes)
@@ -1040,4 +1076,6 @@ and git sha itself).
       single-seed D5 point estimates
 - [ ] humaneval scoring harness fork/filelock crash fixed and the column
       restored (all four D5 runs lost it identically)
+- [ ] D6 grounded30 pair (lowq_g30/) trained + evaluated; robustness section
+      re-anchored on it with composite20 demoted to the appendix
 - [ ] measured numbers substituted for every placeholder above
