@@ -59,6 +59,14 @@ if [ -z "${TAG_WORKSPACE:-}" ]; then
   exit 2
 fi
 
+# A shell that sourced env.sh but not the venv launches N processes that all
+# die on `import torch` — after grabbing their GPUs. Refuse up front instead.
+if ! python -c "import torch" >/dev/null 2>&1; then
+  echo "[error] this python cannot import torch — activate the venv first" >&2
+  echo "        (source exp/bin/activate, then re-run)" >&2
+  exit 2
+fi
+
 # Kill every child on Ctrl-C / SIGTERM. Without this a 7B arm that is
 # interrupted — or one that hangs tearing down its CUDA context after an OOM,
 # which is the common case — is left holding tens of GB on its GPU with no
