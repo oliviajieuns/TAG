@@ -1,8 +1,8 @@
-# Grounded-pool dose-response arm, 30% corruption: legacy score, no gate.
+# Grounded-pool dose-response arm, 20% corruption: legacy score, no gate.
 #
 # One of the lowq_g{10,20,30,40,50} family — identical arms on identical
 # recipes, differing ONLY in how much corruption was injected (mismatch and
-# EDA-noisy at 15% each; --preset grounded30, seed 42). The family
+# EDA-noisy at 10% each; --preset grounded20, seed 42). The family
 # exists to measure the dose-response of the gate: at what corruption level
 # selection separates, and what that buys downstream.
 #
@@ -12,5 +12,5 @@ defaults:
   - configs/methods/legacy.yaml
   - configs/experiments/lowq/_shared_7b.yaml
 
-output_subdir: lowq_g30/legacy_7b
-data_files: ${oc.env:POOLS,}/grounded30/pool.json
+output_subdir: lowq_g20/legacy_7b
+data_files: ${oc.env:POOLS,}/grounded20/pool.json

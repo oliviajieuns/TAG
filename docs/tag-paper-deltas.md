@@ -1033,11 +1033,21 @@ is a new artifact, not a mutation of the old one.
 Status of the old results: the sealed composite20 numbers (D3, D5) remain
 valid for what they measured and keep the per-type table — including the
 `wrong_answer` negative result, which the two-operator pool cannot measure.
-Proposed paper structure: **grounded30 as the main robustness experiment**
-(defensible composition), composite20 as the stress-test appendix (breadth,
-per-type limits). The lowq_g30/ experiment set implements the rerun; the
-gate reference is backbone-bound and carries over, the gate cache is
-pool-bound and does not.
+
+The grounded recipe runs as a **dose-response sweep**: 10/20/30/40/50 %
+total corruption, one config pair per rate (`configs/experiments/
+lowq_g{10..50}/`), every path derived from `$POOLS` so no per-rate env var
+can leak between rates. `scripts/run_grounded_sweep.sh` drives it in
+resumable stages — pools → gates → train → purity — and the `gates` stage
+alone already yields the detection dose-response (per-type AP at each rate,
+from `gate_report`, no training). Downstream eval is a per-rate decision,
+not a stage: 10 runs × ~2.5 h.
+
+Proposed paper structure: the grounded sweep as the main robustness
+experiment (defensible composition + a dose-response curve instead of one
+operating point), composite20 as the stress-test appendix (breadth,
+per-type limits). The gate reference is backbone-bound and shared across
+the family; the gate cache is pool-bound, one per rate.
 
 ## Checklist before submission
 

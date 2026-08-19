@@ -1,4 +1,4 @@
-# Grounded-pool dose-response arm, 30% corruption: TAG, prefix contrast.
+# Grounded-pool dose-response arm, 20% corruption: TAG, prefix contrast.
 #
 # One of the lowq_g{10,20,30,40,50} family — see the legacy_7b file beside
 # this one for the family's purpose, and lowq/tag_prefix_7b for the measured
@@ -6,20 +6,20 @@
 #
 # gate_cache_file is per-rate: G is a property of (pool, base checkpoint,
 # gate config), and each rate is a different pool. Build it once per rate:
-#   bash scripts/precompute_gate.sh configs/experiments/lowq_g30/tag_prefix_7b.yaml \
-#       $POOLS/grounded30/tag_gate_qwen2.5-7b_prefix.pt
+#   bash scripts/precompute_gate.sh configs/experiments/lowq_g20/tag_prefix_7b.yaml \
+#       $POOLS/grounded20/tag_gate_qwen2.5-7b_prefix.pt
 # gate_ref_file is backbone-bound and shared by the whole family.
 defaults:
   - configs/methods/tag.yaml
   - configs/experiments/lowq/_shared_7b.yaml
 
-output_subdir: lowq_g30/tag_prefix_7b
-data_files: ${oc.env:POOLS,}/grounded30/pool.json
+output_subdir: lowq_g20/tag_prefix_7b
+data_files: ${oc.env:POOLS,}/grounded20/pool.json
 selection:
   tag:
-    counterfactual_data_files: ${oc.env:POOLS,}/grounded30/counterfactual.json
+    counterfactual_data_files: ${oc.env:POOLS,}/grounded20/counterfactual.json
     prefix_tokens: 32
     tail_mode: none
     gate_ref_file: ${oc.env:TAG_GATE_REF_7B_PREFIX,}
-    gate_cache_file: ${oc.env:POOLS,}/grounded30/tag_gate_qwen2.5-7b_prefix.pt
+    gate_cache_file: ${oc.env:POOLS,}/grounded20/tag_gate_qwen2.5-7b_prefix.pt
     store_token_losses: true

@@ -35,7 +35,6 @@ if [ -n "${TAG_ENV_RESET:-}" ]; then
         TAG_GATE_CACHE TAG_GATE_CACHE_NONULL TAG_GATE_CACHE_BAR \
         TAG_GATE_CACHE_PREFIX TAG_GATE_CACHE_CLEAN TAG_GATE_CACHE_LLAMA2 \
         TAG_CLEAN_POOL TAG_CLEAN_CF TAG_MAIN_POOL TAG_MAIN_CF \
-        TAG_G30_POOL TAG_G30_CF TAG_GATE_CACHE_G30 \
         TAG_EPISODE_BS TAG_EPISODE_BS_7B TAG_EVAL_GEN_BS \
         MMLU_DATA_DIR MMLU_PRO_DATA_DIR GSM8K_DATA_DIR SVAMP_DATA_DIR \
         HUMANEVAL_DATA_DIR MBPP_DATA_DIR TYDIQA_DATA_DIR XQUAD_DATA_DIR \
@@ -195,14 +194,10 @@ export TAG_GATE_CACHE_PREFIX="${TAG_GATE_CACHE_PREFIX:-$POOLS/composite20/tag_ga
 # gate cache, because G is a function of the pool and this is a different one
 # from composite20. No dedup file: the legacy arm has none, so threading one
 # into the TAG arm would make the pair differ by more than G.
-# The grounded two-operator pool (mismatch + EDA-noisy; configs/experiments/
-# lowq_g30/). Built by:
-#   python scripts/make_corrupted_pool.py --input <alpaca corpus> \
-#     --out-dir $POOLS/grounded30 --preset grounded30 --seed 42 \
-#     --emit-counterfactual
-export TAG_G30_POOL="${TAG_G30_POOL:-$POOLS/grounded30/pool.json}"
-export TAG_G30_CF="${TAG_G30_CF:-$POOLS/grounded30/counterfactual.json}"
-export TAG_GATE_CACHE_G30="${TAG_GATE_CACHE_G30:-$POOLS/grounded30/tag_gate_qwen2.5-7b_prefix.pt}"
+# The grounded two-operator pools (mismatch + EDA-noisy) live at
+# $POOLS/grounded{10,20,30,40,50}/ and the lowq_g* configs derive every path
+# from $POOLS directly — no per-rate env vars to leak between rates. Build
+# and run the family with scripts/run_grounded_sweep.sh.
 
 export TAG_CLEAN_POOL="${TAG_CLEAN_POOL:-$POOLS/clean_ref/pool.json}"
 export TAG_CLEAN_CF="${TAG_CLEAN_CF:-$POOLS/clean_ref/counterfactual.json}"
