@@ -121,36 +121,117 @@ envelope used in Fig.~\ref{fig:anchor-drift}.
 \subsection{Proof of Theorem~\ref{thm:anchor-stability}}
 \label{app:proof-stability}
 \begin{proof}
-Fix layer $l$ and transition $t-1\to t$, and write
-$A=\Sigma_l^{(t-1)}$, $B=\Sigma_l^{(t)}$, $E=B-A$.
-Let $u=v_l^{(t-1)}$ be the top eigenvector of $A$, and let $\tilde u$
-be the uncalibrated top eigenvector of $B$. Since
-$B\tilde u=\lambda_1(B)\tilde u$, the residual of $\tilde u$ w.r.t.\ $A$
-satisfies $\|A\tilde u-\lambda_1(B)\tilde u\|_2=\|E\tilde u\|_2\le\|E\|_F$.
-By the residual form of Davis--Kahan
+Fix layer \(l\) and transition \(t-1\to t\). Write
+\[
+A=\Sigma_l^{(t-1)},\qquad
+B=\Sigma_l^{(t)},\qquad
+E=B-A .
+\]
+Let \(u=v_l^{(t-1)}\) be the top eigenvector of \(A\), and let
+\(\tilde u\) be the uncalibrated top eigenvector of \(B\). Since
+\[
+B\tilde u=\lambda_1(B)\tilde u,
+\]
+the residual of \(\tilde u\) with respect to \(A\) is
+\[
+A\tilde u-\lambda_1(B)\tilde u
+=
+(A-B)\tilde u
+=
+-E\tilde u.
+\]
+Therefore,
+\[
+\|A\tilde u-\lambda_1(B)\tilde u\|_2
+=
+\|E\tilde u\|_2
+\le
+\|E\|_2
+\le
+\|E\|_F .
+\]
+
+By the residual form of the Davis--Kahan theorem
 \cite{davis1970rotation,stewart1990matrix},
-$\sin\Theta(u,\tilde u)\le\|E\|_F/(\lambda_1(B)-\lambda_2(A))$,
-which under the assumptions of Theorem~\ref{thm:anchor-stability} gives
-$\sin\Theta\le(C_{\Sigma,l}/\gamma_l)\,\eta_{t-1}$.
+\[
+\sin\Theta(u,\tilde u)
+\le
+\frac{\|E\|_F}
+{\lambda_1(B)-\lambda_2(A)} .
+\]
+Using the assumptions of Theorem~\ref{thm:anchor-stability},
+\[
+\|\Sigma_l^{(t)}-\Sigma_l^{(t-1)}\|_F
+\le
+C_{\Sigma,l}\eta_{t-1}
+\]
+and
+\[
+\lambda_1(\Sigma_l^{(t)})
+-
+\lambda_2(\Sigma_l^{(t-1)})
+\ge
+\gamma_l,
+\]
+we obtain
+\[
+\sin\Theta
+\le
+\frac{C_{\Sigma,l}}{\gamma_l}\eta_{t-1}.
+\]
+
 After temporal sign calibration,
-$\langle v_l^{(t)},v_l^{(t-1)}\rangle\ge 0$, so $\Theta\in[0,\pi/2]$
-and $\|v_l^{(t)}-v_l^{(t-1)}\|_2=2\sin(\Theta/2)\le 2\sin\Theta$.
-Therefore
-$\|v_l^{(t)}-v_l^{(t-1)}\|_2\le (2C_{\Sigma,l}/\gamma_l)\,\eta_{t-1}$.
+\[
+\langle v_l^{(t)},v_l^{(t-1)}\rangle\ge0,
+\]
+so the corresponding principal angle satisfies
+\[
+\Theta\in[0,\pi/2].
+\]
+For unit vectors,
+\[
+\|v_l^{(t)}-v_l^{(t-1)}\|_2
+=
+2\sin(\Theta/2)
+\le
+2\sin\Theta .
+\]
+Therefore,
+\[
+\boxed{
+\|v_l^{(t)}-v_l^{(t-1)}\|_2
+\le
+\frac{2C_{\Sigma,l}}{\gamma_l}\eta_{t-1}
+}.
+\]
 \end{proof}
 
 \paragraph{Eigengap convention.}
 The theorem uses the cross-time gap
-$\lambda_1(\Sigma_l^{(t)})-\lambda_2(\Sigma_l^{(t-1)})$
+\[
+\lambda_1(\Sigma_l^{(t)})
+-
+\lambda_2(\Sigma_l^{(t-1)})
+\]
 because the proof treats the new top eigenvector as an approximate
 eigenvector of the previous covariance. By Weyl's inequality,
-$|\lambda_1(\Sigma_l^{(t)})-\lambda_1(\Sigma_l^{(t-1)})|
-\le\|\Sigma_l^{(t)}-\Sigma_l^{(t-1)}\|_F$,
-so this cross-time gap differs from the usual same-time gap only by
-$O(\eta_{t-1})$ under the covariance-drift assumption.
+\[
+\left|
+\lambda_1(\Sigma_l^{(t)})
+-
+\lambda_1(\Sigma_l^{(t-1)})
+\right|
+\le
+\|\Sigma_l^{(t)}-\Sigma_l^{(t-1)}\|_F ,
+\]
+so under the covariance-drift assumption the cross-time gap differs
+from the usual same-time eigengap only by \(O(\eta_{t-1})\).
 The bound controls only the recomputed anchor direction, not the full
 ranking or optimization trajectory; it motivates the diagnostic in
-Section~\ref{sec:local-anchor-stability}.
+Section~\ref{sec:local-anchor-stability}. In \textsc{TAG}, this
+distinction is convenient because the reliability gate is static
+across refreshes: the gate introduces no additional temporal
+variation into the anchor-stability argument.
 
 \vspace{-0.6em}
 \subsection{Empirical Davis--Kahan tail}
