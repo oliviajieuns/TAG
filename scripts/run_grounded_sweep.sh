@@ -16,8 +16,9 @@
 #   gates    ~15 min/rate.  The cheapest scientific readout of the whole
 #            sweep: gate_report prints detection AP per corruption type at
 #            each rate — the dose-response of DETECTION costs no training.
-#   train    ~1-2 h/rate.   Both arms of a rate concurrently (1 arm/GPU),
-#            rates sequential. Needed for selection purity and any eval.
+#   train    ~1 h/job.      A queue of all (rate, arm) jobs, one job per
+#            visible GPU, refilled as jobs finish — 3 GPUs run the 10-job
+#            sweep in 4 waves. Needed for selection purity and any eval.
 #   purity   CPU seconds.   Corrupted fraction of the selected subset per
 #            rate and arm — the dose-response of SELECTION, and the figure
 #            the family exists for.
@@ -80,18 +81,99 @@ stage_gates() {
   done
 }
 
-stage_train() {
-  for R in $RATES; do
-    if ls "$OUTPUT_ROOT/lowq_g$R/tag_prefix_7b/runs/"*"seed${SEED}"/selected_indices_epoch3.json \
-        >/dev/null 2>&1; then
-      echo "[sweep] train: rate $R already has an epoch-3 selection — skipped"
-      continue
-    fi
-    echo "[sweep] train: rate $R (both arms, 1/GPU)"
-    ARM_DIR="configs/experiments/lowq_g$R" SCALE=7b \
-      OVERRIDES="${OVERRIDES:-grad_accum=16}" \
-      bash scripts/run_lowq_all_arms.sh "$SEED" legacy_7b tag_prefix_7b || exit 1
+# One (rate, arm) job on one GPU. The queue below keeps every visible GPU
+# busy across rate boundaries — with 3 GPUs the 10-job sweep runs in 4
+# waves instead of 5 idle-thirded ones.
+_train_done() {  # rate arm -> 0 if a seed-matched run finished all 3 epochs
+  local sentinel
+  for sentinel in "$OUTPUT_ROOT/lowq_g$1/$2/runs/"*"seed${SEED}"/epoch_last/_complete; do
+    [ -f "$sentinel" ] && [ "$(cat "$sentinel" 2>/dev/null)" = "3" ] && return 0
   done
+  return 1
+}
+
+stage_train() {
+  local n_gpu
+  n_gpu="$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | wc -l)"
+  [ "$n_gpu" -ge 1 ] || { echo "[sweep] train: no GPUs visible" >&2; exit 2; }
+
+  local logdir="$TAG_WORKSPACE/logs/sweep"
+  mkdir -p "$logdir"
+
+  # Kill the whole fleet on Ctrl-C — a half-dead sweep holding 3 GPUs is
+  # the failure mode this trap exists for.
+  local -a _all_pids=()
+  trap 'echo "[sweep] interrupt — stopping children" >&2;
+        for p in ${_all_pids[@]+"${_all_pids[@]}"}; do kill "$p" 2>/dev/null; done;
+        sleep 5;
+        for p in ${_all_pids[@]+"${_all_pids[@]}"}; do kill -9 "$p" 2>/dev/null; done;
+        exit 130' TERM INT
+
+  # Build the queue: every (rate, arm) not already trained to 3 epochs.
+  local -a queue=()
+  local R arm
+  for R in $RATES; do
+    for arm in legacy_7b tag_prefix_7b; do
+      if _train_done "$R" "$arm"; then
+        echo "[sweep] train: lowq_g$R/$arm already complete — skipped"
+      else
+        queue+=("$R:$arm")
+      fi
+    done
+  done
+  [ ${#queue[@]} -eq 0 ] && { echo "[sweep] train: nothing to do"; return 0; }
+  echo "[sweep] train: ${#queue[@]} job(s) on $n_gpu GPU(s), 1 job/GPU"
+
+  local -a gpu_pid=() gpu_job=()
+  local g job n_fail=0
+
+  _reap() {  # blocks until at least one GPU frees; reports its job's outcome
+    wait -n 2>/dev/null || true
+    for g in $(seq 0 $((n_gpu - 1))); do
+      local pid="${gpu_pid[$g]:-}"
+      [ -n "$pid" ] || continue
+      if ! kill -0 "$pid" 2>/dev/null; then
+        if wait "$pid" 2>/dev/null; then
+          echo "[sweep] OK     ${gpu_job[$g]}  (gpu$g)"
+        else
+          echo "[sweep] FAILED ${gpu_job[$g]}  (gpu$g) — see $logdir/${gpu_job[$g]//:/_}.log" >&2
+          tail -n 8 "$logdir/${gpu_job[$g]//:/_}.log" 2>/dev/null | sed 's/^/         | /' >&2
+          n_fail=$((n_fail + 1))
+        fi
+        gpu_pid[$g]=""; gpu_job[$g]=""
+      fi
+    done
+  }
+
+  for job in "${queue[@]}"; do
+    R="${job%%:*}"; arm="${job##*:}"
+    # Find a free GPU, waiting for one when all are busy.
+    while :; do
+      for g in $(seq 0 $((n_gpu - 1))); do
+        [ -z "${gpu_pid[$g]:-}" ] && break 2
+      done
+      _reap
+    done
+    echo "[sweep] gpu$g <- lowq_g$R/$arm   ($logdir/${R}_${arm}.log)"
+    CUDA_VISIBLE_DEVICES="$g" \
+      python -m tag.train --config "$(_cfg "$R" "$arm")" \
+        --run_suffix "seed${SEED}" \
+        --override "seed=${SEED}" ${OVERRIDES:-grad_accum=16} \
+        > "$logdir/${R}_${arm}.log" 2>&1 &
+    gpu_pid[$g]=$!; gpu_job[$g]="$job"; _all_pids+=($!)
+  done
+  # Drain.
+  while :; do
+    local busy=0
+    for g in $(seq 0 $((n_gpu - 1))); do
+      [ -n "${gpu_pid[$g]:-}" ] && busy=1
+    done
+    [ "$busy" -eq 0 ] && break
+    _reap
+  done
+  trap - TERM INT
+  echo "[sweep] train done — ${n_fail} failure(s)"
+  [ "$n_fail" -eq 0 ] || exit 1
 }
 
 stage_purity() {
