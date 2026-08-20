@@ -21,9 +21,22 @@
 #
 #   TAG_ENV_RESET=1 source scripts/gpu_cloud/env.sh
 #
-# It does not touch VIRTUAL_ENV, PATH, or anything outside this file's scope.
+# It does not touch VIRTUAL_ENV, PATH, or anything outside this file's scope,
+# and it deliberately does NOT clear TAG_WORKSPACE. The workspace is the INPUT
+# every path below is derived FROM, not one of the derived values, so clearing
+# it turned the blunt instrument into a footgun: the documented
+#
+#   export TAG_WORKSPACE=/group-volume/.../workspace
+#   TAG_ENV_RESET=1 source scripts/gpu_cloud/env.sh
+#
+# dropped the pin, fell back to /group-volume/$USER/tag-workspace, and reported
+# every pool, reference and benchmark as MISSING on a box that had all of them.
+# To re-pick the workspace, unset it yourself — explicitly:
+#
+#   unset TAG_WORKSPACE; TAG_ENV_RESET=1 source scripts/gpu_cloud/env.sh
+#
 if [ -n "${TAG_ENV_RESET:-}" ]; then
-  unset TAG_WORKSPACE TAG_REPO_ROOT POOLS OUTPUT_ROOT DATA_CACHE \
+  unset TAG_REPO_ROOT POOLS OUTPUT_ROOT DATA_CACHE \
         EVAL_RESULTS_ROOT TAG_EVAL_DATA TAG_BENCH_ROOTS \
         MODEL_PATH_QWEN25_05B MODEL_PATH_QWEN25_7B MODEL_PATH_LLAMA2_7B \
         MODEL_PATH_LLAMA31_8B TAG_GATE_REF_L31 TAG_GATE_CACHE_L31 \
@@ -40,6 +53,7 @@ if [ -n "${TAG_ENV_RESET:-}" ]; then
         HUMANEVAL_DATA_DIR MBPP_DATA_DIR TYDIQA_DATA_DIR XQUAD_DATA_DIR \
         BBH_DATA_DIR 2>/dev/null
   echo "[tag-env] reset: re-deriving every path this file manages"
+  echo "[tag-env]   workspace kept: ${TAG_WORKSPACE:-<unset — will be picked>}"
 fi
 
 # Resolve the repo root even when sourced from another directory.
