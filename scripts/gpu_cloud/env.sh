@@ -254,7 +254,17 @@ export TAG_GATE_REF_L31="${TAG_GATE_REF_L31:-$POOLS/clean_ref/delta_hat_llama31_
 export TAG_GATE_CACHE_L31="${TAG_GATE_CACHE_L31:-$POOLS/alpaca_gpt4/tag_gate_llama31-8b_prefix.pt}"
 export TAG_GATE_REF_Q7="${TAG_GATE_REF_Q7:-$POOLS/clean_ref/delta_hat_qwen7b_main_prefix.pt}"
 export TAG_GATE_CACHE_Q7="${TAG_GATE_CACHE_Q7:-$POOLS/alpaca_gpt4/tag_gate_qwen2.5-7b_prefix.pt}"
-export TAG_GATE_CACHE_LLAMA2="${TAG_GATE_CACHE_LLAMA2:-$POOLS/alpaca_gpt4/tag_gate_llama2-7b_prefix.pt}"
+# _prefix32, not _prefix: the file called ..._prefix.pt was written by a run
+# whose gate had prefix_tokens=0 (tag/train.py never forwarded the key), and
+# the re-derivation stamped that config back onto it — so the name says
+# "prefix" and the contents are the whole-response statistic. Every arm that
+# then loaded it got "cache hit (config unchanged)" on the wrong G. The name
+# now carries the span the cache is FOR, and the old file is unreachable
+# rather than silently reused. Verify after regenerating:
+#   python scripts/gate_report.py --gate "$TAG_GATE_CACHE_LLAMA2" \
+#       --config configs/experiments/main_7b/llama2/tag_10.yaml
+# and expect no "differs from the cache on ..." line.
+export TAG_GATE_CACHE_LLAMA2="${TAG_GATE_CACHE_LLAMA2:-$POOLS/alpaca_gpt4/tag_gate_llama2-7b_prefix32.pt}"
 
 # Never let the HF hub be consulted for the TRAINING data — a silent hub
 # fallback is how you end up training on a different pool than you think.

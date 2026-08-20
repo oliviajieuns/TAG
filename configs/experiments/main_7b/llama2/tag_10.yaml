@@ -48,6 +48,18 @@ selection:
     # contrast restricted to the response opening. The span minimum of Eq. 5
     # is off — measured AP 0.334 against a 0.304 base on the corrupted pool,
     # and because Eq. 6 takes a minimum it drags the prefix statistic down.
+    #
+    # Every line the calibration depends on is stated here, including the ones
+    # that match the method default. sweep_gate_config.py asks for exactly
+    # that ("EVERY line, including the defaults"), because a default that
+    # moves would put the arm and the reference it is calibrated by on
+    # different statistics with nothing to notice it. These four ARE the
+    # reference's as-built config (W=16, tau=0.5 per_token, tail=none,
+    # target_zero_rate=0.05 -> s=0.0316, zero 5.1%).
+    span_tokens: 16
+    tau: 0.5
+    tau_mode: per_token
+    target_zero_rate: 0.05
     prefix_tokens: 32
     tail_mode: none
     # BACKBONE-specific. Delta_hat is a property of a particular model's

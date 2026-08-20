@@ -127,6 +127,16 @@ from tag.pipelines.selection import save_selection, select_indices
 from tag.pipelines.sft import make_dataloader, sft_one_epoch
 
 
+# selection.tag keys consumed before the gate context is built, so their
+# absence from tag_ctx["params"] is correct rather than a dropped key.
+# Used by the guard in main() — see the comment there.
+TAG_PARAMS_CONSUMED_ELSEWHERE = frozenset({
+    "counterfactual_data_files",  # -> cf_datasets
+    "dedup_clusters_file",        # -> cluster_ids
+})
+
+
+
 def _atomic_json_dump(obj, path: Path) -> None:
     """Atomically write JSON via tmp+fsync+rename so a crash mid-write can't
     leave a half-written file that the next run silently misparses."""
@@ -756,6 +766,7 @@ def main() -> None:
                 "tail_mode": str(tag_cfg.get("tail_mode", "min")),
                 "tail_quantile": float(tag_cfg.get("tail_quantile", 0.0)),
                 "include_eos": bool(tag_cfg.get("include_eos", False)),
+                "prefix_tokens": int(tag_cfg.get("prefix_tokens", 0)),
                 # ---- gate (paper Eq. 6) ----
                 "c_trunc": float(tag_cfg.get("c_trunc", 0.2)),
                 "eps_den": float(tag_cfg.get("eps_den", 1e-3)),
@@ -771,6 +782,8 @@ def main() -> None:
                 ),
                 "calibration_target_q": float(tag_cfg.get("calibration_target_q", 0.8)),
                 "dispersion_discount": bool(tag_cfg.get("dispersion_discount", True)),
+                "null_correction": bool(tag_cfg.get("null_correction", True)),
+                "target_zero_rate": float(tag_cfg.get("target_zero_rate", 0.05)),
                 # ---- lifecycle ----
                 "allow_late_gate": bool(tag_cfg.get("allow_late_gate", False)),
                 "store_token_losses": bool(tag_cfg.get("store_token_losses", False)),
@@ -780,6 +793,34 @@ def main() -> None:
                 "gate_cache_file": (tag_cfg.get("gate_cache_file") or None),
             },
         }
+        # Every selection.tag.* key must reach the gate. This dict used to be
+        # a hand-maintained whitelist, and `prefix_tokens` was never added to
+        # it: main_7b/llama2/tag_10.yaml asked for 32, _build_gate_config read
+        # its own default of 0, and the Table 2 TAG row trained for three
+        # seeds on a gate that zeroed 49% of a CLEAN pool instead of the
+        # configured 5%. Nothing failed; the number was just wrong.
+        # `null_correction` and `target_zero_rate` were missing the same way
+        # and only looked correct because the arm happened to want the
+        # defaults — main2/tag_nonull_7b.yaml's `null_correction: false` would
+        # have been dropped in silence, running the ablation arm as the
+        # non-ablation.
+        #
+        # So: refuse to start when a key in the YAML is not forwarded, rather
+        # than let it default. Keys consumed before this point are named here
+        # because they are legitimately not gate parameters.
+        _dropped = sorted(
+            set(tag_cfg) - set(tag_ctx["params"]) - TAG_PARAMS_CONSUMED_ELSEWHERE
+        )
+        if _dropped:
+            raise ValueError(
+                f"selection.tag keys set in the config never reach the gate: "
+                f"{_dropped}. They would silently fall back to the defaults in "
+                f"tag.pipelines.selection._build_gate_config, producing a run "
+                f"whose G does not match what the config says. Forward them in "
+                f"tag/train.py's tag_ctx['params'], or add them to "
+                f"TAG_PARAMS_CONSUMED_ELSEWHERE if they are not gate parameters."
+            )
+
         logger.info(
             "TAG context ready | counterfactuals=%d | dedup_clusters=%s | "
             "W=%d tau=%.3f(%s) min_span=%d tail=%s | c_trunc=%.2f | "
