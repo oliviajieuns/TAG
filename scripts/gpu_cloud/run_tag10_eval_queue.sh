@@ -128,7 +128,8 @@ for seed, (world, batch, grad_accum) in spec.items():
     cfg = json.loads((run / "cfg.json").read_text())
     assert cfg["seed"] == seed and cfg["git_sha"] == pin
     assert cfg["launch_world_size"] == world and cfg["batch_size"] == batch
-    assert cfg["grad_accum"] == grad_accum and world * batch * grad_accum == 128\n    assert cfg.get("adamw_foreach") is False and cfg["use_8bit_optimizer"] is False
+    assert cfg["grad_accum"] == grad_accum and world * batch * grad_accum == 128
+    assert cfg.get("adamw_foreach") is False and cfg["use_8bit_optimizer"] is False
     assert cfg["method"] == "selection" and cfg["selection_ratio"] == 0.1
     assert cfg["train_epochs"] == 3 and cfg["training_mode"] == "full"
     assert cfg["model_path"] == "/group-volume/models/Llama-2-7b-hf"
