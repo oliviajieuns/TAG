@@ -926,13 +926,24 @@ def main() -> None:
                     type(e).__name__, e,
                 )
     if optimizer is None:
+        # PyTorch defaults CUDA AdamW to the foreach implementation when this
+        # argument is None.  For full-FT 7B, foreach needs an additional
+        # tensor-list roughly the size of the parameters at optimizer.step(),
+        # which can OOM an otherwise valid 80GB run.  Keep the historical
+        # default when the key is absent, but allow an explicit, cfg-recorded
+        # false value for memory-bounded runs.
+        adamw_foreach = cfg.get("adamw_foreach")
+        if adamw_foreach is not None:
+            adamw_foreach = bool(adamw_foreach)
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=lr, weight_decay=wd,
+            foreach=adamw_foreach,
         )
         if is_main_process():
             logger.info(
-                "Optimizer: torch.AdamW (fp32) | wd=%s | want_8bit=%s",
-                wd, want_8bit,
+                "Optimizer: torch.AdamW (fp32) | wd=%s | want_8bit=%s | "
+                "foreach=%s",
+                wd, want_8bit, adamw_foreach,
             )
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
