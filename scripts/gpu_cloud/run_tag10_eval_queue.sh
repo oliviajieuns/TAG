@@ -102,12 +102,16 @@ PY
 }
 
 audit_training() {
-  "$PY" - "$FRESH" "$OLD" "$PIN" <<'PY'
+  local requested=${1:-1,7,42}
+  "$PY" - "$FRESH" "$OLD" "$PIN" "$requested" <<'PY'
 import hashlib, json, math, sys
 from pathlib import Path
 
 w, old, pin = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+requested = [int(x) for x in sys.argv[4].split(",") if x]
 spec = {1: (2, 8, 8), 7: (4, 4, 8), 42: (4, 4, 8)}
+assert requested and len(requested) == len(set(requested))
+assert set(requested) <= set(spec), requested
 
 def sha(path):
     h = hashlib.sha256()
@@ -118,7 +122,8 @@ def sha(path):
 
 old_gate = sha(old / "pools/alpaca_gpt4/tag_gate_llama2-7b_prefix32.pt")
 selection_hashes = []
-for seed, (world, batch, grad_accum) in spec.items():
+for seed in requested:
+    world, batch, grad_accum = spec[seed]
     tag = f"tag10_5cef834_seed{seed}_{world}g_b{batch}_ga{grad_accum}_foreach0_ncclfix"
     run = w / f"runs/main_7b/llama2/tag_10_seed{seed}/runs/{tag}"
     ckpt = run / "epoch_last"
@@ -158,49 +163,94 @@ for seed, (world, batch, grad_accum) in spec.items():
     weights = list(ckpt.glob("*.safetensors"))
     assert weights and sum(p.stat().st_size for p in weights) > 10_000_000_000
     print("TRAIN_AUDITED", seed, ckpt)
-assert len(set(selection_hashes)) > 1, "all selections byte-identical: suspicious"
-print("ALL_3_TRAININGS_AUDITED")
+if len(selection_hashes) > 1:
+    assert len(set(selection_hashes)) > 1, "all selections byte-identical: suspicious"
+print("TRAININGS_AUDITED", ",".join(map(str, requested)))
 PY
 }
 
+all_task_rows() {
+  printf '%s\n' \
+    '001 1 humaneval' '002 7 humaneval' '003 42 humaneval' \
+    '004 1 bbh'       '005 7 bbh'       '006 42 bbh' \
+    '007 1 xquad'     '008 7 xquad'     '009 42 xquad' \
+    '010 1 mmlu'      '011 7 mmlu'      '012 42 mmlu' \
+    '013 1 gsm8k'     '014 7 gsm8k'     '015 42 gsm8k' \
+    '016 1 tydiqa'    '017 7 tydiqa'    '018 42 tydiqa' \
+    '019 1 mbpp'      '020 7 mbpp'      '021 42 mbpp' \
+    '022 1 svamp'     '023 7 svamp'     '024 42 svamp'
+}
+
+seed_requested() {
+  local requested=$1 seed=$2
+  [[ ",$requested," == *",$seed,"* ]]
+}
+
 prepare_queue() {
+  local requested=${1:-1,7,42}
   check_repo
   check_static_inputs
-  audit_training
+  audit_training "$requested"
 
   if [[ -f "$QUEUE/PREPARED" ]]; then
     local n
     n=$(find "$QUEUE/tasks" -maxdepth 1 -type f -name '*.task' | wc -l)
-    [[ "$n" -eq 24 ]] || die "existing queue has $n tasks, expected 24"
-    echo "QUEUE_ALREADY_PREPARED=$QUEUE"
+    echo "QUEUE_ALREADY_PREPARED=$QUEUE tasks=$n"
+    if [[ "$requested" == "1,7,42" && "$n" -ne 24 ]]; then
+      die "partial queue has $n tasks; after seed 42 finishes run --add-seed42"
+    fi
     return 0
   fi
-  [[ ! -e "$QUEUE" ]] || die "partial queue already exists: $QUEUE"
+  [[ ! -e "$QUEUE" ]] || die "partial queue directory exists without PREPARED: $QUEUE"
 
   local tmp="${QUEUE}.build.$(hostname -s).$$"
   mkdir -p "$tmp/tasks" "$tmp/claims" "$tmp/done" "$tmp/failed" "$tmp/nodes"
-  local rows=(
-    '001 1 humaneval' '002 7 humaneval' '003 42 humaneval'
-    '004 1 bbh'       '005 7 bbh'       '006 42 bbh'
-    '007 1 xquad'     '008 7 xquad'     '009 42 xquad'
-    '010 1 mmlu'      '011 7 mmlu'      '012 42 mmlu'
-    '013 1 gsm8k'     '014 7 gsm8k'     '015 42 gsm8k'
-    '016 1 tydiqa'    '017 7 tydiqa'    '018 42 tydiqa'
-    '019 1 mbpp'      '020 7 mbpp'      '021 42 mbpp'
-    '022 1 svamp'     '023 7 svamp'     '024 42 svamp'
-  )
-  local row priority seed bench name
-  for row in "${rows[@]}"; do
-    read -r priority seed bench <<<"$row"
+  local row priority seed bench name n=0
+  while read -r priority seed bench; do
+    seed_requested "$requested" "$seed" || continue
     name="${priority}_seed${seed}_${bench}"
     printf '%s %s\n' "$seed" "$bench" >"$tmp/tasks/$name.task"
-  done
-  printf 'pin=%s\ntasks=24\nprepared_host=%s\nprepared_utc=%s\n' \
-    "$PIN" "$(hostname -s)" "$(date -u +%FT%TZ)" >"$tmp/PREPARED"
+    n=$((n + 1))
+  done < <(all_task_rows)
+  [[ "$n" -gt 0 ]] || die "no tasks selected for seeds=$requested"
+  printf 'pin=%s\ntasks=%s\nseeds=%s\nprepared_host=%s\nprepared_utc=%s\n' \
+    "$PIN" "$n" "$requested" "$(hostname -s)" "$(date -u +%FT%TZ)" >"$tmp/PREPARED"
   mkdir -p "$(dirname "$QUEUE")"
   mv "$tmp" "$QUEUE"
-  echo "QUEUE_PREPARED=$QUEUE"
-  echo "NEXT: run this script once on each of the 2+4+4 GPU nodes."
+  echo "QUEUE_PREPARED=$QUEUE tasks=$n seeds=$requested"
+  echo "NEXT: launch this script on the currently free evaluation nodes."
+}
+
+add_seed42() {
+  check_repo
+  check_static_inputs
+  audit_training "42"
+  [[ -f "$QUEUE/PREPARED" ]] || die "queue not prepared; run --prepare-completed first"
+
+  local row priority seed bench name task tmp n
+  while read -r priority seed bench; do
+    [[ "$seed" == 42 ]] || continue
+    name="${priority}_seed${seed}_${bench}"
+    task="$QUEUE/tasks/$name.task"
+    if [[ -f "$task" ]]; then
+      read -r existing_seed existing_bench <"$task"
+      [[ "$existing_seed" == 42 && "$existing_bench" == "$bench" ]] ||
+        die "existing task has unexpected content: $task"
+      continue
+    fi
+    tmp="$QUEUE/tasks/.$name.task.$$.tmp"
+    printf '%s %s\n' "$seed" "$bench" >"$tmp"
+    mv "$tmp" "$task"
+  done < <(all_task_rows)
+
+  n=$(find "$QUEUE/tasks" -maxdepth 1 -type f -name '*.task' | wc -l)
+  [[ "$n" -eq 24 ]] || die "after adding seed 42 queue has $n tasks, expected 24"
+  tmp="$QUEUE/.PREPARED.add42.$$"
+  printf 'pin=%s\ntasks=24\nseeds=1,7,42\nupdated_host=%s\nupdated_utc=%s\n' \
+    "$PIN" "$(hostname -s)" "$(date -u +%FT%TZ)" >"$tmp"
+  mv "$tmp" "$QUEUE/PREPARED"
+  echo "SEED42_TASKS_ADDED=$QUEUE total=24"
+  echo "NEXT: relaunch this script on available evaluation nodes."
 }
 
 validate_task() {
@@ -619,9 +669,11 @@ show_status() {
 }
 
 case "${1:-}" in
-  --prepare) prepare_queue ;;
+  --prepare) prepare_queue "1,7,42" ;;
+  --prepare-completed) prepare_queue "1,7" ;;
+  --add-seed42) add_seed42 ;;
   --node-worker) node_worker ;;
   --status) show_status ;;
   "") launch_node ;;
-  *) die "usage: bash $0 [--prepare|--status]" ;;
+  *) die "usage: bash $0 [--prepare|--prepare-completed|--add-seed42|--status]" ;;
 esac
