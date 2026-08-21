@@ -30,11 +30,17 @@ die() {
 
 resolve_node() {
   HOST=$(hostname -s)
-  case "$HOST" in
-    run269897*) SEED=1;  NPROC=2; BATCH=8; GPUS=0,1 ;;
-    run270622*) SEED=7;  NPROC=4; BATCH=4; GPUS=0,1,2,3 ;;
-    run270630*) SEED=42; NPROC=4; BATCH=4; GPUS=0,1,2,3 ;;
-    *) die "unexpected node: $HOST" ;;
+  case "${TAG10_SEED:-}" in
+    1)  SEED=1;  NPROC=2; BATCH=8; GPUS=0,1 ;;
+    7)  SEED=7;  NPROC=4; BATCH=4; GPUS=0,1,2,3 ;;
+    42) SEED=42; NPROC=4; BATCH=4; GPUS=0,1,2,3 ;;
+    "") case "$HOST" in
+          run269897*) SEED=1;  NPROC=2; BATCH=8; GPUS=0,1 ;;
+          run270622*) SEED=7;  NPROC=4; BATCH=4; GPUS=0,1,2,3 ;;
+          run270630*) SEED=42; NPROC=4; BATCH=4; GPUS=0,1,2,3 ;;
+          *) die "unknown node $HOST: prefix the command with TAG10_SEED=1, 7, or 42" ;;
+        esac ;;
+    *) die "invalid TAG10_SEED=${TAG10_SEED}; expected 1, 7, or 42" ;;
   esac
   CELL="main_7b/llama2/tag_10_seed${SEED}"
   RUN_TAG="tag10_${SHORT_PIN}_seed${SEED}_${NPROC}g_b${BATCH}_ga8_foreach0_ncclfix"
@@ -204,7 +210,7 @@ status() {
 
 launch() {
   preflight
-  nohup bash "$0" --worker >"$LOG" 2>&1 </dev/null &
+  nohup env TAG10_SEED="$SEED" bash "$0" --worker >"$LOG" 2>&1 </dev/null &
   local pid=$!
   printf '%s\n' "$pid" >"$LOG.pid"
   sleep 5
@@ -223,5 +229,5 @@ case "${1:-}" in
   --worker) worker ;;
   --status) status ;;
   "") launch ;;
-  *) die "usage: bash $0 [--status]" ;;
+  *) die "usage: TAG10_SEED=1|7|42 bash $0 [--status]" ;;
 esac
