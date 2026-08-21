@@ -37,6 +37,24 @@ def _collate(batch):
     }
 
 
+def _accumulation_window_size(step: int, n_batches: int, grad_accum: int) -> int:
+    """Number of micro-batches contributing to ``step``'s update window.
+
+    Full windows use ``grad_accum``.  The final partial window uses only its
+    actual number of batches, so its losses must be divided by that smaller
+    value.  Dividing every loss by ``grad_accum`` underweights the last update
+    (5/8 for the current Table-2 run; 1/4 in the proposed bs64 run).
+    """
+    if grad_accum <= 0:
+        raise ValueError(f"grad_accum must be > 0, got {grad_accum}")
+    if n_batches <= 0:
+        raise ValueError(f"n_batches must be > 0, got {n_batches}")
+    if step < 0 or step >= n_batches:
+        raise ValueError(f"step must be in [0, {n_batches}), got {step}")
+    window_start = (step // grad_accum) * grad_accum
+    return min(grad_accum, n_batches - window_start)
+
+
 def make_dataloader(
     dataset,
     batch_size: int,
@@ -173,14 +191,16 @@ def sft_one_epoch(
     n_boundaries_seen = 0
 
     for step, batch in enumerate(loader):
+        accum_denom = _accumulation_window_size(step, n_batches, grad_accum)
         is_boundary = ((step + 1) % grad_accum == 0) or ((step + 1) == n_batches)
         verbose_step = step < _ALWAYS_LOG_FIRST
 
         if verbose_step:
             logger.info(
                 "SFT step entry | rank=%d | epoch=%d | step=%d/%d | "
-                "is_boundary=%s | %s",
-                r, epoch, step, n_batches, is_boundary, cuda_mem_str(),
+                "is_boundary=%s | accum_denom=%d | %s",
+                r, epoch, step, n_batches, is_boundary, accum_denom,
+                cuda_mem_str(),
             )
 
         def _forward_backward():
@@ -193,7 +213,11 @@ def sft_one_epoch(
                 attention_mask=batch["attention_mask"].to(device, non_blocking=True),
                 labels=batch["labels"].to(device, non_blocking=True),
             )
-            (o.loss / grad_accum).backward()
+            # Mean the gradients over the ACTUAL accumulation window.  The
+            # final window is often partial because len(loader) need not be a
+            # multiple of grad_accum; treating it as full silently shrinks
+            # that update.
+            (o.loss / accum_denom).backward()
             return o
 
         if (not is_boundary) and no_sync_cm is not None:

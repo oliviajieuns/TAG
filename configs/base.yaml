@@ -40,6 +40,10 @@ batch_size: 2
 grad_accum: 4
 learning_rate: 2.0e-5
 warmup_ratio: 0.03
+# Final/base LR ratio for the global cosine schedule. 0.0 preserves the
+# historical decay-to-zero behaviour; dynamic-selection pilots can keep late
+# refreshes trainable with (for example) 0.1.
+min_lr_ratio: 0.0
 weight_decay: 0.1
 gradient_clip: 1.0
 gradient_checkpointing: true

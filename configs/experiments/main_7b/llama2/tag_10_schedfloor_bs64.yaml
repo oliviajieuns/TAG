@@ -1,0 +1,23 @@
+# TAG 10% tuning pilot: exact optimiser-step planning, cosine LR floor, and
+# effective global batch 64.  This is deliberately a NEW arm so the sealed
+# Table-2 runs under tag_10.yaml remain immutable and directly auditable.
+#
+# Default launch layout is 4 GPUs:
+#   per-GPU batch 4 x grad_accum 4 x world 4 = effective batch 64.
+# scripts/gpu_cloud/run_tag10_schedfloor_bs64.sh overrides per-GPU batch to 8
+# on a 2-GPU node, preserving the same effective batch and update count.
+defaults:
+  - configs/experiments/main_7b/llama2/tag_10.yaml
+
+output_subdir: main_7b/llama2/tag_10_schedfloor_bs64
+
+batch_size: 4
+grad_accum: 4
+
+# Keep epoch-3's newly selected subset trainable.  Historical tag_10 decays
+# all the way to zero; this pilot ends at 10% of the base 2e-5 LR.
+min_lr_ratio: 0.10
+
+# Required for fp32 full FT on H100 80GB: CUDA AdamW foreach materialises an
+# additional parameter-sized tensor list at optimizer.step and OOMs.
+adamw_foreach: false

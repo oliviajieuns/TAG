@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 import os
 import time
 import traceback
@@ -96,7 +97,10 @@ except Exception:
 import torch
 import torch.distributed as dist
 from torch.utils.data import Subset
-from tag.core.schedulers import get_cosine_schedule_with_warmup
+from tag.core.schedulers import (
+    get_cosine_schedule_with_warmup,
+    optimizer_steps_per_epoch,
+)
 from tag.core.timing import PhaseTimer
 
 from tag.core.run_layout import (
@@ -835,10 +839,25 @@ def main() -> None:
         )
 
     # ---------- optimizer / scheduler ----------
-    approx_steps_per_epoch = max(
-        1, int(n_total * selection_ratio / batch_size / grad_accum / max(1, world_size())),
+    # Plan the schedule from the data layout the trainer ACTUALLY executes.
+    # DistributedSampler pads each rank to ceil(K / world_size), DataLoader
+    # keeps its final partial batch, and the SFT loop keeps its final partial
+    # accumulation window.  The historical one-line int(...) floored all
+    # three divisions at once: Table-2 TAG planned 40 steps/epoch while it
+    # executes 41, so the last three updates ran after cosine reached zero.
+    planned_selected = (
+        n_total if method == "full"
+        else max(1, int(n_total * selection_ratio))
     )
-    total_steps = approx_steps_per_epoch * train_epochs
+    planned_steps_per_epoch = optimizer_steps_per_epoch(
+        planned_selected,
+        batch_size=batch_size,
+        grad_accum=grad_accum,
+        world_size=max(1, world_size()),
+    )
+    total_steps = planned_steps_per_epoch * train_epochs
+    warmup_steps = max(1, math.ceil(total_steps * warmup_ratio))
+    min_lr_ratio = float(cfg.get("min_lr_ratio", 0.0))
     # 8-bit AdamW cuts optimizer state from ~56GB to ~14GB per GPU on 7B
     # full fine-tuning. Matches the NAIT paper's recipe (bnb.optim.AdamW8bit).
     #
@@ -947,9 +966,19 @@ def main() -> None:
             )
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
-        num_warmup_steps=max(1, int(total_steps * warmup_ratio)),
+        num_warmup_steps=warmup_steps,
         num_training_steps=total_steps,
+        min_lr_ratio=min_lr_ratio,
     )
+    if is_main_process():
+        logger.info(
+            "LR schedule: cosine | selected=%d | steps/epoch=%d | epochs=%d "
+            "| total_steps=%d | warmup_steps=%d | min_lr_ratio=%.3f "
+            "| effective_batch=%d",
+            planned_selected, planned_steps_per_epoch, train_epochs,
+            total_steps, warmup_steps, min_lr_ratio,
+            batch_size * grad_accum * max(1, world_size()),
+        )
 
     # ---------- resume: restore optimizer/scheduler/anchor/metrics ----------
     metrics_log = []
