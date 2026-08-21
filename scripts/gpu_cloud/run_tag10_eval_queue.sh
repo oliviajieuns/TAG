@@ -16,15 +16,15 @@ REPO=/group-volume/jieuns.shin/tag2
 FRESH="$REPO/workspace"
 OLD=/group-volume/jieuns.shin/tads/tests/tag/workspace
 PY=/group-volume/jieuns.shin/venvs/exp/bin/python
-PIN=ecde57be15c977be640f4e1ed9857a60a9860c12
+PIN=5cef83473550f6a20fb349f088c0444d2da7abaf
 CFG="$REPO/configs/experiments/main_7b/llama2/tag_10.yaml"
 WRAPPER="$FRESH/tools/tag_eval_he_spawn_serial.py"
 WRAPPER_SHA=0ace9b83c9179f0ff8f07f79576586c1f383ee058a8cd42d4f0cc383b2b8bc4a
-QUEUE="$FRESH/eval-queue/tag10_ecde57b_eval8_v1"
+QUEUE="$FRESH/eval-queue/tag10_5cef834_eval8_v1"
 SHARDS="$FRESH/eval-shards/main_7b/llama2/tag_10"
 LOG_ROOT="$FRESH/logs/table2_tag_eval"
 FINAL_ROOT="$FRESH/eval-results"
-EVAL_TAG_PREFIX=tag10_ecde57b
+EVAL_TAG_PREFIX=tag10_5cef834
 BENCHES=(mmlu bbh svamp gsm8k mbpp humaneval tydiqa xquad)
 
 die() {
@@ -45,9 +45,9 @@ check_repo() {
 
 checkpoint_for_seed() {
   case "$1" in
-    1)  printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed1/runs/tag10_ecde57b_seed1_2g_b8_ga8_ncclfix/epoch_last" ;;
-    7)  printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed7/runs/tag10_ecde57b_seed7_4g_b2_ga16_ncclfix/epoch_last" ;;
-    42) printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed42/runs/tag10_ecde57b_seed42_4g_b2_ga16_ncclfix/epoch_last" ;;
+    1)  printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed1/runs/tag10_5cef834_seed1_2g_b8_ga8_foreach0_ncclfix/epoch_last" ;;
+    7)  printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed7/runs/tag10_5cef834_seed7_4g_b4_ga8_foreach0_ncclfix/epoch_last" ;;
+    42) printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed42/runs/tag10_5cef834_seed42_4g_b4_ga8_foreach0_ncclfix/epoch_last" ;;
     *) return 2 ;;
   esac
 }
@@ -107,7 +107,7 @@ import hashlib, json, math, sys
 from pathlib import Path
 
 w, old, pin = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-spec = {1: (2, 8, 8), 7: (4, 2, 16), 42: (4, 2, 16)}
+spec = {1: (2, 8, 8), 7: (4, 4, 8), 42: (4, 4, 8)}
 
 def sha(path):
     h = hashlib.sha256()
@@ -119,7 +119,7 @@ def sha(path):
 old_gate = sha(old / "pools/alpaca_gpt4/tag_gate_llama2-7b_prefix32.pt")
 selection_hashes = []
 for seed, (world, batch, grad_accum) in spec.items():
-    tag = f"tag10_ecde57b_seed{seed}_{world}g_b{batch}_ga{grad_accum}_ncclfix"
+    tag = f"tag10_5cef834_seed{seed}_{world}g_b{batch}_ga{grad_accum}_foreach0_ncclfix"
     run = w / f"runs/main_7b/llama2/tag_10_seed{seed}/runs/{tag}"
     ckpt = run / "epoch_last"
     assert (run / "TRAIN_VALIDATED").is_file(), run
@@ -128,7 +128,7 @@ for seed, (world, batch, grad_accum) in spec.items():
     cfg = json.loads((run / "cfg.json").read_text())
     assert cfg["seed"] == seed and cfg["git_sha"] == pin
     assert cfg["launch_world_size"] == world and cfg["batch_size"] == batch
-    assert cfg["grad_accum"] == grad_accum and world * batch * grad_accum == 128
+    assert cfg["grad_accum"] == grad_accum and world * batch * grad_accum == 128\n    assert cfg.get("adamw_foreach") is False and cfg["use_8bit_optimizer"] is False
     assert cfg["method"] == "selection" and cfg["selection_ratio"] == 0.1
     assert cfg["train_epochs"] == 3 and cfg["training_mode"] == "full"
     assert cfg["model_path"] == "/group-volume/models/Llama-2-7b-hf"
@@ -417,14 +417,14 @@ from pathlib import Path
 fresh, pin, cfg = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 benches = ["mmlu", "bbh", "svamp", "gsm8k", "mbpp", "humaneval", "tydiqa", "xquad"]
 spec = {
-    1: "tag10_ecde57b_seed1_2g_b8_ga8_ncclfix",
-    7: "tag10_ecde57b_seed7_4g_b2_ga16_ncclfix",
-    42: "tag10_ecde57b_seed42_4g_b2_ga16_ncclfix",
+    1: "tag10_5cef834_seed1_2g_b8_ga8_foreach0_ncclfix",
+    7: "tag10_5cef834_seed7_4g_b4_ga8_foreach0_ncclfix",
+    42: "tag10_5cef834_seed42_4g_b4_ga8_foreach0_ncclfix",
 }
 manifest = []
 for seed, train_tag in spec.items():
     ckpt = fresh / f"runs/main_7b/llama2/tag_10_seed{seed}/runs/{train_tag}/epoch_last"
-    final_tag = f"tag10_ecde57b_seed{seed}_8task"
+    final_tag = f"tag10_5cef834_seed{seed}_8task"
     parent = fresh / f"eval-results/main_7b/llama2/tag_10_seed{seed}/runs"
     final = parent / final_tag
     parent.mkdir(parents=True, exist_ok=True)
@@ -454,7 +454,7 @@ for seed, train_tag in spec.items():
     summaries = []
     source_shards = {}
     for bench in benches:
-        shard_tag = f"tag10_ecde57b_seed{seed}_{bench}_full"
+        shard_tag = f"tag10_5cef834_seed{seed}_{bench}_full"
         shard = fresh / f"eval-shards/main_7b/llama2/tag_10/seed{seed}/{bench}/runs/{shard_tag}"
         assert (shard / "_complete").read_text().strip() == shard_tag
         sp = shard / "llama2_tag_10-eval_summary.json"
@@ -495,15 +495,15 @@ for seed, train_tag in spec.items():
     manifest.append({"set": "main_7b", "model": "llama2", "method": "tag_10", "seed": seed, "run_dir": str(final)})
     print("MERGED_SEED", seed, final)
 
-manifest_path = fresh / "eval-results/tag10_3seed_8task_manifest.json"
+manifest_path = fresh / "eval-results/tag10_5cef834_3seed_8task_manifest.json"
 tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
 tmp.write_text(json.dumps(manifest, indent=2) + "\n")
 os.replace(tmp, manifest_path)
 print("MANIFEST", manifest_path)
 PY
 
-  local manifest="$FINAL_ROOT/tag10_3seed_8task_manifest.json"
-  local out="$FINAL_ROOT/tag10_3seed_8task"
+  local manifest="$FINAL_ROOT/tag10_5cef834_3seed_8task_manifest.json"
+  local out="$FINAL_ROOT/tag10_5cef834_3seed_8task"
   cd "$REPO"
   "$PY" scripts/make_table_v2.py \
     --manifest "$manifest" \
@@ -604,7 +604,7 @@ show_status() {
   if [[ -f "$QUEUE/FINALIZED" ]]; then
     echo "FINALIZED"
     cat "$QUEUE/FINALIZED"
-    cat "$FINAL_ROOT/tag10_3seed_8task.final_row.txt"
+    cat "$FINAL_ROOT/tag10_5cef834_3seed_8task.final_row.txt"
   fi
   if [[ "$failed_n" -gt 0 ]]; then
     echo "FAILED_TASKS"
