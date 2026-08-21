@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarise completed strong/weak/soft/control Table-2 gate runs.
+"""Summarise completed TAG, historical R x A, and gate-sweep Table-2 runs.
 
 Reads only validated all-eight-task evaluation directories.  Partial tasks are
 reported as missing rather than silently entering a macro average.
@@ -17,6 +17,10 @@ BENCHES = ("mmlu", "bbh", "svamp", "gsm8k", "mbpp", "humaneval", "tydiqa", "xqua
 SEEDS = (1, 7, 42)
 ARMS = {
     "strong": "tag_10_schedfloor_bs64_seed{seed}",
+    # Historical Table-2 R x A rerun: effective batch 128 and a zero LR
+    # floor.  Keep it separate from the matched batch-64 control below so a
+    # schedule difference is never mistaken for a gate-only comparison.
+    "ra_repeat": "legacy_10_repeat_seed{seed}",
     "weak": "tag_10_weakpower50_bs64_seed{seed}",
     "soft": "tag_10_softmix50_bs64_seed{seed}",
     "control": "legacy_10_schedfloor_bs64_seed{seed}",
@@ -102,6 +106,20 @@ def main() -> int:
                     statistics.fmean(data[arm][s].values()) for s in SEEDS
                 )
                 print(f"{arm:8s} {avg-ctl:+.2f} points")
+
+    if len(data["strong"]) == 3 and len(data["ra_repeat"]) == 3:
+        strong = statistics.fmean(
+            statistics.fmean(data["strong"][s].values()) for s in SEEDS
+        )
+        ra_repeat = statistics.fmean(
+            statistics.fmean(data["ra_repeat"][s].values()) for s in SEEDS
+        )
+        print("\n===== STRONG TAG VS HISTORICAL R x A REPEAT =====")
+        print(f"strong - ra_repeat = {strong-ra_repeat:+.2f} points")
+        print(
+            "NOTE: this contrast is schedule-confounded "
+            "(batch 64/floor .10 vs batch 128/floor 0)."
+        )
     print("\nOnly _complete all8 directories are included; partial evals never enter these means.")
     return 0
 
