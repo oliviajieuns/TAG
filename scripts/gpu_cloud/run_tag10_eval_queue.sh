@@ -540,17 +540,14 @@ node_worker() {
   [[ -f "$QUEUE/PREPARED" ]] || die "queue not prepared; run --prepare first"
   check_repo
   check_static_inputs
-  local host expected gpu_count
+  local host gpu_count
   host=$(hostname -s)
-  case "$host" in
-    run269897*) expected=2 ;;
-    run270622*) expected=4 ;;
-    run270630*) expected=4 ;;
-    *) die "unexpected node: $host" ;;
-  esac
   mapfile -t gpus < <(nvidia-smi --query-gpu=index --format=csv,noheader | tr -d ' ')
   gpu_count=${#gpus[@]}
-  [[ "$gpu_count" -eq "$expected" ]] || die "$host sees $gpu_count GPU(s), expected $expected"
+  case "$gpu_count" in
+    2|4) ;;
+    *) die "$host sees $gpu_count GPU(s); this 2+4+4 queue accepts only 2 or 4" ;;
+  esac
 
   mkdir -p "$QUEUE/nodes" "$LOG_ROOT/nodes" "$LOG_ROOT/lanes"
   exec 9>"$QUEUE/nodes/$host.lock"
