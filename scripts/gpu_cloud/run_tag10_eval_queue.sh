@@ -46,8 +46,8 @@ check_repo() {
 checkpoint_for_seed() {
   case "$1" in
     1)  printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed1/runs/tag10_ecde57b_seed1_2g_b8_ga8_ncclfix/epoch_last" ;;
-    7)  printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed7/runs/tag10_ecde57b_seed7_4g_b4_ga8_ncclfix/epoch_last" ;;
-    42) printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed42/runs/tag10_ecde57b_seed42_4g_b4_ga8_ncclfix/epoch_last" ;;
+    7)  printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed7/runs/tag10_ecde57b_seed7_4g_b2_ga16_ncclfix/epoch_last" ;;
+    42) printf '%s\n' "$FRESH/runs/main_7b/llama2/tag_10_seed42/runs/tag10_ecde57b_seed42_4g_b2_ga16_ncclfix/epoch_last" ;;
     *) return 2 ;;
   esac
 }
@@ -107,7 +107,7 @@ import hashlib, json, math, sys
 from pathlib import Path
 
 w, old, pin = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-spec = {1: (2, 8), 7: (4, 4), 42: (4, 4)}
+spec = {1: (2, 8, 8), 7: (4, 2, 16), 42: (4, 2, 16)}
 
 def sha(path):
     h = hashlib.sha256()
@@ -118,8 +118,8 @@ def sha(path):
 
 old_gate = sha(old / "pools/alpaca_gpt4/tag_gate_llama2-7b_prefix32.pt")
 selection_hashes = []
-for seed, (world, batch) in spec.items():
-    tag = f"tag10_ecde57b_seed{seed}_{world}g_b{batch}_ga8_ncclfix"
+for seed, (world, batch, grad_accum) in spec.items():
+    tag = f"tag10_ecde57b_seed{seed}_{world}g_b{batch}_ga{grad_accum}_ncclfix"
     run = w / f"runs/main_7b/llama2/tag_10_seed{seed}/runs/{tag}"
     ckpt = run / "epoch_last"
     assert (run / "TRAIN_VALIDATED").is_file(), run
@@ -128,7 +128,7 @@ for seed, (world, batch) in spec.items():
     cfg = json.loads((run / "cfg.json").read_text())
     assert cfg["seed"] == seed and cfg["git_sha"] == pin
     assert cfg["launch_world_size"] == world and cfg["batch_size"] == batch
-    assert cfg["grad_accum"] == 8 and world * batch * 8 == 128
+    assert cfg["grad_accum"] == grad_accum and world * batch * grad_accum == 128
     assert cfg["method"] == "selection" and cfg["selection_ratio"] == 0.1
     assert cfg["train_epochs"] == 3 and cfg["training_mode"] == "full"
     assert cfg["model_path"] == "/group-volume/models/Llama-2-7b-hf"
@@ -418,8 +418,8 @@ fresh, pin, cfg = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 benches = ["mmlu", "bbh", "svamp", "gsm8k", "mbpp", "humaneval", "tydiqa", "xquad"]
 spec = {
     1: "tag10_ecde57b_seed1_2g_b8_ga8_ncclfix",
-    7: "tag10_ecde57b_seed7_4g_b4_ga8_ncclfix",
-    42: "tag10_ecde57b_seed42_4g_b4_ga8_ncclfix",
+    7: "tag10_ecde57b_seed7_4g_b2_ga16_ncclfix",
+    42: "tag10_ecde57b_seed42_4g_b2_ga16_ncclfix",
 }
 manifest = []
 for seed, train_tag in spec.items():
