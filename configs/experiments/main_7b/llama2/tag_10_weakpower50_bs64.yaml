@@ -1,0 +1,19 @@
+# Table-2 clean-pool gate-strength ablation (zero-preserving).
+#
+# This arm changes exactly one scoring knob from the tuned strong TAG arm:
+#
+#     G_eff = sqrt(G)
+#     s_i   = G_eff * R_i * (1 + lambda * a_i)
+#
+# Positive weights move toward 1, so the gate reorders the clean pool less.
+# Exact zeros stay exact zeros, preserving TAG's non-compensation property.
+# The raw calibrated G, clean reference, and shared cache are unchanged.
+defaults:
+  - configs/experiments/main_7b/llama2/tag_10_schedfloor_bs64.yaml
+
+output_subdir: main_7b/llama2/tag_10_weakpower50_bs64
+
+selection:
+  tag:
+    gate_power: 0.5
+    gate_strength: 1.0

@@ -563,6 +563,41 @@ def _prepare_tag(
         tag["n_true"] = n_true
         tag["token_cf"] = token_cf
         tag["n_cf"] = n_cf
+
+    # Controlled clean-pool ablations are SCORE-TIME transforms of the raw,
+    # calibrated paper gate.  Never write the transformed tensor back to the
+    # shared cache: all arms must consume the same evidence artifact and a
+    # weak arm must not poison a later canonical run's cache hit.
+    from ..core.scorer import transform_gate
+
+    raw_gate = tag["gate"].view(-1).float()
+    gate_power = float(params.get("gate_power", 1.0))
+    gate_strength = float(params.get("gate_strength", 1.0))
+    tag["raw_gate"] = raw_gate
+    tag["gate_power"] = gate_power
+    tag["gate_strength"] = gate_strength
+    tag["gate"] = transform_gate(
+        raw_gate,
+        power=gate_power,
+        strength=gate_strength,
+    )
+    if gate_power != 1.0 or gate_strength != 1.0:
+        logger.warning(
+            "TAG gate weakening ABLATION | power=%.4f strength=%.4f | "
+            "raw_mean=%.4f raw_zero=%.1f%% -> effective_mean=%.4f "
+            "effective_zero=%.1f%%. %s",
+            gate_power, gate_strength,
+            float(raw_gate.mean().item()),
+            100.0 * float((raw_gate == 0).float().mean().item()),
+            float(tag["gate"].mean().item()),
+            100.0 * float((tag["gate"] == 0).float().mean().item()),
+            (
+                "Exact-zero/non-compensation is preserved."
+                if gate_strength == 1.0
+                else "Soft interpolation removes the exact-zero veto; report "
+                     "this arm as non-canonical."
+            ),
+        )
     return tag
 
 
@@ -595,6 +630,8 @@ def _finalize_tag(tag, episode, *, cfg, epoch: int) -> Dict[str, Any]:
     extras: Dict[str, Any] = {
         "score_mode": "tag",
         "gate_scale": tag.get("scale_used"),
+        "gate_power": float(tag.get("gate_power", 1.0)),
+        "gate_strength": float(tag.get("gate_strength", 1.0)),
         # The realised zero-weight accounting — the only evidence in the run
         # artifacts that the non-compensation claim held for THIS run.
         "n_admissible": episode.get("n_admissible"),
@@ -605,6 +642,14 @@ def _finalize_tag(tag, episode, *, cfg, epoch: int) -> Dict[str, Any]:
         extras.update({
             "gate_mean": float(gate_t.float().mean().item()),
             "gate_zero_frac": float((gate_t == 0).float().mean().item()),
+        })
+    raw_gate_t = tag.get("raw_gate")
+    if raw_gate_t is not None:
+        raw_gate_t = raw_gate_t.float()
+        extras.update({
+            "gate_raw_mean": float(raw_gate_t.mean().item()),
+            "gate_raw_zero_frac": float((raw_gate_t == 0).float().mean().item()),
+            "n_raw_admissible": int((raw_gate_t > 0).sum().item()),
         })
     if comp is not None:
         extras.update({

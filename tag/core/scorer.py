@@ -25,6 +25,7 @@ the main path in ``selector.collect_episode`` passes raw R directly to
 from __future__ import annotations
 
 import logging
+import math
 from typing import Optional, Tuple
 
 import torch
@@ -469,6 +470,70 @@ def tag_score(
         raise ValueError(f"tag_score: lam must be >= 0, got {lam}")
     base = R if alignment_norm is None else legacy_score(R, alignment_norm, lam)
     return gate.float() * base
+
+
+def transform_gate(
+    gate: torch.Tensor,
+    *,
+    power: float = 1.0,
+    strength: float = 1.0,
+) -> torch.Tensor:
+    """Return the score-time gate used by a controlled weakening ablation.
+
+    The cached gate remains the paper gate :math:`G`.  This pure transform is
+    applied only when composing the selection score::
+
+        G_power = G ** power
+        G_eff   = 1 - strength * (1 - G_power)
+
+    ``power=1, strength=1`` is the canonical TAG gate and is returned
+    unchanged.  ``power < 1`` lifts positive weights while preserving the
+    attainable zero (the recommended zero-preserving weak-gate arm).
+    ``strength < 1`` interpolates toward the unit gate; at ``strength=0`` it
+    reproduces the legacy R x A ranking.  That interpolation deliberately
+    removes the hard veto and must be reported as a soft-gate ablation, not as
+    canonical TAG.
+
+    This does *not* belong in :class:`tag.core.gate.GateConfig`: neither knob
+    changes the evidence statistic, calibration, or cache identity.  Keeping
+    it score-time-only lets every arm reuse the exact same raw gate artifact.
+    """
+    try:
+        power = float(power)
+        strength = float(strength)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"transform_gate: power and strength must be numeric; got "
+            f"power={power!r}, strength={strength!r}",
+        ) from exc
+    if not math.isfinite(power) or power <= 0.0:
+        raise ValueError(
+            f"transform_gate: power must be finite and > 0, got {power}",
+        )
+    if not math.isfinite(strength) or not 0.0 <= strength <= 1.0:
+        raise ValueError(
+            f"transform_gate: strength must be finite and in [0,1], got "
+            f"{strength}",
+        )
+
+    raw = gate.float()
+    if bool(torch.isnan(raw).any()) or bool(torch.isinf(raw).any()):
+        raise ValueError("transform_gate: gate must be finite")
+    if bool((raw < 0).any()) or bool((raw > 1).any()):
+        raise ValueError("transform_gate: gate must lie in [0,1]")
+
+    # Preserve the shipped path bit-for-bit.  Apart from making the default a
+    # true no-op, this lets completed canonical runs remain directly
+    # comparable to runs made after the ablation support landed.
+    if power == 1.0 and strength == 1.0:
+        return raw
+
+    powered = raw if power == 1.0 else raw.pow(power)
+    if strength == 1.0:
+        return powered
+    if strength == 0.0:
+        return torch.ones_like(powered)
+    return torch.lerp(torch.ones_like(powered), powered, strength)
 
 
 def gated_selection_key(

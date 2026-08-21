@@ -618,10 +618,18 @@ def main() -> None:
                 tok_true, n_true, tok_cf, n_cf_list, completeness, cfg=gcfg,
             )
         tag_components["scale_used"] = gcfg.scale
-        g_i = tag_components["gate"]
+        from tag.core.scorer import transform_gate
+
+        g_raw = tag_components["gate"].view(-1).float()
+        g_i = transform_gate(
+            g_raw,
+            power=float(gcfg_params.get("gate_power", 1.0)),
+            strength=float(gcfg_params.get("gate_strength", 1.0)),
+        )
         signals["delta_bar"] = tag_components["delta_bar"]
         signals["delta_min"] = tag_components["delta_min"]
         signals["delta_hat"] = tag_components["delta_hat"]
+        signals["G_raw"] = g_raw
         signals["G"] = g_i
         # The RAW product, for reference...
         signals["tag_score_raw"] = g_i * legacy

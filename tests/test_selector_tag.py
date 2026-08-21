@@ -13,7 +13,12 @@ import pytest
 import torch
 import transformers
 
-from tag.core.scorer import gated_selection_key, legacy_score, tag_score
+from tag.core.scorer import (
+    gated_selection_key,
+    legacy_score,
+    tag_score,
+    transform_gate,
+)
 from tag.core.selector import collect_episode
 
 
@@ -235,6 +240,46 @@ def test_tag_score_without_anchor_is_gate_times_reward():
     R = torch.tensor([1.0, 2.0])
     g = torch.tensor([0.5, 1.0])
     assert torch.allclose(tag_score(g, R, None, 1.0), g * R)
+
+
+def test_zero_preserving_weak_gate_lifts_only_positive_weights():
+    raw = torch.tensor([0.0, 0.04, 0.25, 0.81, 1.0])
+    weak = transform_gate(raw, power=0.5)
+    assert torch.allclose(weak, raw.sqrt())
+    assert weak[0].item() == 0.0 and weak[-1].item() == 1.0
+    assert torch.all(weak[1:-1] > raw[1:-1])
+    assert torch.equal(torch.argsort(weak), torch.argsort(raw))
+
+
+def test_soft_gate_strength_endpoints_and_legacy_equivalence(tiny_model):
+    raw = torch.tensor([0.0, 0.2, 0.7, 1.0])
+    assert torch.equal(transform_gate(raw, strength=1.0), raw)
+    assert torch.equal(transform_gate(raw, strength=0.0), torch.ones_like(raw))
+    assert torch.allclose(
+        transform_gate(raw, strength=0.5),
+        0.5 + 0.5 * raw,
+    )
+
+    ds = _TinyDataset()
+    legacy = _run(tiny_model, ds)
+    unit = transform_gate(torch.rand(len(ds)), strength=0.0)
+    soft_off = _run(tiny_model, ds, tag={"gate": unit})
+    assert torch.equal(soft_off["score"], legacy["score"])
+    assert soft_off["selected_indices"] == legacy["selected_indices"]
+
+
+@pytest.mark.parametrize(
+    "kwargs,match",
+    [
+        ({"power": 0.0}, "power"),
+        ({"power": float("nan")}, "power"),
+        ({"strength": -0.1}, "strength"),
+        ({"strength": 1.1}, "strength"),
+    ],
+)
+def test_gate_transform_rejects_invalid_knobs(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        transform_gate(torch.tensor([0.0, 1.0]), **kwargs)
 
 
 # ---------------------------------------------------------------------------

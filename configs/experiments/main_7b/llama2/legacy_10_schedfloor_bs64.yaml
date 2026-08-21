@@ -1,0 +1,16 @@
+# Matched R x A control for the clean-pool gate-strength sweep.
+#
+# The historical legacy_10 repeat uses effective batch 128 and a zero LR
+# endpoint.  Comparing that run directly with the tuned TAG arms would mix
+# gate effects with optimisation effects.  This control uses the exact same
+# batch 64, 10% cosine floor, and memory-safe AdamW settings as strong/weak/
+# soft TAG; only the gate method differs.
+defaults:
+  - configs/experiments/main_7b/llama2/legacy_10.yaml
+
+output_subdir: main_7b/llama2/legacy_10_schedfloor_bs64
+
+batch_size: 4
+grad_accum: 4
+min_lr_ratio: 0.10
+adamw_foreach: false

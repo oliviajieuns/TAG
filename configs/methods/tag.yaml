@@ -132,6 +132,14 @@ selection:
     # cross-counterfactual evidence is trusted less.
     dispersion_discount: true
 
+    # ---- score-time gate weakening (controlled ablations only) ----
+    # Cached G and its calibration stay unchanged. power<1 lifts every
+    # positive G while preserving exact zeros; strength<1 interpolates toward
+    # the unit gate and therefore removes the hard veto.  The shipped TAG arm
+    # is exactly (1, 1).
+    gate_power: 1.0
+    gate_strength: 1.0
+
     # ---- lifecycle / arms ----
     # Store per-token NLLs in the cache (fp16, ~2·N·T_max bytes per pool).
     # Makes W / tau / s sweeps free — G is re-derived with no forward pass.

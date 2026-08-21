@@ -4,8 +4,9 @@
 # (eval.sh) owns MBPP/GSM8K/MMLU; this queue spreads the remaining five over
 # every currently idle visible GPU and merges the two validated result sets.
 #
-# raeval.sh reuses this same hardened queue engine for a fresh R x A repeat;
-# that mode evaluates all eight benchmarks from scratch.
+# The gate-sweep launchers reuse this same hardened queue engine for weak,
+# soft, and matched-control arms; those modes evaluate all eight benchmarks
+# from scratch, as does raeval.sh for the historical R x A repeat.
 #
 #   S=42 bash all.sh
 #   S=42 bash all.sh status
@@ -55,7 +56,31 @@ resolve() {
       TASK_PREFIX=all8part
       EXPERIMENT=llama2_legacy_10
       ;;
-    *) die "A must be tag or ra" ;;
+    weak)
+      CFG="$REPO/configs/experiments/main_7b/llama2/tag_10_weakpower50_bs64.yaml"
+      CELL="$FRESH/runs/main_7b/llama2/tag_10_weakpower50_bs64_seed${SEED}/runs"
+      RUN_GLOB=tag10weak_
+      TASK_COUNT=8
+      TASK_PREFIX=all8part
+      EXPERIMENT=llama2_tag_10_weakpower50_bs64
+      ;;
+    soft)
+      CFG="$REPO/configs/experiments/main_7b/llama2/tag_10_softmix50_bs64.yaml"
+      CELL="$FRESH/runs/main_7b/llama2/tag_10_softmix50_bs64_seed${SEED}/runs"
+      RUN_GLOB=tag10soft_
+      TASK_COUNT=8
+      TASK_PREFIX=all8part
+      EXPERIMENT=llama2_tag_10_softmix50_bs64
+      ;;
+    ctl)
+      CFG="$REPO/configs/experiments/main_7b/llama2/legacy_10_schedfloor_bs64.yaml"
+      CELL="$FRESH/runs/main_7b/llama2/legacy_10_schedfloor_bs64_seed${SEED}/runs"
+      RUN_GLOB=ra64_
+      TASK_COUNT=8
+      TASK_PREFIX=all8part
+      EXPERIMENT=llama2_legacy_10_schedfloor_bs64
+      ;;
+    *) die "A must be tag, ra, weak, soft, or ctl" ;;
   esac
 
   RUN=""
@@ -76,11 +101,13 @@ resolve() {
   LOG_ROOT="$FRESH/logs/table2_${ARM}_eval/seed${SEED}_${RUN_NAME}"
   QUICK_DIR="$FRESH/eval-results/main_7b/llama2/tag_10_schedfloor_bs64_seed${SEED}_quick3/runs/quick3_${RUN_NAME}"
   FINAL_TAG="all8_${RUN_NAME}"
-  if [[ "$ARM" == tag ]]; then
-    FINAL_BASE="$FRESH/eval-results/main_7b/llama2/tag_10_schedfloor_bs64_seed${SEED}"
-  else
-    FINAL_BASE="$FRESH/eval-results/main_7b/llama2/legacy_10_repeat_seed${SEED}"
-  fi
+  case "$ARM" in
+    tag) FINAL_BASE="$FRESH/eval-results/main_7b/llama2/tag_10_schedfloor_bs64_seed${SEED}" ;;
+    ra) FINAL_BASE="$FRESH/eval-results/main_7b/llama2/legacy_10_repeat_seed${SEED}" ;;
+    weak) FINAL_BASE="$FRESH/eval-results/main_7b/llama2/tag_10_weakpower50_bs64_seed${SEED}" ;;
+    soft) FINAL_BASE="$FRESH/eval-results/main_7b/llama2/tag_10_softmix50_bs64_seed${SEED}" ;;
+    ctl) FINAL_BASE="$FRESH/eval-results/main_7b/llama2/legacy_10_schedfloor_bs64_seed${SEED}" ;;
+  esac
   FINAL_DIR="$FINAL_BASE/runs/$FINAL_TAG"
 }
 
@@ -103,11 +130,27 @@ assert cfg["seed"] == seed and cfg["training_mode"] == "full"
 assert cfg["method"] == "selection" and cfg["selection_ratio"] == 0.1
 assert cfg.get("adamw_foreach") is False
 selection = cfg["selection"]
-if arm == "tag":
+if arm in {"tag", "weak", "soft"}:
     assert cfg["grad_accum"] == 4
     assert cfg["batch_size"] * cfg["launch_world_size"] * cfg["grad_accum"] == 64
     assert math.isclose(float(cfg["min_lr_ratio"]), 0.10)
     assert selection["score_mode"] == "tag"
+    expected = {
+        "tag": (1.0, 1.0),
+        "weak": (0.5, 1.0),
+        "soft": (1.0, 0.5),
+    }[arm]
+    tag = selection["tag"]
+    assert math.isclose(float(tag.get("gate_power", 1.0)), expected[0])
+    assert math.isclose(float(tag.get("gate_strength", 1.0)), expected[1])
+elif arm == "ctl":
+    assert cfg["grad_accum"] == 4
+    assert cfg["batch_size"] * cfg["launch_world_size"] * cfg["grad_accum"] == 64
+    assert math.isclose(float(cfg["min_lr_ratio"]), 0.10)
+    assert math.isclose(float(cfg["warmup_ratio"]), 0.06)
+    assert math.isclose(float(cfg["gradient_clip"]), 0.5)
+    assert selection.get("score_mode", "legacy") == "legacy"
+    assert math.isclose(float(selection["lam"]), 1.0) and selection["use_anchor"] is True
 else:
     assert cfg["grad_accum"] == 8
     assert cfg["batch_size"] * cfg["launch_world_size"] * cfg["grad_accum"] == 128
@@ -657,7 +700,11 @@ launch() {
       echo "STATUS: S=$SEED bash all.sh status"
     else
       echo "ORDER=HumanEval,XQuAD,BBH,MMLU,GSM8K,TyDiQA,MBPP,SVAMP"
-      echo "STATUS: S=$SEED bash raeval.sh status"
+      if [[ "$ARM" == ra ]]; then
+        echo "STATUS: S=$SEED bash raeval.sh status"
+      else
+        echo "STATUS: S=$SEED bash ${ARM}.sh status"
+      fi
     fi
   else
     echo "START_FAILED"
@@ -705,5 +752,5 @@ case "${1:-}" in
   --worker) node_worker ;;
   status) status ;;
   "") launch ;;
-  *) die "usage: S={1|7|42} bash all.sh [status]" ;;
+  *) die "usage: S={1|7|42} A={tag|ra|weak|soft|ctl} bash all.sh [status]" ;;
 esac

@@ -108,3 +108,30 @@ def test_tuning_config_resolves_to_isolated_bs64_arm():
     assert cfg["selection_ratio"] == pytest.approx(0.10)
     assert cfg["selection"]["score_mode"] == "tag"
     assert cfg["selection"]["tag"]["prefix_tokens"] == 32
+    assert cfg["selection"]["tag"]["gate_power"] == pytest.approx(1.0)
+    assert cfg["selection"]["tag"]["gate_strength"] == pytest.approx(1.0)
+
+
+def test_gate_weakening_arms_and_matched_control_share_training_recipe():
+    from tag.core.utils import load_config
+
+    root = "configs/experiments/main_7b/llama2"
+    strong = load_config(f"{root}/tag_10_schedfloor_bs64.yaml")
+    weak = load_config(f"{root}/tag_10_weakpower50_bs64.yaml")
+    soft = load_config(f"{root}/tag_10_softmix50_bs64.yaml")
+    control = load_config(f"{root}/legacy_10_schedfloor_bs64.yaml")
+
+    for cfg in (strong, weak, soft, control):
+        assert (cfg["batch_size"], cfg["grad_accum"]) == (4, 4)
+        assert cfg["min_lr_ratio"] == pytest.approx(0.10)
+        assert cfg["adamw_foreach"] is False
+        assert cfg["selection_ratio"] == pytest.approx(0.10)
+        assert cfg["train_epochs"] == 3
+
+    assert weak["selection"]["tag"]["gate_power"] == pytest.approx(0.5)
+    assert weak["selection"]["tag"]["gate_strength"] == pytest.approx(1.0)
+    assert soft["selection"]["tag"]["gate_power"] == pytest.approx(1.0)
+    assert soft["selection"]["tag"]["gate_strength"] == pytest.approx(0.5)
+    assert control["selection"].get("score_mode", "legacy") == "legacy"
+    assert control["selection"]["lam"] == pytest.approx(1.0)
+    assert control["selection"]["use_anchor"] is True

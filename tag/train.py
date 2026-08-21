@@ -788,6 +788,11 @@ def main() -> None:
                 "dispersion_discount": bool(tag_cfg.get("dispersion_discount", True)),
                 "null_correction": bool(tag_cfg.get("null_correction", True)),
                 "target_zero_rate": float(tag_cfg.get("target_zero_rate", 0.05)),
+                # Score-time weakening ablations.  These intentionally stay
+                # outside GateConfig/cache identity: every arm consumes the
+                # same calibrated raw G and changes only its fusion weight.
+                "gate_power": float(tag_cfg.get("gate_power", 1.0)),
+                "gate_strength": float(tag_cfg.get("gate_strength", 1.0)),
                 # ---- lifecycle ----
                 "allow_late_gate": bool(tag_cfg.get("allow_late_gate", False)),
                 "store_token_losses": bool(tag_cfg.get("store_token_losses", False)),
@@ -828,13 +833,15 @@ def main() -> None:
         logger.info(
             "TAG context ready | counterfactuals=%d | dedup_clusters=%s | "
             "W=%d tau=%.3f(%s) min_span=%d tail=%s | c_trunc=%.2f | "
-            "gate_scale=%s ref=%s | undefined=%s | static=%s",
+            "gate_scale=%s ref=%s | power=%.3f strength=%.3f | "
+            "undefined=%s | static=%s",
             len(cf_datasets),
             "yes" if cluster_ids is not None else "no",
             tag_ctx["params"]["span_tokens"], tag_ctx["params"]["tau"],
             tag_ctx["params"]["tau_mode"], tag_ctx["params"]["min_span_tokens"],
             tag_ctx["params"]["tail_mode"], tag_ctx["params"]["c_trunc"],
             tag_ctx["params"]["gate_scale"], tag_ctx["params"]["gate_ref_file"],
+            tag_ctx["params"]["gate_power"], tag_ctx["params"]["gate_strength"],
             tag_ctx["params"]["undefined_policy"], tag_ctx["params"]["static"],
         )
 

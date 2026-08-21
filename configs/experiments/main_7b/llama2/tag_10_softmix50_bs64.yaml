@@ -1,0 +1,18 @@
+# Table-2 clean-pool soft-gate diagnostic.
+#
+#     G_eff = 0.5 + 0.5 * G
+#
+# This is the midpoint of a controlled path from strong TAG (strength=1) to
+# the unit gate / R x A (strength=0).  Because raw G=0 becomes G_eff=0.5,
+# this arm deliberately loses the exact-zero veto and MUST be reported as a
+# soft-gate ablation, not as canonical TAG.  It directly tests whether clean
+# examples are being over-suppressed by the hard gate.
+defaults:
+  - configs/experiments/main_7b/llama2/tag_10_schedfloor_bs64.yaml
+
+output_subdir: main_7b/llama2/tag_10_softmix50_bs64
+
+selection:
+  tag:
+    gate_power: 1.0
+    gate_strength: 0.5
