@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import statistics
 import sys
 from pathlib import Path
@@ -27,11 +28,43 @@ ARMS = {
 }
 
 
-def newest_complete(base: Path) -> Path | None:
-    runs = [p for p in (base / "runs").glob("all8_*") if (p / "_complete").is_file()]
+def workspace_roots(args: list[str]) -> list[Path]:
+    candidates = [Path(value) for value in args]
+    if not candidates:
+        ambient = os.environ.get("TAG_WORKSPACE")
+        if ambient:
+            candidates.append(Path(ambient))
+        candidates.extend(
+            [
+                Path("/group-volume/jieuns.shin/tagx/workspace"),
+                Path("/group-volume/jieuns.shin/tag2/workspace"),
+            ]
+        )
+
+    roots: list[Path] = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate not in roots:
+            roots.append(candidate)
+    return roots
+
+
+def complete_runs(workspaces: list[Path], pattern: str) -> list[Path]:
+    runs: list[Path] = []
+    for workspace in workspaces:
+        base = workspace / "eval-results/main_7b/llama2" / pattern
+        runs.extend(
+            p for p in (base / "runs").glob("all8_*")
+            if (p / "_complete").is_file()
+        )
+    return runs
+
+
+def newest_complete(workspaces: list[Path], pattern: str) -> tuple[Path | None, int]:
+    runs = complete_runs(workspaces, pattern)
     if not runs:
-        return None
-    return max(runs, key=lambda p: (p / "_complete").stat().st_mtime_ns)
+        return None, 0
+    return max(runs, key=lambda p: (p / "_complete").stat().st_mtime_ns), len(runs)
 
 
 def scores_for(run: Path) -> dict[str, float]:
@@ -51,24 +84,31 @@ def scores_for(run: Path) -> dict[str, float]:
 
 
 def main() -> int:
-    workspace = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(
-        "/group-volume/jieuns.shin/tag2/workspace"
-    )
-    root = workspace / "eval-results/main_7b/llama2"
+    workspaces = workspace_roots(sys.argv[1:])
     data: dict[str, dict[int, dict[str, float]]] = {}
 
+    print("WORKSPACES")
+    for workspace in workspaces:
+        state = "FOUND" if workspace.is_dir() else "MISSING"
+        print(f"  {state:7s} {workspace}")
+    print()
     print("===== GATE SWEEP: VALIDATED ALL-8 RUNS =====")
     for arm, pattern in ARMS.items():
         data[arm] = {}
         for seed in SEEDS:
-            run = newest_complete(root / pattern.format(seed=seed))
+            run, candidates = newest_complete(
+                workspaces, pattern.format(seed=seed)
+            )
             if run is None:
                 print(f"{arm:8s} seed={seed:2d} MISSING")
                 continue
             scores = scores_for(run)
             data[arm][seed] = scores
             macro = statistics.fmean(scores.values())
-            print(f"{arm:8s} seed={seed:2d} AVG={macro:6.2f}  {run.name}")
+            duplicate = f" candidates={candidates}" if candidates > 1 else ""
+            print(
+                f"{arm:8s} seed={seed:2d} AVG={macro:6.2f}{duplicate}  {run}"
+            )
 
     print("\n===== CROSS-SEED AGGREGATE =====")
     header = "arm       n  " + " ".join(f"{b[:6].upper():>6s}" for b in BENCHES) + "    AVG     SD              95%CI"
